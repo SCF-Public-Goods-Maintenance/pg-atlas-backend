@@ -1,4 +1,5 @@
-"""SQLAlchemy declarative base and shared type aliases for PG Atlas models.
+"""
+SQLAlchemy declarative base and shared type aliases for PG Atlas models.
 
 All ORM models should inherit from PgBase, which combines DeclarativeBase with
 MappedAsDataclass so that model instances are usable as plain Python dataclasses.
@@ -50,4 +51,4 @@ class PgBase(MappedAsDataclass, DeclarativeBase):
 intpk = Annotated[int, mapped_column(primary_key=True, init=False)]
 
 # Standard canonical ID column (e.g. "ecosystem:package", DAOIP-5 URI).
-canonical_id_col = Annotated[str, mapped_column(String(512), unique=True, index=True)]
+canonical_id = Annotated[str, mapped_column(String(512), unique=True, index=True)]
