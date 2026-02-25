@@ -91,7 +91,7 @@ async def verify_github_oidc_token(
     try:
         jwks_client = _get_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
-    except (PyJWKClientError, Exception) as exc:
+    except (PyJWKClientError, OSError) as exc:
         logger.warning("JWKS retrieval or key selection failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
