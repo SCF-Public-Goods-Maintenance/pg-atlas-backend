@@ -48,7 +48,7 @@ PG_ATLAS_API_URL=http://localhost:8000
 ### Running the API
 
 ```sh
-uv run python -m pg_atlas
+uv run python -m pg_atlas --reload
 # or equivalently:
 uv run uvicorn pg_atlas.main:app --reload
 ```
