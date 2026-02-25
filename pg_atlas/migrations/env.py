@@ -1,4 +1,5 @@
-"""Alembic environment for PG Atlas async SQLAlchemy migrations.
+"""
+Alembic environment for PG Atlas async SQLAlchemy migrations.
 
 The database URL is read from settings (PG_ATLAS_DATABASE_URL), so this file
 never contains credentials. The target metadata is derived from PgBase so that
@@ -40,7 +41,8 @@ target_metadata = PgBase.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode (no live DB connection).
+    """
+    Run migrations in 'offline' mode (no live DB connection).
 
     Emits SQL to stdout or a file rather than executing against a database.
     Useful for generating migration scripts for review before applying.

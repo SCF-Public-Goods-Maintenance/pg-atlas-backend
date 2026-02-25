@@ -1,4 +1,5 @@
-"""GitHub OIDC token verification for PG Atlas write endpoints.
+"""
+GitHub OIDC token verification for PG Atlas write endpoints.
 
 The SBOM action submits an RS256-signed JWT issued by GitHub's OIDC provider
 with the PG Atlas API URL as the audience. This module verifies that token and

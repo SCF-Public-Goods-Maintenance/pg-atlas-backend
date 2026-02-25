@@ -1,4 +1,5 @@
-"""Ingestion router for PG Atlas.
+"""
+Ingestion router for PG Atlas.
 
 Handles write endpoints that accept data submissions from project teams. All
 endpoints require a valid GitHub OIDC Bearer token (see pg_atlas.auth.oidc).
@@ -52,7 +53,8 @@ async def ingest_sbom(
     request: Request,
     claims: Annotated[dict[str, Any], Depends(verify_github_oidc_token)],
 ) -> SbomAcceptedResponse:
-    """Receive, validate, and enqueue an SPDX 2.3 SBOM submission.
+    """
+    Receive, validate, and enqueue an SPDX 2.3 SBOM submission.
 
     Steps:
     1. OIDC token is verified by the ``verify_github_oidc_token`` dependency

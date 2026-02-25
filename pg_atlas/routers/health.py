@@ -1,4 +1,5 @@
-"""Health check router for PG Atlas.
+"""
+Health check router for PG Atlas.
 
 Provides GET /health for liveness monitoring. The response is deliberately
 lightweight so that uptime monitors can call it frequently without overhead.
@@ -28,7 +29,8 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", response_model=HealthResponse, summary="Liveness check")
 async def health() -> HealthResponse:
-    """Return the current health status and application version.
+    """
+    Return the current health status and application version.
 
     This endpoint is intentionally dependency-free (no DB call) so that it
     remains responsive even when the database is unreachable. A richer check

@@ -1,4 +1,5 @@
-"""Entry point for `python -m pg_atlas` and the `pg-atlas` CLI command.
+"""
+Entry point for `python -m pg_atlas` and the `pg-atlas` CLI command.
 
 Passes ``--reload`` to enable hot-reload in development. For production,
 run uvicorn directly (reload is disabled):
@@ -12,7 +13,8 @@ import uvicorn
 
 
 def main() -> None:
-    """Start the PG Atlas API server using uvicorn.
+    """
+    Start the PG Atlas API server using uvicorn.
 
     Flags:
         --reload: Enable uvicorn hot-reload (default: off).

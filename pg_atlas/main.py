@@ -1,4 +1,5 @@
-"""FastAPI application factory for PG Atlas.
+"""
+FastAPI application factory for PG Atlas.
 
 Creates and configures the FastAPI app instance, registers routers, and defines
 the application lifespan (startup/shutdown hooks). Database and graph engine
@@ -25,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan manager.
+    """
+    Application lifespan manager.
 
     Startup and shutdown hooks live here. Database connection pool setup (A2)
     and NetworkX graph loading (A6/A8) will be added in later deliverables.

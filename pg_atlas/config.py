@@ -1,4 +1,5 @@
-"""Application settings loaded from environment variables or a .env file.
+"""
+Application settings loaded from environment variables or a .env file.
 
 All settings are prefixed with PG_ATLAS_ in the environment. A .env file at
 the project root is automatically loaded in development.
@@ -10,7 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """PG Atlas application settings.
+    """
+    PG Atlas application settings.
 
     Required environment variables:
         PG_ATLAS_API_URL: The canonical URL of this API instance. Used as the

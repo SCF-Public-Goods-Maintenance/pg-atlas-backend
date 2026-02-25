@@ -1,4 +1,5 @@
-"""Tests for GET /health.
+"""
+Tests for GET /health.
 
 Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
 """

@@ -1,4 +1,5 @@
-"""SPDX 2.3 document parsing and validation for PG Atlas SBOM ingestion.
+"""
+SPDX 2.3 document parsing and validation for PG Atlas SBOM ingestion.
 
 SBOMs submitted by the pg-atlas-sbom-action are SPDX 2.3 JSON documents
 fetched from the GitHub Dependency Graph API. This module validates them and
@@ -21,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 class SpdxValidationError(ValueError):
-    """Raised when an SBOM submission fails SPDX 2.3 schema validation.
+    """
+    Raised when an SBOM submission fails SPDX 2.3 schema validation.
 
     Carries a human-readable ``detail`` string and an optional list of
     ``messages`` from the underlying spdx-tools parser for structured error
@@ -36,7 +38,8 @@ class SpdxValidationError(ValueError):
 
 @dataclass
 class ParsedSbom:
-    """Result of a successful SPDX 2.3 parse operation.
+    """
+    Result of a successful SPDX 2.3 parse operation.
 
     Attributes:
         document: The parsed spdx-tools Document object. Use this for
@@ -51,7 +54,8 @@ class ParsedSbom:
 
 
 def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
-    """Parse and validate a raw SPDX 2.3 JSON payload.
+    """
+    Parse and validate a raw SPDX 2.3 JSON payload.
 
     Uses spdx-tools' ``parse_file`` which validates the document against the
     SPDX 2.3 JSON schema and returns a typed Document object. The document

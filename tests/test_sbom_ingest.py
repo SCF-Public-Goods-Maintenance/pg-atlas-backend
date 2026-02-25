@@ -1,4 +1,5 @@
-"""Tests for POST /ingest/sbom.
+"""
+Tests for POST /ingest/sbom.
 
 Covers four scenarios:
 1. Missing Authorization header → 401.
@@ -35,7 +36,8 @@ async def test_missing_auth_header_returns_401(async_client: AsyncClient) -> Non
 
 
 async def test_invalid_jwt_returns_403(async_client: AsyncClient, mocker: Any) -> None:
-    """POST /ingest/sbom with an unverifiable JWT should return 403.
+    """
+    POST /ingest/sbom with an unverifiable JWT should return 403.
 
     Patches _get_jwks_client so that key selection fails without making any
     real network requests to GitHub's OIDC endpoint.
@@ -56,7 +58,8 @@ async def test_invalid_jwt_returns_403(async_client: AsyncClient, mocker: Any) -
 
 
 async def test_invalid_spdx_returns_422(authenticated_client: AsyncClient) -> None:
-    """POST /ingest/sbom with an invalid SPDX document should return 422.
+    """
+    POST /ingest/sbom with an invalid SPDX document should return 422.
 
     The response body should include a structured error with messages from the
     SPDX parser so that callers can diagnose the problem.
@@ -76,7 +79,8 @@ async def test_valid_sbom_returns_202(
     authenticated_client: AsyncClient,
     mock_oidc_claims: dict[str, Any],
 ) -> None:
-    """POST /ingest/sbom with a valid SPDX 2.3 document should return 202.
+    """
+    POST /ingest/sbom with a valid SPDX 2.3 document should return 202.
 
     The response body should contain the submitting repository identity (from
     the mocked OIDC claims) and the number of packages in the document.

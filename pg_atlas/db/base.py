@@ -31,7 +31,8 @@ NAMING_CONVENTION: dict[str, str] = {
 
 
 class PgBase(MappedAsDataclass, DeclarativeBase):
-    """Shared declarative base for all PG Atlas ORM models.
+    """
+    Shared declarative base for all PG Atlas ORM models.
 
     Combines MappedAsDataclass for ergonomic Python dataclass behaviour with
     DeclarativeBase for SQLAlchemy 2.x ORM mapping. All subclasses are both
