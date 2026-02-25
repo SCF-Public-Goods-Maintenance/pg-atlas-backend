@@ -20,7 +20,7 @@ design decisions. Key documents:
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.14+
 - [uv](https://docs.astral.sh/uv/) (`pip install uv` or `brew install uv`)
 
 ### Setup

@@ -5,29 +5,29 @@ description = "PG Atlas backend: ingestion pipeline, storage, metric computation
 authors = [{ name = "Alex Olieman", email = "alex@olieman.net" }]
 license = { text = "MPL-2.0" }
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.34.0",
-    "pydantic-settings>=2.7.0",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "asyncpg>=0.30.0",
-    "alembic>=1.14.0",
+    "fastapi>=0.133.1",
+    "uvicorn[standard]>=0.41.0",
+    "pydantic-settings>=2.13.1",
+    "sqlalchemy[asyncio]>=2.0.47",
+    "asyncpg>=0.31.0",
+    "alembic>=1.18.4",
     "spdx-tools>=0.8.3",
-    "PyJWT[crypto]>=2.10.0",
-    "cryptography>=44.0.0",
-    "httpx>=0.28.0",
-    "cachetools>=5.5.0",
+    "pyjwt[crypto]>=2.11.0",
+    "cryptography>=46.0.5",
+    "httpx>=0.28.1",
+    "cachetools>=7.0.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.25.0",
-    "pytest-mock>=3.14.0",
-    "ruff>=0.9.0",
-    "mypy>=1.14.0",
-    "types-cachetools>=5.5.0",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-mock",
+    "ruff",
+    "mypy",
+    "types-cachetools",
 ]
 
 [project.scripts]
@@ -51,7 +51,7 @@ line-length = 127
 select = ["E", "F", "I"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 explicit_package_bases = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
