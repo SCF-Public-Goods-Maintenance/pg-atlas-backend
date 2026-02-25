@@ -38,3 +38,16 @@ jobs:
         run: uv run pytest
         env:
           PG_ATLAS_API_URL: "https://test.pg-atlas.example"
+
+  sbom:
+    name: Submit SBOM
+    runs-on: ubuntu-latest
+    # Only submit on pushes to main — not on PRs, where no deployed API is
+    # available and the SBOM would reflect an unmerged branch.
+    if: github.event_name == 'push'
+    permissions:
+      contents: read # for GitHub Dependency Graph API
+      id-token: write # for GitHub OIDC token (authenticates to PG Atlas)
+
+    steps:
+      - uses: SCF-Public-Goods-Maintenance/pg-atlas-sbom-action@main
