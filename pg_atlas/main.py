@@ -9,6 +9,7 @@ Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Mainte
 
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -34,13 +35,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("PG Atlas shutting down")
 
 
+try:
+    _version = importlib.metadata.version("pg-atlas-backend")
+except importlib.metadata.PackageNotFoundError:
+    _version = "dev"
+
 app = FastAPI(
     title="PG Atlas API",
     description=(
         "Public, read-only REST API exposing SCF public goods dependency graph metrics. "
         "Write endpoints are authenticated via GitHub OIDC tokens."
     ),
-    version="0.1.0",
+    version=_version,
     lifespan=lifespan,
     # Docs available at /docs (Swagger UI) and /redoc.
     docs_url="/docs",
