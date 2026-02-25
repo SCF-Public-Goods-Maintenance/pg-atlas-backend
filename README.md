@@ -32,6 +32,9 @@ cd pg-atlas-backend
 # Install all dependencies (including dev tools) into a managed venv
 uv sync
 
+# Install pre-commit hooks
+uv run pre-commit install
+
 # Copy the example env file and fill in required values
 cp .env.example .env
 ```
