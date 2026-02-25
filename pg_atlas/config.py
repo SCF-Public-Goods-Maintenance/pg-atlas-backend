@@ -39,4 +39,6 @@ class Settings(BaseSettings):
 
 
 # Module-level singleton — import this throughout the application.
-settings = Settings()
+# pydantic-settings reads API_URL from the environment; mypy cannot see that at
+# type-check time, so the required-field call-arg error is suppressed here.
+settings = Settings()  # type: ignore[call-arg]

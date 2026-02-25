@@ -1,0 +1,27 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "creationInfo": {
+    "created": "2026-02-25T00:00:00Z",
+    "creators": ["Tool: pg-atlas-test"]
+  },
+  "name": "test-sbom",
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://example.com/pg-atlas-test-sbom-abc123",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-requests",
+      "name": "requests",
+      "downloadLocation": "https://pypi.org/project/requests/2.32.0/",
+      "filesAnalyzed": false,
+      "versionInfo": "2.32.0"
+    },
+    {
+      "SPDXID": "SPDXRef-httpx",
+      "name": "httpx",
+      "downloadLocation": "https://pypi.org/project/httpx/0.28.0/",
+      "filesAnalyzed": false,
+      "versionInfo": "0.28.0"
+    }
+  ]
+}

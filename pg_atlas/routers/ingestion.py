@@ -78,7 +78,7 @@ async def ingest_sbom(
         sbom = parse_and_validate_spdx(raw_body)
     except SpdxValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "error": exc.detail,
                 "messages": exc.messages,

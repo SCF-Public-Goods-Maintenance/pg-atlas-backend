@@ -9,11 +9,9 @@ Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Mainte
 
 from __future__ import annotations
 
-import io
 import logging
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 from spdx_tools.spdx.model import Document
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -95,7 +93,7 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
     package_count = len(document.packages)
     logger.debug(
         "SPDX document parsed OK: name=%r spdx_version=%s packages=%d",
-        document.creation_info.document_name,
+        document.creation_info.name,
         document.creation_info.spdx_version,
         package_count,
     )

@@ -18,13 +18,11 @@ Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Mainte
 from __future__ import annotations
 
 import logging
-import time
 from typing import Annotated, Any
 
-import httpx
 import jwt
 from cachetools import TTLCache
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Header, HTTPException, status
 from jwt import PyJWKClient, PyJWKClientError
 
 from pg_atlas.config import settings
@@ -53,7 +51,7 @@ def _get_jwks_client() -> PyJWKClient:
     cached client on cache hit. The TTL is controlled by
     PG_ATLAS_JWKS_CACHE_TTL_SECONDS (default 1 hour).
     """
-    cached = _jwks_cache.get(GITHUB_JWKS_URL)
+    cached: PyJWKClient | None = _jwks_cache.get(GITHUB_JWKS_URL)
     if cached is not None:
         return cached
 
