@@ -44,6 +44,9 @@ packages = ["pg_atlas"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.black]
+line-length = 127
+
 [tool.ruff]
 line-length = 127
 
