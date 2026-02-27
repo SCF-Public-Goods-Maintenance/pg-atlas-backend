@@ -7,7 +7,8 @@ lightweight so that uptime monitors can call it frequently without overhead.
 A ``components`` key will be added in A2 to report the health of individual
 subsystems (database connection, NetworkX graph load status, etc.).
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

@@ -15,7 +15,8 @@ Usage (in FastAPI route handlers, once A2 is complete):
     async with AsyncSessionLocal() as session:
         result = await session.scalars(select(Repo))
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

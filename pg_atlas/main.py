@@ -5,7 +5,8 @@ Creates and configures the FastAPI app instance, registers routers, and defines
 the application lifespan (startup/shutdown hooks). Database and graph engine
 initialization will be added here as later deliverables are completed.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

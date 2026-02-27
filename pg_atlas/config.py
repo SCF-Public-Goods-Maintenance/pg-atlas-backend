@@ -4,7 +4,8 @@ Application settings loaded from environment variables or a .env file.
 All settings are prefixed with PG_ATLAS_ in the environment. A .env file at
 the project root is automatically loaded in development.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

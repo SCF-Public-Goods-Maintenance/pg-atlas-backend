@@ -13,7 +13,8 @@ Usage (FastAPI dependency injection):
     async def ingest_sbom(claims: Annotated[dict, Depends(verify_github_oidc_token)]):
         ...
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

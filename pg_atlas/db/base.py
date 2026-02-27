@@ -9,7 +9,8 @@ relationships will raise MissingGreenlet errors at runtime. All relationships
 MUST be declared with lazy="selectin" or loaded via explicit joinedload/selectinload
 options in queries.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

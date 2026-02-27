@@ -5,7 +5,8 @@ SBOMs submitted by the pg-atlas-sbom-action are SPDX 2.3 JSON documents
 fetched from the GitHub Dependency Graph API. This module validates them and
 extracts the package list for downstream processing.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations
@@ -94,8 +95,9 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
             detail=f"Could not parse SPDX document: {exc}",
         ) from exc
 
+    assert document, "Document is None"
     package_count = len(document.packages)
-    logger.debug(
+    logger.info(
         "SPDX document parsed OK: name=%r spdx_version=%s packages=%d",
         document.creation_info.name,
         document.creation_info.spdx_version,

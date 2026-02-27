@@ -8,7 +8,8 @@ Currently implemented:
     POST /ingest/sbom — Accept an SPDX 2.3 SBOM submission from the
         pg-atlas-sbom-action, validate it, and enqueue for processing.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

@@ -8,6 +8,9 @@ never contains credentials. The target metadata is derived from PgBase so that
 Async SQLAlchemy requires the async migration pattern: we use
 ``async_engine_from_config`` and ``connection.run_sync`` to drive the migration
 context inside a coroutine that is kicked off from synchronous ``run_migrations_online``.
+
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

@@ -6,7 +6,8 @@ a structured result. The A8 processing pipeline will replace this stub with a
 Celery task dispatch that triggers schema validation, dependency extraction,
 repo and edge upserts, and NetworkX graph reload.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations

@@ -5,6 +5,9 @@ Passes ``--reload`` to enable hot-reload in development. For production,
 run uvicorn directly (reload is disabled):
 
     uvicorn pg_atlas.main:app --host 0.0.0.0 --port 8000
+
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 import argparse
