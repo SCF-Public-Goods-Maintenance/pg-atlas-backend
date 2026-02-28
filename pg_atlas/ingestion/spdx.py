@@ -70,7 +70,7 @@ def _unwrap_github_api_envelope(raw: bytes) -> bytes:
     """
     try:
         outer = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except json.JSONDecodeError, UnicodeDecodeError:
         return raw
 
     if isinstance(outer, dict) and "sbom" in outer and isinstance(outer["sbom"], dict):
