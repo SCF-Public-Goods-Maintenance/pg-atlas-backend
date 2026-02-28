@@ -62,6 +62,13 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 - The SBOM action (`SCF-Public-Goods-Maintenance/pg-atlas-sbom-action`) is used by this repo too —
   it runs in CI on push to main.
 
+## Git & Version Control
+
+Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (including GitHub MCP
+`push_files` / `create_or_update_file` to the repo) without **explicit user approval**. Prepare
+changes in the working tree, summarize what is ready, and wait for the user to review before any
+commit is created.
+
 ## Keeping These Instructions Current
 
 After completing a todo list for a session, append any new conventions, decisions, or patterns that
