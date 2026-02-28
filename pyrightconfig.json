@@ -1,0 +1,15 @@
+{
+    // Pyright / Pylance configuration.
+    // diagnosticMode ("workspace") is set in .vscode/settings.json — that's VS Code-only.
+    "typeCheckingMode": "strict",
+    "enableExperimentalFeatures": true, // Python 3.14 + PEP 758 except-syntax
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "**/.venv",
+        "**/site-packages",
+        "**/.*"  // all dotfiles and dot-directories
+    ],
+    // many modules re-export symbols without __all__.
+    "reportPrivateImportUsage": "none"
+}

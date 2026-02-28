@@ -29,7 +29,8 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 ## Tooling
 
 - **uv** for package management. Always use `uv run` commands; never activate the venv manually.
-- **ruff** for lint and format (`line-length = 127`, selects E, F, I).
+- **ruff** for lint and format (`line-length = 127`, selects E, F, I). Ruff 0.15.2 with `requires-python = ">=3.14"` (i.e. `target-version = "py314"`) intentionally
+  rewrites `except (A, B):` → `except A, B:` per PEP 758.
 - **mypy** in strict mode (`disallow_untyped_defs`, `explicit_package_bases`, `ignore_missing_imports`).
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Run the full check suite before considering work done:
@@ -68,6 +69,16 @@ Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (i
 `push_files` / `create_or_update_file` to the repo) without **explicit user approval**. Prepare
 changes in the working tree, summarize what is ready, and wait for the user to review before any
 commit is created.
+
+## Current Deployment State
+
+- **A1 complete**: SBOM ingestion (`POST /ingest/sbom`, OIDC auth, SPDX 2.3 parsing, 202 Accepted),
+  health endpoint (`GET /health`), CI green, DO App Platform live at
+  `https://pg-atlas-backend-h8gen.ondigitalocean.app` (`basic-xxs`, region `ams3`).
+- **A2 is next**: PostgreSQL database, Alembic migrations, and the SBOM write path. See the A2
+  section in `devops.md` → `### Future Work` for the concrete checklist.
+- `devops.md` `### Future Work` has been fully extended to cover A2 through A6 plus Operations,
+  Observability, and Security gaps — use it as the planning reference for future sessions.
 
 ## Keeping These Instructions Current
 

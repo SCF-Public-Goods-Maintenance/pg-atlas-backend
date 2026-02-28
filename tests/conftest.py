@@ -3,7 +3,8 @@ Shared pytest fixtures for PG Atlas backend tests.
 
 Fixtures defined here are available to all test modules without explicit import.
 
-Author: SCF Public Goods Maintenance <https://github.com/SCF-Public-Goods-Maintenance>
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
 """
 
 from __future__ import annotations
@@ -11,10 +12,11 @@ from __future__ import annotations
 # Override the required PG_ATLAS_API_URL setting before the app is imported,
 # so that Settings() can be instantiated without a .env file in CI.
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("PG_ATLAS_API_URL", "https://test.pg-atlas.example")
@@ -45,7 +47,7 @@ def mock_oidc_claims() -> dict[str, Any]:
 
 
 @pytest.fixture
-def app_with_mock_oidc():
+def app_with_mock_oidc() -> Generator[FastAPI, None, None]:
     """FastAPI app instance with the OIDC dependency overridden to return MOCK_OIDC_CLAIMS.
 
     Restores the original dependency after the test. Use this fixture for tests
@@ -72,7 +74,9 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture
-async def authenticated_client(app_with_mock_oidc) -> AsyncGenerator[AsyncClient, None]:
+async def authenticated_client(
+    app_with_mock_oidc: FastAPI,
+) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP client wired to the FastAPI app with OIDC dep overridden.
 
     Use this fixture for tests that assume authentication succeeded and want to
