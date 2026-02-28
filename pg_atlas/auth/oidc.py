@@ -114,6 +114,19 @@ async def verify_github_oidc_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="OIDC token has expired.",
         ) from exc
+    except jwt.InvalidAudienceError as exc:
+        # Decode without verification to surface the submitted aud claim.
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        submitted_aud = unverified.get("aud", "<not present>")
+        logger.warning(
+            "OIDC audience mismatch: token has %r, API expects %r",
+            submitted_aud,
+            settings.API_URL,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"OIDC token validation failed: Audience {submitted_aud!r} doesn't match {settings.API_URL!r}",
+        ) from exc
     except jwt.InvalidTokenError as exc:
         logger.warning("OIDC token validation failed: %s", exc)
         raise HTTPException(
