@@ -1,6 +1,6 @@
 [project]
 name = "pg-atlas-backend"
-version = "0.1.0"
+version = "0.1.1"
 description = "PG Atlas backend: ingestion pipeline, storage, metric computation, and REST API."
 authors = [{ name = "Alex Olieman", email = "alex@olieman.net" }]
 license = { text = "MPL-2.0" }
