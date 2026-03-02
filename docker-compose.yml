@@ -1,9 +1,40 @@
 services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      # Note: postgres:18 disallows superuser names starting with 'pg_'.
+      # The local dev superuser is 'atlas'; the database is still named 'pg_atlas'.
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: ${PG_ATLAS_POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: pg_atlas
+    ports:
+      - "5432:5432"
+    volumes:
+      # postgres:18+ expects the mount at /var/lib/postgresql (not .../data);
+      # the server places its data in a major-version sub-directory automatically.
+      - pg_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pg_atlas -d pg_atlas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   api:
     build: .
     ports:
       - "8000:8000"
     env_file:
       - .env
-    # TODO A2: add postgres service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Raw SBOM artifact store (local dev). Mount a host path so artifacts survive
+      # container restarts. In production, this is replaced by Storacha.
+      - ./artifact_store:/data/artifacts
     # TODO A6: add redis service (for Celery)
+
+volumes:
+  pg_data:
