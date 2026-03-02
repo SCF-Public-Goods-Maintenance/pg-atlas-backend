@@ -18,6 +18,8 @@ design decisions. Key documents:
 
 ## Local Development
 
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/SCF-Public-Goods-Maintenance/pg-atlas-backend/main.svg)](https://results.pre-commit.ci/latest/github/SCF-Public-Goods-Maintenance/pg-atlas-backend/main)
+
 ### Prerequisites
 
 - Python 3.14+

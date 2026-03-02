@@ -16,6 +16,13 @@ is not obvious where to document your work, create a new .md file.
 Whenever possible, write test cases to validate your work. Do not hesitate to write unit tests. If
 you need to write a larger integration test or GitHub workflow, ask for user input first.
 
+## Git & Version Control
+
+Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (including GitHub MCP
+`push_files` / `create_or_update_file` to the repo) without **explicit user approval**. Prepare
+changes in the working tree, summarize what is ready, and wait for the user to review before any
+commit is created.
+
 ---
 
 # PG Atlas Backend — Project-Specific Instructions
@@ -62,13 +69,6 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 - The `gh` CLI is available as a fallback when the GitHub MCP gives a 403.
 - The SBOM action (`SCF-Public-Goods-Maintenance/pg-atlas-sbom-action`) is used by this repo too —
   it runs in CI on push to main.
-
-## Git & Version Control
-
-Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (including GitHub MCP
-`push_files` / `create_or_update_file` to the repo) without **explicit user approval**. Prepare
-changes in the working tree, summarize what is ready, and wait for the user to review before any
-commit is created.
 
 ## Current Deployment State
 
