@@ -1,5 +1,6 @@
 {
     "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.userFileIndexingLimit": -1,
     "python.terminal.useEnvFile": true,
     "python.testing.pytestArgs": [
         "tests"
