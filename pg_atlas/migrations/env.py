@@ -17,14 +17,17 @@ from __future__ import annotations
 
 import asyncio
 from logging.config import fileConfig
+from typing import Any, Literal
 
 from alembic import context
+from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import pg_atlas.db_models  # noqa: F401 — registers all ORM models on PgBase.metadata  # type: ignore[reportUnusedImport]
 from pg_atlas.config import settings
-from pg_atlas.db.base import PgBase
+from pg_atlas.db_models.base import HexBinary, PgBase
 
 # Alembic Config — provides access to alembic.ini values.
 config = context.config
@@ -36,11 +39,27 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ORM metadata for autogenerate support. Alembic compares this against the
-# live schema to produce migration scripts. Import all model modules before
-# this file is loaded so that their tables are registered on PgBase.metadata.
-# (Models are added here as they are created in A2+.)
+# All ORM models are registered on PgBase.metadata by the import above.
+# Add new model modules to pg_atlas/db_models/__init__.py to include them in
+# autogenerate diff detection.
 target_metadata = PgBase.metadata
+
+
+def render_item(type_: str, obj: Any, autogen_context: AutogenContext) -> str | Literal[False]:
+    """
+    Custom type renderer for Alembic autogenerate.
+
+    Maps ``HexBinary`` instances to the plain ``sa.LargeBinary(length=N)``
+    expression so that generated migration files do not reference the custom
+    type class and remain self-contained.
+    """
+    if type_ == "type" and isinstance(obj, HexBinary):
+        # ``obj.impl.length`` is typed to be an int by `HexBinary.__init__`.
+        length = getattr(obj.impl, "length", None)
+        if not isinstance(length, int):
+            raise TypeError("HexBinary length must be an integer for rendering")
+        return f"sa.LargeBinary(length={length})"
+    return False  # fall through to default rendering
 
 
 def run_migrations_offline() -> None:
@@ -56,8 +75,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # Use the naming convention from PgBase.metadata so generated DDL
-        # uses the same constraint names as the ORM.
+        render_item=render_item,
         render_as_batch=False,
     )
 
@@ -70,6 +88,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        render_item=render_item,
     )
 
     with context.begin_transaction():
