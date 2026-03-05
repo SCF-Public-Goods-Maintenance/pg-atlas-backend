@@ -37,6 +37,7 @@ from pg_atlas.config import settings
 # Lazy singletons — created on first call to _get_session_factory()
 # ---------------------------------------------------------------------------
 
+
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
@@ -51,8 +52,7 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         if not settings.DATABASE_URL:
             raise ValueError(
-                "PG_ATLAS_DATABASE_URL is not configured. "
-                "Set it to a postgresql+asyncpg:// URL before using database sessions."
+                "PG_ATLAS_DATABASE_URL is not configured. Set it to a postgresql:// DSN before using database sessions."
             )
         _engine = create_async_engine(
             settings.DATABASE_URL,
@@ -73,5 +73,22 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
     Raises ``ValueError`` at first use if ``PG_ATLAS_DATABASE_URL`` is not set.
     """
+    async with _get_session_factory()() as session:
+        yield session
+
+
+async def maybe_db_session() -> AsyncGenerator[AsyncSession | None, None]:
+    """
+    FastAPI dependency that yields a live session when the database is configured
+    or ``None`` when it is not.
+
+    Use this in endpoints that must remain functional even without a database
+    (e.g. in CI or during local development without Docker).  When
+    ``PG_ATLAS_DATABASE_URL`` is empty the dependency yields ``None``; calling
+    code should fall back to stub / logging-only behaviour.
+    """
+    if not settings.DATABASE_URL:
+        yield None
+        return
     async with _get_session_factory()() as session:
         yield session

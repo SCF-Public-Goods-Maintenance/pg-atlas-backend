@@ -1,13 +1,7 @@
 """
 Database model smoke tests.
 
-These tests require a live PostgreSQL instance with the schema already applied::
-
-    docker compose up -d postgres
-    PG_ATLAS_DATABASE_URL=postgresql+asyncpg://atlas:changeme@localhost:5432/pg_atlas \\
-        uv run alembic upgrade head
-    PG_ATLAS_DATABASE_URL=postgresql+asyncpg://atlas:changeme@localhost:5432/pg_atlas \\
-        uv run pytest -v tests/test_db_models.py
+These tests require a live PostgreSQL instance with the schema already applied.
 
 All tests in this module are automatically skipped when ``PG_ATLAS_DATABASE_URL`` is
 not set in the environment.

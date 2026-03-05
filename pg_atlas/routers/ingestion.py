@@ -6,7 +6,8 @@ endpoints require a valid GitHub OIDC Bearer token (see pg_atlas.auth.oidc).
 
 Currently implemented:
     POST /ingest/sbom — Accept an SPDX 2.3 SBOM submission from the
-        pg-atlas-sbom-action, validate it, and enqueue for processing.
+        pg-atlas-sbom-action, validate it, persist Repo/ExternalRepo vertices
+        and DependsOn edges, and store a raw artifact for auditability.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -19,10 +20,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
-from pg_atlas.ingestion.queue import queue_sbom
-from pg_atlas.ingestion.spdx import SpdxValidationError, parse_and_validate_spdx
+from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.ingestion.persist import handle_sbom_submission
+from pg_atlas.ingestion.spdx import SpdxValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +56,24 @@ class SbomAcceptedResponse(BaseModel):
 async def ingest_sbom(
     request: Request,
     claims: Annotated[dict[str, Any], Depends(verify_github_oidc_token)],
+    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
 ) -> SbomAcceptedResponse:
     """
-    Receive, validate, and enqueue an SPDX 2.3 SBOM submission.
+    Receive, validate, and persist an SPDX 2.3 SBOM submission.
 
     Steps:
     1. OIDC token is verified by the ``verify_github_oidc_token`` dependency
        before this handler is invoked.
-    2. The raw request body is read and parsed as SPDX 2.3 JSON.
-    3. The validated document is passed to ``queue_sbom`` for logging and
-       eventual async processing (stub in A3, Celery dispatch in A8).
+    2. ``handle_sbom_submission`` stores the raw artifact, parses the SPDX
+       document, and persists Repo/ExternalRepo vertices and DependsOn edges
+       within a single DB transaction.  When no database is configured it
+       falls back to a logging stub so the endpoint stays functional in CI.
 
     Args:
         request: Raw FastAPI request — body is read directly to preserve bytes.
         claims: Decoded OIDC JWT claims injected by verify_github_oidc_token.
+        session: Live DB session from ``maybe_db_session``, or ``None`` when
+            ``PG_ATLAS_DATABASE_URL`` is not configured.
 
     Returns:
         SbomAcceptedResponse: 202 Accepted with repository identity and
@@ -78,7 +85,7 @@ async def ingest_sbom(
     raw_body = await request.body()
 
     try:
-        sbom = parse_and_validate_spdx(raw_body)
+        result = await handle_sbom_submission(session, raw_body, claims)
     except SpdxValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -88,5 +95,4 @@ async def ingest_sbom(
             },
         ) from exc
 
-    result = queue_sbom(sbom, claims)
     return SbomAcceptedResponse(**result)

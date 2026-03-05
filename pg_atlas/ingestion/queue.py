@@ -3,7 +3,7 @@ SBOM submission queue stub for PG Atlas.
 
 In v0 (A3), the queue is a logging stub that records the submission and returns
 a structured result. The A8 processing pipeline will replace this stub with a
-Celery task dispatch that triggers schema validation, dependency extraction,
+task dispatch that triggers schema validation, dependency extraction,
 repo and edge upserts, and NetworkX graph reload.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
@@ -36,10 +36,7 @@ def queue_sbom(sbom: ParsedSbom, claims: dict[str, Any]) -> dict[str, Any]:
         dict: Response payload for the 202 Accepted response, containing
             ``message``, ``repository``, and ``package_count``.
     """
-    # TODO A8: replace this stub with a Celery task dispatch:
-    #   from pg_atlas.workers.tasks import process_sbom
-    #   task = process_sbom.delay(raw_spdx_bytes, claims)
-    #   return {"message": "queued", "task_id": task.id, ...}
+    # TODO A8: replace this stub with a procrastinate deferred task
     repository: str = claims["repository"]
     actor: str = claims["actor"]
 
