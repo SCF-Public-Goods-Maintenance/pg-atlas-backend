@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("PG_ATLAS_API_URL", "https://test.pg-atlas.example")
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
+from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.main import app
 
 TEST_API_URL = "https://test.pg-atlas.example"
@@ -50,11 +51,20 @@ def mock_oidc_claims() -> dict[str, Any]:
 def app_with_mock_oidc() -> Generator[FastAPI, None, None]:
     """FastAPI app instance with the OIDC dependency overridden to return MOCK_OIDC_CLAIMS.
 
-    Restores the original dependency after the test. Use this fixture for tests
-    that don't care about authentication and want to focus on SBOM validation or
-    response shapes.
+    Also overrides ``maybe_db_session`` to yield ``None``, preventing the
+    shared pooled engine from being used across different pytest-asyncio event
+    loops (which would raise *Future attached to a different loop*).
+
+    Restores the original dependencies after the test. Use this fixture for
+    tests that don't care about authentication and want to focus on SBOM
+    validation or response shapes.
     """
+
+    async def _no_db_session() -> AsyncGenerator[None, None]:
+        yield None
+
     app.dependency_overrides[verify_github_oidc_token] = lambda: MOCK_OIDC_CLAIMS
+    app.dependency_overrides[maybe_db_session] = _no_db_session
     yield app
     app.dependency_overrides.clear()
 
@@ -101,10 +111,7 @@ async def db_session() -> AsyncGenerator[Any, None]:
 
     Skipped automatically when ``PG_ATLAS_DATABASE_URL`` is not set (e.g. in CI
     without a database service).  Set the variable before running to enable
-    database integration tests::
-
-        PG_ATLAS_DATABASE_URL=postgresql+asyncpg://atlas:changeme@localhost:5432/pg_atlas \\
-            uv run pytest -v tests/test_db_models.py
+    database integration tests.
 
     Each test gets a **fresh** engine (with ``NullPool``) so that asyncpg
     connections are never shared across event loops.  pytest-asyncio creates a

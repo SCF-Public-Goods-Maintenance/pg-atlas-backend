@@ -28,7 +28,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import hashlib
 import logging
 from typing import Any, cast
@@ -242,7 +242,7 @@ async def _upsert_external_repo(
 async def _replace_depends_on_edges(
     session: AsyncSession,
     source_id: int,
-    dep_vertex_ids: list[tuple[int, str]],
+    dep_vertex_ids: dict[int, str],
 ) -> None:
     """
     Bulk-replace all ``DependsOn`` edges originating from ``source_id``.
@@ -254,12 +254,12 @@ async def _replace_depends_on_edges(
     Args:
         session: Active ``AsyncSession`` already in a transaction.
         source_id: ``repo_vertices.id`` of the submitting Repo.
-        dep_vertex_ids: Sequence of ``(vertex_id, version_range)`` pairs for
+        dep_vertex_ids: Mapping of ``vertex_id`` to ``version_range`` for
             the declared dependencies.  ``version_range`` may be an empty
             string, stored as ``NULL``.
     """
     await session.execute(delete(DependsOn).where(DependsOn.in_vertex_id == source_id))
-    for out_id, version_range in dep_vertex_ids:
+    for out_id, version_range in dep_vertex_ids.items():
         edge = DependsOn(
             in_vertex_id=source_id,
             out_vertex_id=out_id,
@@ -343,17 +343,20 @@ async def handle_sbom_submission(
         }
 
     # ------------------------------------------------------------------
-    # Check existing: if we know this SBOM, record the submission, skip processing
+    # Check existing: if we know this SBOM for this repository, record the submission, skip processing
     # ------------------------------------------------------------------
     existing_submission = await session.scalar(
-        select(SbomSubmission).where(SbomSubmission.sbom_content_hash == content_hash_hex)
+        select(SbomSubmission)
+        .where(SbomSubmission.sbom_content_hash == content_hash_hex)
+        .where(SbomSubmission.repository_claim == repository)
+        .where(SbomSubmission.status != SubmissionStatus.failed)
     )
     if existing_submission:
         # construct a modified not-yet-persisted submission
         make_transient(existing_submission)
-        existing_submission.id = None  # pyright: ignore[reportAttributeAccessIssue]
+        existing_submission.id = None  # type: ignore[assignment] # pyright: ignore[reportAttributeAccessIssue]
         existing_submission.actor_claim = actor
-        existing_submission.submitted_at = None  # pyright: ignore[reportAttributeAccessIssue]
+        existing_submission.submitted_at = None  # type: ignore[assignment] # pyright: ignore[reportAttributeAccessIssue]
         # and commit it to the db
         session.add(existing_submission)
         await session.commit()
@@ -431,7 +434,7 @@ async def handle_sbom_submission(
         )
 
         # Upsert each package as ExternalRepo; skip the submitting repo itself
-        dep_vertex_ids: list[tuple[int, str]] = []
+        dep_vertex_ids: dict[int, str] = {}
         for pkg in sbom.document.packages:
             pkg_canonical_id = canonical_id_for_spdx_package(pkg)
             if pkg_canonical_id == submitting_canonical_id:
@@ -447,13 +450,13 @@ async def handle_sbom_submission(
                 latest_version=version,
                 repo_url=repo_url,
             )
-            dep_vertex_ids.append((dep_vertex.id, version))
+            dep_vertex_ids[dep_vertex.id] = version
 
         # Bulk-replace outgoing DependsOn edges for this repo
         await _replace_depends_on_edges(session, submitting_repo.id, dep_vertex_ids)
 
         submission.status = SubmissionStatus.processed
-        submission.processed_at = datetime.datetime.now(datetime.UTC)
+        submission.processed_at = dt.datetime.now(dt.UTC)
         await session.commit()
 
         logger.info(
