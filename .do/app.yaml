@@ -1,11 +1,13 @@
 name: pg-atlas-backend
-region: ams3
+region: ams
 
 databases:
   - engine: PG
     name: pg-atlas-dev
     version: "18"
-    production: false
+
+features:
+  - buildpack-stack=ubuntu-24
 
 services:
   - name: api
@@ -25,4 +27,10 @@ services:
         scope: RUN_TIME
         value: "${pg-atlas-dev.DATABASE_URL}"
 
-# Hey Copilot, I've replaced the migrate job with entrypoint.sh
+ingress:
+  rules:
+  - component:
+      name: api
+    match:
+      path:
+        prefix: /

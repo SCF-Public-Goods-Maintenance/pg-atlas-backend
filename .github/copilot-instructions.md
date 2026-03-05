@@ -36,8 +36,9 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 ## Tooling
 
 - **uv** for package management. Always use `uv run` commands; never activate the venv manually.
-- **ruff** for lint and format (`line-length = 127`, selects E, F, I). Ruff 0.15.2 with `requires-python = ">=3.14"` (i.e. `target-version = "py314"`) intentionally
-  rewrites `except (A, B):` → `except A, B:` per PEP 758.
+- **ruff** for lint and format (`line-length = 127`, selects E, F, I). Ruff 0.15.2 with
+  `requires-python = ">=3.14"` (i.e. `target-version = "py314"`) intentionally rewrites `except (A, B):`
+  → `except A, B:` per PEP 758.
 - **mypy** in strict mode (`disallow_untyped_defs`, `explicit_package_bases`, `ignore_missing_imports`).
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Run the full check suite before considering work done:
@@ -56,8 +57,16 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 
 ## Code Style
 
-- Multi-line docstrings open with a blank line after `"""` — the summary sentence begins on the
-  second line. Single-line docstrings stay on one line.
+- Breathing space:
+  - Multi-line docstrings open with a blank line after `"""` — the summary sentence begins on the
+    second line. Single-line docstrings stay on one line.
+  - Always include a blank line (may contain only a comment or closing brackets) when exiting a nested
+    block (e.g. `try`/`except`, `for`, `if`) to separate the block's internal logic from the subsequent
+    code at a lower indentation level.
+  - Insert a blank line before a final `return` or terminal `raise` statement at the end of a function
+    or logical section.
+  - Use blank lines between adjacent control structures (like an `if` block followed by a `for` loop).
+- Prefer `f"hey {agent}!"` format strings over older string interpolation.
 - Exception handling: be precise — do not use bare `except Exception` to catch expected errors;
   name the specific exception types (e.g. `except (PyJWKClientError, OSError)`).
 - Fail fast over silent fallbacks: if a required config value is missing, raise `ValueError` at
@@ -80,16 +89,53 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   session: `metadata` attribute renamed (`project_metadata`/`repo_metadata`); `latest_version` made
   required on `Repo`/`ExternalRepo`; `artifact_path` made non-nullable; enum values now use
   `values_callable=enum_values` throughout; `email_hash` stored as BYTEA via `HexBinary`.
-  See A2 notes below.
-- **A3 is next**: SBOM write path — wire `SbomSubmission` rows into the ingestion queue,
-  persist artifacts via `store_artifact()`, set `status` → `processed`/`failed`.
-  See `devops.md` `### Future Work` for the concrete A3–A6 checklist.
+  Hosted DB (`pg-atlas-dev`, PG 18) lives on DO App Platform; `entrypoint.sh` runs
+  `alembic upgrade head` at startup. See A2 notes below.
+- **A3 complete**: SBOM write path — `pg_atlas/ingestion/persist.py` implements full end-to-end
+  persistence: `Repo`/`ExternalRepo` upserts (PURL canonical IDs), bulk-replace `depends_on` edges
+  (`confidence=verified_sbom`), `SbomSubmission` audit rows, artifact storage. Router uses
+  `maybe_db_session` dependency (falls back to log-only when `DATABASE_URL` is unset).
+  See A3 notes below.
+- **A5 is next**: Reference Graph Bootstrapping — Procrastinate + GitHub Actions crawl of
+  OpenGrants, GitHub, and deps.dev. Full plan in `devops.md` § A5.
 
 ## Keeping These Instructions Current
 
 After completing a todo list for a session, append any new conventions, decisions, or patterns that
 would help future sessions collaborate smoothly. Remove anything that was superseded. This file is
 the hand-off document between sessions.
+
+## A3 Implementation Notes
+
+These conventions emerged during A3 and apply to all future write-path work.
+
+### PURL canonical IDs
+- GitHub repos use `pkg:github/owner/repo` (from the OIDC `repository` claim, or extracted from
+  SPDX `documentNamespace`).
+- Package dependencies use the PURL from `package.external_references[].locator` where
+  `reference_type` contains `"purl"`, with the version suffix stripped
+  (`pkg:cargo/foo@1.2.3` → `pkg:cargo/foo`). Falls back to `package.name.lower()`.
+- The helper functions live in `pg_atlas/ingestion/persist.py`:
+  `canonical_id_for_github_repo()` and `canonical_id_for_spdx_package()`.
+
+### JTI upsert safety
+- `_upsert_external_repo()` checks the `RepoVertex` base table first (not just `ExternalRepo`)
+  before attempting an insert. This prevents `UniqueViolationError` when the same `canonical_id`
+  already exists as a `Repo` or another subtype. If a base row is found, return it as-is.
+- Pattern: `SELECT id FROM repo_vertices WHERE canonical_id = ?` → if found, return; else insert.
+
+### `maybe_db_session` dependency
+- Declared in `pg_atlas/db_models/session.py`.
+- Yields `None` when `settings.DATABASE_URL` is empty (no DB configured).
+- Yields a live `AsyncSession` otherwise.
+- Test fixtures must override this dependency in `app.dependency_overrides` to yield `None`
+  (using `_no_db_session` async generator) to prevent event-loop binding issues.
+
+### Test isolation for DB integration tests
+- Each test generates a unique `repository` claim via `_unique_claims()` with a `uuid4().hex[:8]`
+  suffix so tests sharing SBOM fixture content don't conflict on `(content_hash, repository_claim)`.
+- Exception: `test_handle_sbom_submission_github_dep_graph` uses the exact repo name from the SPDX
+  fixture to trigger the self-reference check in `_upsert_external_repo()`.
 
 ## A2 Implementation Notes
 
@@ -99,7 +145,7 @@ These conventions emerged during A2 and apply to all future work.
 - Role names starting with `pg_` are disallowed as superuser names. Use `atlas` (not `pg_atlas`).
 - Data directory volume mount is `/var/lib/postgresql` (not `.../data`) — PG18 layout change.
 - `docker-compose.yml` uses `POSTGRES_USER: atlas`, `POSTGRES_DB: pg_atlas`.
-- Local `DATABASE_URL`: `postgresql+asyncpg://atlas:changeme@localhost:5432/pg_atlas`.
+- Local `DATABASE_URL`: `postgresql://atlas:changeme@localhost:5432/pg_atlas`.
 
 ### SQLAlchemy JTI with MappedAsDataclass
 - `polymorphic_identity` must be the **enum member** (e.g. `NodeType.repo`), not the string value.
@@ -150,6 +196,40 @@ pg_atlas/db_models/
     depends_on.py        # DependsOn edge
     contributed_to.py    # ContributedTo edge
     sbom_submission.py   # SbomSubmission audit table
+    session.py           # async session manager; uses a lazy singleton factory; tests must bypass it with `NullPool`.
 ```
-`pg_atlas/db/base.py` is a re-export shim for backward compatibility.
-`pg_atlas/db/session.py` uses a lazy singleton factory; tests must bypass it with `NullPool`.
+## A5 Planning Notes
+
+These notes document key decisions made during A5 planning that future sessions should be aware of.
+
+### Procrastinate + GitHub Actions
+- Task queue: **Procrastinate ≥ 3.0** with `PsycopgConnector` (psycopg3). Add `procrastinate[psycopg]`
+  and `psycopg[binary,pool]` to `pyproject.toml`. SQLAlchemy continues to use `asyncpg` — both
+  drivers coexist on the same PostgreSQL instance.
+- Worker DSN: strip `+asyncpg` from `settings.DATABASE_URL` before passing to `PsycopgConnector`.
+- Worker runs in GitHub Actions with `run_worker_async(wait=False, concurrency=12)`. The `wait=False`
+  flag causes it to exit once the queue is empty — required for GH Actions to complete.
+- Procrastinate schema: new Alembic migration after `f3d946ade07e` using `procrastinate schema --print`
+  SQL via `op.execute()`. `entrypoint.sh` then applies it on every deploy automatically.
+
+### OpenGrants API
+- Base URL: `https://grants.daostar.org/api/v1/grantApplications?system=scf&limit=100&offset=N`
+- Response has **no `git_org_url` field**. Use curated `project_seeds.yml` mapping
+  (`projectId` → `github_org`) for v0; GitHub repo search API for unmapped projects.
+- Pagination: `limit` + `offset` (not cursor-based). `pagination.hasNext` signals more pages.
+
+### deps.dev API
+- Use REST API (`https://api.deps.dev/v3/`) — no gRPC needed for v0.
+  TODO: why not????
+- `GetDependencies` (stable v3): returns full resolved graph with `node.relation == "DIRECT"` for
+  direct deps. Filter to direct only (1-level boundary).
+- `GetDependents` (v3alpha): returns **counts only** — cannot enumerate dependent package names.
+  Intra-ecosystem edges are captured by crawling every Project Repo's dependencies directly.
+- Supported ecosystems for `GetDependencies`: Cargo, npm, Maven, PyPI (not Go/Ruby).
+
+### Module placement
+- `pg_atlas/procrastinate/` — new sub-package. `app.py` (App + connector), `tasks.py` (task defs),
+  `opengrants.py`, `github.py`, `depsdev.py`, `upserts.py`, `seed.py` (CLI entry point).
+- `.github/workflows/bootstrap.yml` — the weekly scheduled workflow.
+- See `devops.md` § A5 for module layout, task hierarchy, acceptance criteria, and the complete
+  workflow YAML template.
