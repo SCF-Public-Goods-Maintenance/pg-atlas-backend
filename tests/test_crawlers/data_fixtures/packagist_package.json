@@ -1,0 +1,56 @@
+{
+  "package": {
+    "name": "soneso/stellar-php-sdk",
+    "description": "PHP SDK for Stellar",
+    "favers": 40,
+    "versions": {
+      "1.9.4": {
+        "name": "soneso/stellar-php-sdk",
+        "version": "1.9.4",
+        "version_normalized": "1.9.4.0",
+        "require": {
+          "php": ">=8.0",
+          "ext-json": "*",
+          "guzzlehttp/guzzle": "^7.0",
+          "phpseclib/phpseclib": "^3.0",
+          "soneso/stellar-xdr": "^1.0"
+        },
+        "source": {
+          "url": "https://github.com/Soneso/stellar-php-sdk.git",
+          "type": "git",
+          "reference": "abc123"
+        }
+      },
+      "1.8.0": {
+        "name": "soneso/stellar-php-sdk",
+        "version": "1.8.0",
+        "version_normalized": "1.8.0.0",
+        "require": {
+          "php": ">=8.0",
+          "guzzlehttp/guzzle": "^7.0"
+        },
+        "source": {
+          "url": "https://github.com/Soneso/stellar-php-sdk.git",
+          "type": "git",
+          "reference": "def456"
+        }
+      },
+      "dev-main": {
+        "name": "soneso/stellar-php-sdk",
+        "version": "dev-main",
+        "version_normalized": "9999999-dev",
+        "require": {
+          "php": ">=8.0",
+          "guzzlehttp/guzzle": "^7.0",
+          "phpseclib/phpseclib": "^3.0",
+          "soneso/stellar-xdr": "^1.0"
+        },
+        "source": {
+          "url": "https://github.com/Soneso/stellar-php-sdk.git",
+          "type": "git",
+          "reference": "HEAD"
+        }
+      }
+    }
+  }
+}

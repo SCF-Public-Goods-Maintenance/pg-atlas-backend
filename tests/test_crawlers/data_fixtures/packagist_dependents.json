@@ -1,0 +1,6 @@
+{
+  "packages": [
+    {"name": "example/anchor-client", "description": "Stellar anchor client", "downloads": 150},
+    {"name": "example/wallet-sdk", "description": "PHP wallet SDK", "downloads": 80}
+  ]
+}

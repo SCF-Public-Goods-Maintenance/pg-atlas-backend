@@ -28,6 +28,7 @@ dev = [
     "ruff",
     "mypy",
     "types-cachetools",
+    "pytest-cov>=7.0.0",
 ]
 
 [project.scripts]

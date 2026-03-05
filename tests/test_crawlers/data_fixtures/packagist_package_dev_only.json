@@ -1,0 +1,36 @@
+{
+  "package": {
+    "name": "example/dev-only-pkg",
+    "description": "A package with only dev branches",
+    "favers": 2,
+    "versions": {
+      "dev-main": {
+        "name": "example/dev-only-pkg",
+        "version": "dev-main",
+        "version_normalized": "9999999-dev",
+        "require": {
+          "php": ">=8.1",
+          "guzzlehttp/guzzle": "^7.0"
+        },
+        "source": {
+          "url": "https://github.com/example/dev-only-pkg.git",
+          "type": "git",
+          "reference": "HEAD"
+        }
+      },
+      "dev-develop": {
+        "name": "example/dev-only-pkg",
+        "version": "dev-develop",
+        "version_normalized": "9999999-dev",
+        "require": {
+          "php": ">=8.1"
+        },
+        "source": {
+          "url": "https://github.com/example/dev-only-pkg.git",
+          "type": "git",
+          "reference": "abc"
+        }
+      }
+    }
+  }
+}

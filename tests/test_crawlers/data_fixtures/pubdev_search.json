@@ -1,0 +1,7 @@
+{
+  "packages": [
+    {"package": "stellar_wallet_flutter_sdk"},
+    {"package": "soroban_helper"},
+    {"package": "stellar_anchor_sdk"}
+  ]
+}
