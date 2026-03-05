@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Now copy the rest of the source and install the project itself.
 # README.md is required by hatchling (declared as readme in pyproject.toml).
-COPY README.md ./
+COPY README.md entrypoint.sh alembic.ini ./
 COPY pg_atlas/ ./pg_atlas/
 RUN uv sync --frozen --no-dev
 
@@ -28,6 +28,10 @@ WORKDIR /app
 # Copy the pre-built virtual environment from the builder stage.
 COPY --from=builder /app/.venv /app/.venv
 
+# Copy the entrypoint and Alembic requirements.
+COPY --from=builder /app/entrypoint.sh ./
+COPY --from=builder /app/alembic.ini ./
+
 # Copy application source.
 COPY --from=builder /app/pg_atlas ./pg_atlas/
 
@@ -36,5 +40,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Expose the API port.
 EXPOSE 8000
+
+# Apply DB migrations
+ENTRYPOINT [ "./entrypoint.sh" ]
 
 CMD ["uvicorn", "pg_atlas.main:app", "--host", "0.0.0.0", "--port", "8000"]

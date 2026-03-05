@@ -86,7 +86,7 @@ list and documentation.
 | Variable                          | Required      | Default | Description                                                 |
 | --------------------------------- | ------------- | ------- | ----------------------------------------------------------- |
 | `PG_ATLAS_API_URL`                | Yes           | —       | Canonical URL of this API instance. Used as OIDC audience.  |
-| `PG_ATLAS_DATABASE_URL`           | No (until A2) | `""`    | Async SQLAlchemy database URL (`postgresql+asyncpg://...`). |
+| `PG_ATLAS_DATABASE_URL`           | No (until A2) | `""`    | PostgreSQL DSN / connection string (`postgresql://...`).    |
 | `PG_ATLAS_LOG_LEVEL`              | No            | `INFO`  | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`).     |
 | `PG_ATLAS_JWKS_CACHE_TTL_SECONDS` | No            | `3600`  | How long to cache GitHub's JWKS in memory (seconds).        |
 

@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,9 +23,9 @@ class Settings(BaseSettings):
             OIDC audience when verifying GitHub OIDC tokens from the SBOM action.
             Must exactly match the ``audience`` value the action was configured with.
 
-    Optional environment variables (required for the database write path, A2+):
-        PG_ATLAS_DATABASE_URL: Async SQLAlchemy database URL
-            (``postgresql+asyncpg://user:pass@host/db``). An empty string disables
+    Optional environment variables:
+        PG_ATLAS_DATABASE_URL: PostgreSQL DSN / connection string
+            (``postgresql://user:pass@host/db``). An empty string disables
             the database session factory; the server will start but any endpoint that
             calls ``get_db_session()`` will raise at runtime.
         PG_ATLAS_ARTIFACT_STORE_PATH: Filesystem path where raw SBOM bytes are written
@@ -43,8 +44,26 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    API_URL: str
+    API_URL: str = "http://localhost:8000"
     DATABASE_URL: str = ""
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def coerce_async_driver(cls, db_url: str) -> str:
+        """
+        Rewrite ``postgres://`` / ``postgresql://`` → ``postgresql+asyncpg://``.
+
+        DigitalOcean App Platform injects managed-database connection strings in the
+        plain ``postgresql://`` form.  SQLAlchemy needs the driver qualifier so that
+        it selects asyncpg as the DBAPI.  Non-empty values that already contain
+        ``+asyncpg`` are returned unchanged.
+        """
+        for prefix in ("postgres://", "postgresql://"):
+            if db_url.startswith(prefix):
+                return "postgresql+asyncpg://" + db_url[len(prefix) :]
+
+        return db_url
+
     ARTIFACT_STORE_PATH: Path = Path("./artifact_store")
     LOG_LEVEL: str = "INFO"
     JWKS_CACHE_TTL_SECONDS: int = 3600
@@ -53,4 +72,4 @@ class Settings(BaseSettings):
 # Module-level singleton — import this throughout the application.
 # pydantic-settings reads API_URL from the environment; mypy cannot see that at
 # type-check time, so the required-field call-arg error is suppressed here.
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

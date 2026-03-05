@@ -1,5 +1,12 @@
 name: pg-atlas-backend
 region: ams3
+
+databases:
+  - engine: PG
+    name: pg-atlas-dev
+    version: "18"
+    production: false
+
 services:
   - name: api
     github:
@@ -14,3 +21,8 @@ services:
       - key: PG_ATLAS_API_URL
         scope: RUN_TIME
         value: "${APP_URL}"
+      - key: PG_ATLAS_DATABASE_URL
+        scope: RUN_TIME
+        value: "${pg-atlas-dev.DATABASE_URL}"
+
+# Hey Copilot, I've replaced the migrate job with entrypoint.sh

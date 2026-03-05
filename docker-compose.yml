@@ -34,7 +34,6 @@ services:
       # Raw SBOM artifact store (local dev). Mount a host path so artifacts survive
       # container restarts. In production, this is replaced by Storacha.
       - ./artifact_store:/data/artifacts
-    # TODO A6: add redis service (for Celery)
 
 volumes:
   pg_data:
