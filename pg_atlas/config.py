@@ -56,11 +56,13 @@ class Settings(BaseSettings):
         DigitalOcean App Platform injects managed-database connection strings in the
         plain ``postgresql://`` form.  SQLAlchemy needs the driver qualifier so that
         it selects asyncpg as the DBAPI.  Non-empty values that already contain
-        ``+asyncpg`` are returned unchanged.
+        ``+asyncpg`` are returned unchanged. Strips query parameters.
         """
         for prefix in ("postgres://", "postgresql://"):
             if db_url.startswith(prefix):
-                return "postgresql+asyncpg://" + db_url[len(prefix) :]
+                rewritten_url = "postgresql+asyncpg://" + db_url[len(prefix) :]
+                # also strip any query params that may not be supported
+                return rewritten_url.partition("?")[0]
 
         return db_url
 
