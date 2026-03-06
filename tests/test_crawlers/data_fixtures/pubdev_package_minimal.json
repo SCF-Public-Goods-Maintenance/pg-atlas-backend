@@ -1,0 +1,17 @@
+{
+  "name": "tiny_package",
+  "latest": {
+    "version": "0.1.0",
+    "pubspec": {
+      "name": "tiny_package"
+    }
+  },
+  "versions": [
+    {
+      "version": "0.1.0",
+      "pubspec": {
+        "name": "tiny_package"
+      }
+    }
+  ]
+}

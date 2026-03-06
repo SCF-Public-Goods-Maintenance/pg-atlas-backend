@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     JWKS_CACHE_TTL_SECONDS: int = 3600
 
+    # --- Crawler settings ---
+    CRAWLER_RATE_LIMIT: float = 1.0
+    CRAWLER_MAX_RETRIES: int = 3
+    CRAWLER_TIMEOUT: float = 30.0
+
 
 # Module-level singleton — import this throughout the application.
 # pydantic-settings reads API_URL from the environment; mypy cannot see that at

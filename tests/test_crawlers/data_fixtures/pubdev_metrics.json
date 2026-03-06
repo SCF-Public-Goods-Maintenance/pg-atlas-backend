@@ -1,0 +1,24 @@
+{
+  "score": {
+    "grantedPoints": 140,
+    "maxPoints": 160,
+    "likeCount": 17,
+    "downloadCount30Days": 1469,
+    "tags": ["sdk:flutter", "platform:android", "platform:ios", "is:dart3-compatible"]
+  },
+  "scorecard": {
+    "packageName": "stellar_flutter_sdk",
+    "packageVersion": "1.8.6",
+    "weeklyVersionDownloads": {
+      "newestDate": "2026-03-03T00:00:00.000Z",
+      "totalWeeklyDownloads": [
+        381, 500, 303, 258, 136, 144, 313, 452, 303, 38,
+        291, 84, 81, 168, 435, 276, 189, 118, 205, 533,
+        358, 362, 472, 146, 284, 249, 565, 166, 262, 544,
+        89, 282, 755, 294, 132, 273, 156, 178, 141, 252,
+        237, 531, 522, 258, 287, 147, 203, 75, 172, 186,
+        136, 452
+      ]
+    }
+  }
+}

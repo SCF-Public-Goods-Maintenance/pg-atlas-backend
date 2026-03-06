@@ -1,0 +1,20 @@
+{
+  "package": {
+    "name": "soneso/stellar-php-sdk",
+    "downloads": {
+      "total": {
+        "total": 46925,
+        "monthly": 1970,
+        "daily": 68
+      },
+      "versions": {
+        "1.9.4": {
+          "total": 5200,
+          "monthly": 800,
+          "daily": 30
+        }
+      }
+    },
+    "favers": 40
+  }
+}
