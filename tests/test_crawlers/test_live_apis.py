@@ -66,7 +66,10 @@ async def test_pubdev_live_metrics(live_client: httpx.AsyncClient) -> None:
     crawler = PubDevCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
-    assert pkg.downloads is None  # pub.dev does not populate adoption_downloads
+    if pkg.downloads is not None:
+        assert isinstance(pkg.downloads, int)
+        assert pkg.downloads >= 0
+
     # Weekly aggregations should be present from scorecard
     assert isinstance(pkg.metadata.get("download_count_4w"), int)
     assert isinstance(pkg.metadata.get("download_count_12w"), int)

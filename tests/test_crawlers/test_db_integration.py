@@ -24,6 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from pg_atlas.config import settings
 from pg_atlas.crawlers.base import (
     CrawledDependency,
     CrawledDependent,
@@ -52,7 +53,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 async def db_engine() -> AsyncGenerator[Any, None]:
     """Create a fresh async engine with NullPool for test isolation."""
-    engine = create_async_engine(os.environ["PG_ATLAS_DATABASE_URL"], poolclass=NullPool)
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     yield engine
     await engine.dispose()
 
