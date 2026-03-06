@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     CRAWLER_MAX_RETRIES: int = 3
     CRAWLER_TIMEOUT: float = 30.0
 
+    # --- Git log parser settings ---
+    GITLOG_SINCE_MONTHS: int = 24
+    GITLOG_CLONE_DIR: str = "/tmp/pg-atlas-clones"
+    GITLOG_CLONE_TIMEOUT: float = 120.0
+    GITLOG_CLONE_DELAY: float = 1.0
+
 
 # Module-level singleton — import this throughout the application.
 # pydantic-settings reads API_URL from the environment; mypy cannot see that at
