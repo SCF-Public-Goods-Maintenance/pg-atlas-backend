@@ -1,13 +1,18 @@
 """
 Ingestion router for PG Atlas.
 
-Handles write endpoints that accept data submissions from project teams. All
-endpoints require a valid GitHub OIDC Bearer token (see pg_atlas.auth.oidc).
+Handles write endpoints that accept data submissions from project teams.  Write
+endpoints require a valid GitHub OIDC Bearer token (see ``pg_atlas.auth.oidc``).
+Read endpoints are unauthenticated so submitters can verify their submissions.
 
 Currently implemented:
     POST /ingest/sbom — Accept an SPDX 2.3 SBOM submission from the
         pg-atlas-sbom-action, validate it, persist Repo/ExternalRepo vertices
         and DependsOn edges, and store a raw artifact for auditability.
+    GET  /ingest/sbom — List all SBOM submissions with optional filtering and
+        pagination.
+    GET  /ingest/sbom/{submission_id} — Detail view for a single submission
+        including the raw artifact content.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -15,14 +20,21 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import logging
+from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
+from pg_atlas.config import settings
+from pg_atlas.db_models.base import SubmissionStatus
+from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.ingestion.persist import handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
@@ -32,12 +44,90 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ingestion"])
 
 
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+
 class SbomAcceptedResponse(BaseModel):
     """Response body returned on successful SBOM submission (202 Accepted)."""
 
     message: str
     repository: str
     package_count: int
+
+
+class SbomSubmissionResponse(BaseModel):
+    """
+    Full SBOM submission record.
+
+    Serialised from the ``SbomSubmission`` ORM model.  The ``sbom_content_hash``
+    field is the SHA-256 hex digest of the raw submitted payload.
+    """
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    repository_claim: str
+    actor_claim: str
+    sbom_content_hash: str
+    artifact_path: str
+    status: SubmissionStatus
+    error_detail: str | None
+    submitted_at: datetime.datetime
+    processed_at: datetime.datetime | None
+
+
+class SbomSubmissionDetailResponse(SbomSubmissionResponse):
+    """
+    Extended SBOM submission record with the raw artifact content.
+
+    Returned by the detail endpoint.  ``raw_artifact`` contains the full JSON
+    text of the stored SBOM, or ``None`` if the artifact file is missing from
+    the store.
+    """
+
+    raw_artifact: str | None = None
+
+
+class SbomSubmissionListResponse(BaseModel):
+    """
+    Paginated list of SBOM submission records.
+
+    Returned by the list endpoint with ``total`` reflecting the count after
+    any ``repository`` filter has been applied.
+    """
+
+    items: list[SbomSubmissionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _require_session(session: AsyncSession | None) -> AsyncSession:
+    """
+    Raise HTTP 503 if the database session is unavailable.
+
+    Centralises the guard so individual endpoints stay concise.
+    """
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is not configured.",
+        )
+
+    return session
+
+
+def _read_file_sync(path: Path) -> str:
+    """Synchronous file read — intended to run in a thread-pool executor."""
+
+    return path.read_text(encoding="utf-8")
 
 
 @router.post(
@@ -96,3 +186,103 @@ async def ingest_sbom(
         ) from exc
 
     return SbomAcceptedResponse(**result)
+
+
+@router.get(
+    "/sbom",
+    response_model=SbomSubmissionListResponse,
+    summary="List SBOM submissions",
+    description=(
+        "Returns a paginated list of SBOM submission records.  Supports optional "
+        "filtering by ``repository`` claim and pagination via ``limit`` / ``offset`` "
+        "query parameters.  Does not require authentication."
+    ),
+)
+async def list_sbom_submissions(
+    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    repository: Annotated[
+        str | None,
+        Query(description="Filter by repository_claim (exact match)"),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=200, description="Maximum number of items to return")] = 50,
+    offset: Annotated[int, Query(ge=0, description="Number of items to skip")] = 0,
+) -> SbomSubmissionListResponse:
+    """
+    Return a paginated list of all SBOM submissions.
+
+    Results are ordered by ``submitted_at`` descending (most recent first).
+    When ``repository`` is provided, only submissions whose ``repository_claim``
+    matches the supplied value are included — both in the items list and in the
+    ``total`` count.
+    """
+    db = _require_session(session)
+
+    base = select(SbomSubmission)
+    count_q = select(func.count()).select_from(SbomSubmission)
+
+    if repository is not None:
+        base = base.where(SbomSubmission.repository_claim == repository)
+        count_q = count_q.where(SbomSubmission.repository_claim == repository)
+
+    total = (await db.execute(count_q)).scalar_one()
+
+    rows = (await db.execute(base.order_by(SbomSubmission.submitted_at.desc()).limit(limit).offset(offset))).scalars().all()
+
+    return SbomSubmissionListResponse(
+        items=[SbomSubmissionResponse.model_validate(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/sbom/{submission_id}",
+    response_model=SbomSubmissionDetailResponse,
+    summary="Get SBOM submission detail",
+    description=(
+        "Returns a single SBOM submission record along with the raw artifact "
+        "content read from the backing store.  If the artifact file is missing, "
+        "the ``raw_artifact`` field is ``null``.  Does not require authentication."
+    ),
+)
+async def get_sbom_submission(
+    submission_id: int,
+    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+) -> SbomSubmissionDetailResponse:
+    """
+    Return a single SBOM submission with its raw artifact content.
+
+    Raises HTTP 404 if no submission with the given ``submission_id`` exists.
+    The artifact file is read asynchronously via a thread-pool executor; if the
+    file has been removed from the store the ``raw_artifact`` field is ``null``
+    rather than raising an error.
+    """
+    db = _require_session(session)
+
+    row = await db.get(SbomSubmission, submission_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"SBOM submission {submission_id} not found.",
+        )
+
+    # Read the raw artifact from the backing store.
+    raw_artifact: str | None = None
+    artifact_full_path = settings.ARTIFACT_STORE_PATH / row.artifact_path
+
+    try:
+        raw_artifact = await asyncio.get_running_loop().run_in_executor(
+            None,
+            _read_file_sync,
+            artifact_full_path,
+        )
+    except FileNotFoundError:
+        logger.warning("Artifact file not found: %s", artifact_full_path)
+    except OSError:
+        logger.exception("Error reading artifact file: %s", artifact_full_path)
+
+    detail = SbomSubmissionDetailResponse.model_validate(row)
+    detail.raw_artifact = raw_artifact
+
+    return detail
