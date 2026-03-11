@@ -1,0 +1,67 @@
+name: Sync deps.dev Proto
+
+on:
+  schedule:
+    - cron: "33 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Check for proto updates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── 1. Sync proto (stdlib only — no uv needed) ─────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Download latest proto
+        id: sync
+        run: python pg_atlas/deps_dev/sync_proto.py
+
+      # ── 2. Regenerate client stubs (needs proto-build deps) ────────
+      - name: Check for proto changes
+        id: changes
+        run: |
+          if git diff --quiet -- pg_atlas/deps_dev/protos/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.changes.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v7
+
+      - name: Regenerate async client stubs
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          uv sync --group proto-build
+          uv run python pg_atlas/deps_dev/generate_async_client.py
+
+      # ── 3. Open PR ─────────────────────────────────────────────────
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          commit-message: "chore: update deps.dev proto stubs"
+          title: "chore: update deps.dev proto stubs"
+          body: |
+            Automated update — the upstream deps.dev proto definition has changed.
+
+            **Source:** `google/deps.dev` `api/v3alpha/apiv3alpha.proto`
+            **Workflow:** `sync-depsdev-proto.yml`
+
+            Review the generated diff before merging.
+          branch: chore/sync-depsdev-proto
+          labels: dependencies
+          delete-branch: true
