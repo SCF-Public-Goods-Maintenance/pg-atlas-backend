@@ -1,0 +1,52 @@
+# Reference Graph Bootstrap — weekly crawl of OpenGrants, GitHub, and deps.dev.
+#
+# Runs two sequential worker steps:
+#   1. opengrants queue (sync_opengrants → process_project → crawl_github_repo)
+#   2. package-deps queue (crawl_package_deps)
+#
+# The separation ensures all Repo vertices and Project associations exist
+# before the dependency crawler checks them.
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+name: Reference Graph Bootstrap
+
+on:
+  schedule:
+    - cron: "11 10 * * 2"   # weekly, Tuesday 10:11 UTC
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.PG_ATLAS_DATABASE_URL }}
+      PG_ATLAS_OPENGRANTS_KEY: ${{ secrets.PG_ATLAS_OPENGRANTS_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Queue bootstrap tasks
+        run: uv run python -m pg_atlas.procrastinate.seed
+
+      - name: Run worker — opengrants queue
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --concurrency=8
+
+      - name: Run worker — package-deps queue
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --concurrency=8
+
+      - name: Write job summary
+        run: |
+          echo "## Reference Graph Bootstrap" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Trigger**: ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run**: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Finished**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
