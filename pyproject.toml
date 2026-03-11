@@ -18,6 +18,10 @@ dependencies = [
     "cryptography>=46.0.5",
     "httpx>=0.28.1",
     "cachetools>=7.0.1",
+    "procrastinate>=3.7.2",
+    "psycopg[binary,pool]>=3.3.3",
+    "pygithub>=2.8.1",
+    "betterproto2[all]>=0.9.1",
 ]
 
 [dependency-groups]
@@ -25,10 +29,23 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-mock",
-    "ruff",
+    "ruff>=0.15.2",
     "mypy",
     "types-cachetools",
     "pytest-cov>=7.0.0",
+    "types-pyyaml>=6.0.12.20250915",
+]
+proto-build = [
+    "betterproto2-compiler>=0.9.0",
+    "grpcio-tools",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { group = "dev" },
+        { group = "proto-build" },
+    ],
 ]
 
 [project.scripts]
@@ -50,9 +67,11 @@ line-length = 127
 
 [tool.ruff]
 line-length = 127
+exclude = ["pg_atlas/deps_dev/lib"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+per-file-ignores = { "pg_atlas/procrastinate/versions/*.py" = ["E501"] }
 
 [tool.mypy]
 python_version = "3.14"
@@ -61,3 +80,8 @@ disallow_untyped_defs = true
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_ignores = true
+exclude = "pg_atlas/deps_dev/lib/"
+
+[[tool.mypy.overrides]]
+module = ["pg_atlas.deps_dev.lib.*"]
+ignore_errors = true

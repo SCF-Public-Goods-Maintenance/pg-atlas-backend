@@ -10,6 +10,14 @@
             "justMyCode": false,
         },
         {
+            "name": "Python: Debug File",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "module": "${command:extension.commandvariable.file.relativeFileDotsNoExtension}",
+            "justMyCode": false,
+        },
+        {
             "name": "Python: Debug Tests",
             "type": "debugpy",
             "request": "launch",
