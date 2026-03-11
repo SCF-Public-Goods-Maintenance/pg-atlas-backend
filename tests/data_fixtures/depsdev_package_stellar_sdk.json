@@ -1,0 +1,26 @@
+{
+  "system": "PYPI",
+  "name": "stellar-sdk",
+  "purl": "pkg:pypi/stellar-sdk",
+  "default_version": "11.1.0",
+  "versions": [
+    {
+      "version": "10.0.0",
+      "purl": "pkg:pypi/stellar-sdk@10.0.0",
+      "published_at": "2024-06-01T00:00:00Z",
+      "is_default": false
+    },
+    {
+      "version": "11.0.0",
+      "purl": "pkg:pypi/stellar-sdk@11.0.0",
+      "published_at": "2024-12-01T00:00:00Z",
+      "is_default": false
+    },
+    {
+      "version": "11.1.0",
+      "purl": "pkg:pypi/stellar-sdk@11.1.0",
+      "published_at": "2025-02-01T00:00:00Z",
+      "is_default": true
+    }
+  ]
+}

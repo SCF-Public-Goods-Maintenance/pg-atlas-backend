@@ -1,0 +1,31 @@
+{
+  "system": "PYPI",
+  "name": "stellar-sdk",
+  "version": "11.1.0",
+  "requirements": [
+    {
+      "name": "stellar-sdk-xdr",
+      "version_constraint": ">=0.2.0"
+    },
+    {
+      "name": "requests",
+      "version_constraint": ">=2.25.0"
+    },
+    {
+      "name": "pynacl",
+      "version_constraint": ">=1.4.0"
+    },
+    {
+      "name": "aiohttp",
+      "version_constraint": ">=3.7.0"
+    },
+    {
+      "name": "aiohttp-sse-client",
+      "version_constraint": ">=0.2.0"
+    },
+    {
+      "name": "typeguard",
+      "version_constraint": ">=2.13.0"
+    }
+  ]
+}
