@@ -2,7 +2,7 @@
 Application settings loaded from environment variables or a .env file.
 
 All settings are prefixed with PG_ATLAS_ in the environment. A .env file at
-the project root is automatically loaded in development.
+the project root is automatically loaded in development (at least with VS Code).
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     API_URL: str = "http://localhost:8000"
     DATABASE_URL: str = ""
+    OPENGRANTS_KEY: str = ""
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
@@ -77,6 +78,4 @@ class Settings(BaseSettings):
 
 
 # Module-level singleton — import this throughout the application.
-# pydantic-settings reads API_URL from the environment; mypy cannot see that at
-# type-check time, so the required-field call-arg error is suppressed here.
 settings = Settings()
