@@ -42,7 +42,7 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def _get_session_factory() -> async_sessionmaker[AsyncSession]:
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """
     Return the async session factory, creating the engine on first call.
 
@@ -73,7 +73,7 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
     Raises ``ValueError`` at first use if ``PG_ATLAS_DATABASE_URL`` is not set.
     """
-    async with _get_session_factory()() as session:
+    async with get_session_factory()() as session:
         yield session
 
 
@@ -90,5 +90,5 @@ async def maybe_db_session() -> AsyncGenerator[AsyncSession | None, None]:
     if not settings.DATABASE_URL:
         yield None
         return
-    async with _get_session_factory()() as session:
+    async with get_session_factory()() as session:
         yield session
