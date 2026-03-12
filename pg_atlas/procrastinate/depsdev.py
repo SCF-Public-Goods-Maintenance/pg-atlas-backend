@@ -1,10 +1,10 @@
 """
+
 Async wrapper around the deps.dev gRPC Insights API.
 
-The generated ``InsightsStub`` client (from ``betterproto2``) is synchronous
-(``grpc.Channel.unary_unary``).  Every public function in this module bridges
-to async via ``asyncio.to_thread`` and returns lightweight dataclasses that
-decouple the rest of the codebase from the protobuf wire format.
+This module uses native async gRPC calls (`grpclib`) and maps protobuf
+responses to lightweight dataclasses so the rest of the codebase does not
+depend on generated message internals.
 
 Typical usage::
 
@@ -17,16 +17,21 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 import grpc
+from grpclib.client import Channel
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 
 from pg_atlas.deps_dev.lib.deps_dev.v3alpha import (
     GetPackageRequest,
     GetProjectBatchRequest,
+    GetProjectPackageVersionsRequest,
     GetProjectRequest,
     GetRequirementsRequest,
     InsightsStub,
@@ -44,7 +49,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEPSDEV_HOST = "api.deps.dev:443"
+_DEPSDEV_HOST = "api.deps.dev"
+_DEPSDEV_PORT = 443
 
 #: Map PURL type prefix → System enum member name (upper-case).
 _PURL_TYPE_TO_SYSTEM: dict[str, str] = {
@@ -56,6 +62,7 @@ _PURL_TYPE_TO_SYSTEM: dict[str, str] = {
     "gem": "RUBYGEMS",
     "nuget": "NUGET",
 }
+_SYSTEM_TO_PURL_TYPE: dict[str, str] = {v: k for k, v in _PURL_TYPE_TO_SYSTEM.items()}
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -149,17 +156,42 @@ def system_for_purl(purl: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _get_channel() -> grpc.Channel:
-    """Create a secure gRPC channel to the deps.dev API."""
-    credentials = grpc.ssl_channel_credentials()
-
-    return grpc.secure_channel(_DEPSDEV_HOST, credentials)
+T = TypeVar("T")
 
 
-def _get_stub() -> InsightsStub:
-    """Return an ``InsightsStub`` bound to a secure channel."""
+@asynccontextmanager
+async def _depsdev_stub() -> AsyncIterator[InsightsStub]:
+    """Yield a short-lived async ``InsightsStub`` backed by a TLS channel."""
+    channel = Channel(host=_DEPSDEV_HOST, port=_DEPSDEV_PORT, ssl=True)
+    try:
+        yield InsightsStub(channel)
+    finally:
+        channel.close()
 
-    return InsightsStub(_get_channel())
+
+async def _run_with_stub(call: Callable[[InsightsStub], Awaitable[T]]) -> T:
+    """Run one RPC call with a temporary stub and return its response."""
+    async with _depsdev_stub() as stub:
+        return await call(stub)
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    """Return ``True`` when *exc* represents a NOT_FOUND gRPC status."""
+    if isinstance(exc, GRPCError):
+        return exc.status is Status.NOT_FOUND
+
+    if isinstance(exc, grpc.RpcError):
+        return bool(exc.code() == grpc.StatusCode.NOT_FOUND)
+
+    return False
+
+
+def _system_enum_to_name(system: System | int) -> str:
+    """Convert a deps.dev ``System`` enum value into its upper-case name."""
+    try:
+        return System(system).name
+    except ValueError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -167,14 +199,12 @@ def _get_stub() -> InsightsStub:
 # ---------------------------------------------------------------------------
 
 
-def _sync_get_package(system: str, name: str) -> Package:
-    """Blocking helper — called via ``asyncio.to_thread``."""
-    stub = _get_stub()
+async def _get_package_message(system: str, name: str) -> Package:
+    """Fetch the raw ``Package`` protobuf message from deps.dev."""
     sys_enum = _system_name_to_enum(system)
+    request = GetPackageRequest(package_key=PackageKey(system=sys_enum, name=name))
 
-    return stub.get_package(
-        GetPackageRequest(package_key=PackageKey(system=sys_enum, name=name)),
-    )
+    return await _run_with_stub(lambda stub: stub.get_package(request))
 
 
 async def get_package(system: str, name: str) -> DepsDevPackageInfo:
@@ -192,10 +222,9 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
         DepsDevError: On gRPC errors other than NOT_FOUND.
     """
     try:
-        pkg: Package = await asyncio.to_thread(_sync_get_package, system, name)
-    except grpc.RpcError as exc:
-        code = exc.code()
-        if code == grpc.StatusCode.NOT_FOUND:
+        pkg = await _get_package_message(system, name)
+    except (GRPCError, grpc.RpcError) as exc:
+        if _is_not_found_error(exc):
             raise DepsDevError(f"Package not found: {system}/{name}") from exc
 
         logger.warning("deps.dev GetPackage error for %s/%s: %s", system, name, exc)
@@ -233,16 +262,12 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
 # ---------------------------------------------------------------------------
 
 
-def _sync_get_requirements(system: str, name: str, version: str) -> Requirements:
-    """Blocking helper — called via ``asyncio.to_thread``."""
-    stub = _get_stub()
+async def _get_requirements_message(system: str, name: str, version: str) -> Requirements:
+    """Fetch the raw ``Requirements`` protobuf message from deps.dev."""
     sys_enum = _system_name_to_enum(system)
+    request = GetRequirementsRequest(version_key=VersionKey(system=sys_enum, name=name, version=version))
 
-    return stub.get_requirements(
-        GetRequirementsRequest(
-            version_key=VersionKey(system=sys_enum, name=name, version=version),
-        ),
-    )
+    return await _run_with_stub(lambda stub: stub.get_requirements(request))
 
 
 def _extract_requirements(system: str, reqs: Requirements) -> list[DepsDevRequirement]:
@@ -314,10 +339,9 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
         DepsDevError: On gRPC errors other than NOT_FOUND (which returns ``[]``).
     """
     try:
-        reqs: Requirements = await asyncio.to_thread(_sync_get_requirements, system, name, version)
-    except grpc.RpcError as exc:
-        code = exc.code()
-        if code == grpc.StatusCode.NOT_FOUND:
+        reqs = await _get_requirements_message(system, name, version)
+    except (GRPCError, grpc.RpcError) as exc:
+        if _is_not_found_error(exc):
             logger.info("No requirements found for %s/%s@%s (NOT_FOUND)", system, name, version)
 
             return []
@@ -334,20 +358,55 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
 # ---------------------------------------------------------------------------
 
 
-def _sync_get_project_batch(project_ids: list[str], page_token: str = "") -> tuple[list[Any], str]:
-    """
-    Blocking helper — returns ``(responses, next_page_token)``.
-
-    Called via ``asyncio.to_thread``.
-    """
-    stub = _get_stub()
+async def _get_project_batch_page(project_ids: list[str], page_token: str = "") -> tuple[list[Any], str]:
+    """Fetch one GetProjectBatch page and return ``(responses, next_page_token)``."""
     req = GetProjectBatchRequest(
         requests=[GetProjectRequest(project_key=ProjectKey(id=pid)) for pid in project_ids],
         page_token=page_token,
     )
-    batch = stub.get_project_batch(req)
+    batch = await _run_with_stub(lambda stub: stub.get_project_batch(req))
 
     return list(batch.responses), batch.next_page_token
+
+
+async def get_project_package_versions(project_id: str) -> list[dict[str, str]]:
+    """
+    Fetch package-version mappings for one project.
+
+    Returns entries shaped as ``{"system", "name", "version", "purl"}``.
+    """
+    req = GetProjectPackageVersionsRequest(project_key=ProjectKey(id=project_id))
+    try:
+        response = await _run_with_stub(lambda stub: stub.get_project_package_versions(req))
+    except (GRPCError, grpc.RpcError) as exc:
+        if _is_not_found_error(exc):
+            return []
+
+        raise DepsDevError(f"GetProjectPackageVersions failed for {project_id}: {exc}") from exc
+
+    package_versions: list[dict[str, str]] = []
+    for version in response.versions:
+        version_key = version.version_key
+        if version_key is None:
+            continue
+
+        system_name = _system_enum_to_name(version_key.system)
+        if not system_name:
+            continue
+
+        package_versions.append(
+            {
+                "system": system_name,
+                "name": version_key.name,
+                "version": version_key.version,
+                "purl": (
+                    f"pkg:{_SYSTEM_TO_PURL_TYPE.get(system_name, system_name.lower())}/"
+                    f"{version_key.name}@{version_key.version}"
+                ),
+            }
+        )
+
+    return package_versions
 
 
 async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectInfo]:
@@ -374,14 +433,9 @@ async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectI
 
     while True:
         try:
-            responses, next_token = await asyncio.to_thread(
-                _sync_get_project_batch,
-                project_ids,
-                page_token,
-            )
-        except grpc.RpcError as exc:
-            code = exc.code()
-            if code == grpc.StatusCode.NOT_FOUND:
+            responses, next_token = await _get_project_batch_page(project_ids, page_token)
+        except (GRPCError, grpc.RpcError) as exc:
+            if _is_not_found_error(exc):
                 logger.info("No projects found in batch (NOT_FOUND)")
 
                 return results
