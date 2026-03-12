@@ -1,0 +1,10 @@
+{
+  "github.com/stellarcn/py-stellar-base": {
+    "project_id": "github.com/stellarcn/py-stellar-base",
+    "stars_count": 498,
+    "forks_count": 178,
+    "license": "Apache-2.0",
+    "description": "Python SDK for Stellar",
+    "package_versions": []
+  }
+}

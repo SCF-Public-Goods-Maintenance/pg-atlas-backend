@@ -8,8 +8,19 @@
         "**/__pycache__",
         "**/.venv",
         "**/site-packages",
-        "**/.*"  // all dotfiles and dot-directories
+        "**/.*",  // all dotfiles and dot-directories
+    ],
+    "ignore": [
+        "pg_atlas/deps_dev/lib",
+        "pg_atlas/deps_dev/generate_async_client.py",
     ],
     // many modules re-export symbols without __all__.
-    "reportPrivateImportUsage": "none"
+    "reportPrivateImportUsage": "none",
+    "executionEnvironments": [
+        {
+            "root": "tests",
+            "extraPaths": ["."],
+            "reportPrivateUsage": "none"
+        },
+    ],
 }

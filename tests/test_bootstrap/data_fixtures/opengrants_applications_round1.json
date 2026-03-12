@@ -1,0 +1,42 @@
+{
+  "data": [
+    {
+      "type": "GrantApplication",
+      "id": "daoip-5:scf:application:python_stellar_sdk",
+      "grantPoolId": "daoip-5:scf:grantPool:scf_#1",
+      "grantPoolName": "SCF #1",
+      "projectId": "daoip-5:scf:project:python_stellar_sdk",
+      "projectName": "Stellar Python SDK",
+      "status": "approved",
+      "extensions": {
+        "io.scf": {
+          "io.scf.round": "SCF #1",
+          "io.scf.project": "Python Stellar SDK",
+          "io.scf.category": "Developer Tooling",
+          "io.scf.trancheCompletionPercent": 0,
+          "io.scf.oneSentenceDescription": "Py-stellar-sdk is a Python library for communicating with a Stellar Horizon server."
+        }
+      }
+    },
+    {
+      "type": "GrantApplication",
+      "id": "daoip-5:scf:application:astrograph",
+      "grantPoolId": "daoip-5:scf:grantPool:scf_#1",
+      "projectId": "daoip-5:scf:project:astrograph",
+      "projectName": "Astrograph",
+      "status": "approved",
+      "extensions": {
+        "io.scf": {
+          "io.scf.round": "SCF #1",
+          "io.scf.project": "Astrograph",
+          "io.scf.category": "Infrastructure & Services",
+          "io.scf.trancheCompletionPercent": 0
+        }
+      }
+    }
+  ],
+  "pagination": {
+    "totalCount": 2,
+    "hasNext": false
+  }
+}

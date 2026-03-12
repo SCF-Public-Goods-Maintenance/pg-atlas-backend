@@ -1,0 +1,48 @@
+{
+  "data": [
+    {
+      "type": "GrantApplication",
+      "id": "daoip-5:scf:application:coindisco",
+      "grantPoolId": "daoip-5:scf:grantPool:scf_#30",
+      "projectId": "daoip-5:scf:project:coindisco",
+      "projectName": "Galaxy Ramp",
+      "status": "approved",
+      "extensions": {
+        "io.scf": {
+          "io.scf.round": "SCF #30",
+          "io.scf.project": "Coindisco",
+          "io.scf.code": "https://github.com/nicholasgasior/galaxy-ramp",
+          "io.scf.category": "Applications",
+          "io.scf.trancheCompletionPercent": 100,
+          "io.scf.oneSentenceDescription": "Galaxy Ramp offers an onramp for any token on Stellar.",
+          "io.scf.website": "https://galaxyramp.io",
+          "io.scf.x": "@GalaxyRampXLM"
+        }
+      }
+    },
+    {
+      "type": "GrantApplication",
+      "id": "daoip-5:scf:application:devasign",
+      "grantPoolId": "daoip-5:scf:grantPool:scf_#30",
+      "projectId": "daoip-5:scf:project:devasign",
+      "projectName": "DevAsign API",
+      "status": "approved",
+      "extensions": {
+        "io.scf": {
+          "io.scf.round": "SCF #30",
+          "io.scf.project": "DevAsign",
+          "io.scf.code": "https://github.com/devasignhq",
+          "io.scf.category": "Developer Tooling",
+          "io.scf.trancheCompletionPercent": 50,
+          "io.scf.oneSentenceDescription": "DevAsign is a platform for secure dev task management.",
+          "io.scf.technicalArchitecture": "FastAPI + PostgreSQL + Soroban smart contracts",
+          "io.scf.website": "https://devasign.dev"
+        }
+      }
+    }
+  ],
+  "pagination": {
+    "totalCount": 2,
+    "hasNext": false
+  }
+}

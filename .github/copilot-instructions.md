@@ -40,6 +40,8 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   `requires-python = ">=3.14"` (i.e. `target-version = "py314"`) intentionally rewrites `except (A, B):`
   → `except A, B:` per PEP 758.
 - **mypy** in strict mode (`disallow_untyped_defs`, `explicit_package_bases`, `ignore_missing_imports`).
+- **pylance** for IDE-integrated quality control. If Pylance tools are available: run diagnostics and
+  fix problems for every file you touch.
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Run the full check suite before considering work done:
   ```sh
@@ -96,8 +98,16 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   (`confidence=verified_sbom`), `SbomSubmission` audit rows, artifact storage. Router uses
   `maybe_db_session` dependency (falls back to log-only when `DATABASE_URL` is unset).
   See A3 notes below.
-- **A5 is next**: Reference Graph Bootstrapping — Procrastinate + GitHub Actions crawl of
-  OpenGrants, GitHub, and deps.dev. Full plan in `devops.md` § A5.
+- **A5 almost complete**: Reference Graph Bootstrapping — Procrastinate + GitHub Actions crawl of
+  OpenGrants, GitHub, and deps.dev. `pg_atlas/procrastinate/` sub-package with `app.py` (App +
+  PsycopgConnector), `worker.py` (CLI), `seed.py` (defers root task), `opengrants.py` (async
+  HTTP client for OpenGrants API), `depsdev.py` (deps.dev gRPC wrapper via `betterproto2`),
+  `upserts.py` (async SQLAlchemy upsert helpers), `tasks.py` (4 Procrastinate task definitions:
+  `sync_opengrants` → `process_project` → `crawl_github_repo` → `crawl_package_deps`).
+  Procrastinate schema via Alembic migration (`procrastinate_001`). deps.dev proto sync tooling
+  in `pg_atlas/deps_dev/`. GitHub Actions workflows: `bootstrap.yml` (weekly), `sync-depsdev-proto.yml`
+  (daily). Manual `project-git-mapping.yml` for early-round projects missing `io.scf.code`.
+  See A5 notes below. Not complete: ingestion of SCF Impact Survey results for activity status.
 
 ## Keeping These Instructions Current
 
@@ -206,30 +216,75 @@ These notes document key decisions made during A5 planning that future sessions 
 - Task queue: **Procrastinate ≥ 3.0** with `PsycopgConnector` (psycopg3). Add `procrastinate[psycopg]`
   and `psycopg[binary,pool]` to `pyproject.toml`. SQLAlchemy continues to use `asyncpg` — both
   drivers coexist on the same PostgreSQL instance.
-- Worker DSN: strip `+asyncpg` from `settings.DATABASE_URL` before passing to `PsycopgConnector`.
-- Worker runs in GitHub Actions with `run_worker_async(wait=False, concurrency=12)`. The `wait=False`
+- Worker DSN: `_get_database_url()` in `app.py` reads `PG_ATLAS_DATABASE_URL`, strips `+asyncpg`,
+  normalizes `postgres://` to `postgresql://`, and removes query parameters.
+- Worker runs in GitHub Actions with `run_worker_async(wait=False, concurrency=N)`. The `wait=False`
   flag causes it to exit once the queue is empty — required for GH Actions to complete.
-- Procrastinate schema: new Alembic migration after `f3d946ade07e` using `procrastinate schema --print`
+- Procrastinate schema: new Alembic migration using the "multiple bases" pattern, populated by `procrastinate schema --print`
   SQL via `op.execute()`. `entrypoint.sh` then applies it on every deploy automatically.
+- Procrastinate `@app.task` returns a `Task` object, not a regular function. Use
+  `task.configure(queueing_lock=...).defer_async(...)` for dynamic lock keys. In tests, call
+  `await task(...)` to execute the underlying function directly.
 
 ### OpenGrants API
-- Base URL: `https://grants.daostar.org/api/v1/grantApplications?system=scf&limit=100&offset=N`
-- Response has **no `git_org_url` field**. Use curated `project_seeds.yml` mapping
-  (`projectId` → `github_org`) for v0; GitHub repo search API for unmapped projects.
+- 1. Fetch SCF rounds: `https://grants.daostar.org/api/v1/grantPools?system=scf&sortOrder=asc&limit=100`
+- 2. For each round, fetch all submissions, e.g.: `https://grants.daostar.org/api/v1/grantApplications?system=scf&sortOrder=asc&poolId=daoip-5%3Ascf%3AgrantPool%3Ascf_%2339&limit=100`
+- Available extension fields differ per round (and project); recent rounds have `io.scf.code` that may contain a GitHub URL. Some fields need to be copied to `Project.metadata`.
 - Pagination: `limit` + `offset` (not cursor-based). `pagination.hasNext` signals more pages.
 
 ### deps.dev API
-- Use REST API (`https://api.deps.dev/v3/`) — no gRPC needed for v0.
-  TODO: why not????
-- `GetDependencies` (stable v3): returns full resolved graph with `node.relation == "DIRECT"` for
-  direct deps. Filter to direct only (1-level boundary).
-- `GetDependents` (v3alpha): returns **counts only** — cannot enumerate dependent package names.
-  Intra-ecosystem edges are captured by crawling every Project Repo's dependencies directly.
-- Supported ecosystems for `GetDependencies`: Cargo, npm, Maven, PyPI (not Go/Ruby).
+- Use gRPC through `betterproto2` async client.
+- `InsightsStub` must be native async, generated by `betterproto2`.
+- `GetRequirements` returns ecosystem-specific nested structures; extraction logic in `depsdev.py`
+  handles all 7 supported ecosystems with per-system parsing.
 
 ### Module placement
-- `pg_atlas/procrastinate/` — new sub-package. `app.py` (App + connector), `tasks.py` (task defs),
-  `opengrants.py`, `github.py`, `depsdev.py`, `upserts.py`, `seed.py` (CLI entry point).
-- `.github/workflows/bootstrap.yml` — the weekly scheduled workflow.
-- See `devops.md` § A5 for module layout, task hierarchy, acceptance criteria, and the complete
-  workflow YAML template.
+```
+pg_atlas/procrastinate/
+    app.py           # Procrastinate App + PsycopgConnector
+    worker.py        # CLI argparse entry point
+    seed.py          # Defers root sync_opengrants task
+    opengrants.py    # Async HTTP client for OpenGrants API
+    depsdev.py       # deps.dev gRPC wrapper
+    upserts.py       # Async SQLAlchemy upsert helpers
+    tasks.py         # 4 task definitions (sync_opengrants → process_project → crawl_github_repo → crawl_package_deps)
+    project-git-mapping.yml  # Manual projectId → GitHub URL mappings
+    versions/        # Alembic migrations (procrastinate schema)
+pg_atlas/deps_dev/
+    sync_proto.py           # Proto sync script
+    generate_async_client.py # Code generation
+    protos/                 # .proto files
+    lib/                    # Generated gRPC client (excluded from ruff + mypy)
+.github/workflows/
+    bootstrap.yml            # Weekly reference graph bootstrap
+    sync-depsdev-proto.yml   # Daily proto sync
+```
+- See `devops.md` § A5 for task hierarchy and acceptance criteria.
+
+## A5 Implementation Notes
+
+These conventions emerged during A5 implementation and apply to all future task/crawl work.
+
+### Upsert patterns
+- `upserts.py` helpers each open their own session via `_get_session_factory()` from
+  `pg_atlas.db_models.session` — the factory is imported locally inside functions to avoid
+  event-loop binding issues.
+- `_promote_external_to_repo()` does a 3-step Core operation: delete ExternalRepo child → update
+  discriminator on `repo_vertices` → insert Repo child row. Uses `metadata` (column name) not
+  `repo_metadata` (Python attribute name) for the Core insert.
+- `is_project_repo()` checks for a `Repo` row with a non-null `project_id`.
+
+### Task testing patterns
+- Procrastinate tasks are callable: `await task(...)` executes the underlying function.
+- To mock session factory inside task functions that import it locally, patch
+  `pg_atlas.db_models.session._get_session_factory` (the **source module**), not
+  `pg_atlas.procrastinate.tasks._get_session_factory`.
+- For recursive `defer_async` calls, use `patch.object(task, "configure", ...)` to intercept
+  the Procrastinate task object's method.
+- Tests that exit before DB access (e.g., `DepsDevError`) don't need the session factory mock.
+
+### pyproject.toml tooling config
+- `ruff exclude`: `pg_atlas/deps_dev/lib` (generated code).
+- `ruff per-file-ignores`: `E501` for Procrastinate migration files (embedded SQL).
+- `mypy exclude`: `pg_atlas/deps_dev/lib` (generated code).
+- `types-PyYAML` added to dev deps for mypy stubs.

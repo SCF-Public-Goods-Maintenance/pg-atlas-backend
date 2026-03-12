@@ -47,6 +47,12 @@ Edit `.env` and set at minimum:
 PG_ATLAS_API_URL=http://localhost:8000
 ```
 
+Create DB schema and apply revisions:
+
+```sh
+uv run alembic upgrade heads
+```
+
 ### Running the API
 
 ```sh
@@ -86,7 +92,8 @@ list and documentation.
 | Variable                          | Required      | Default | Description                                                 |
 | --------------------------------- | ------------- | ------- | ----------------------------------------------------------- |
 | `PG_ATLAS_API_URL`                | Yes           | —       | Canonical URL of this API instance. Used as OIDC audience.  |
-| `PG_ATLAS_DATABASE_URL`           | No (until A2) | `""`    | PostgreSQL DSN / connection string (`postgresql://...`).    |
+| `PG_ATLAS_DATABASE_URL`           | Yes           | `""`    | PostgreSQL DSN / connection string (`postgresql://...`).    |
+| `PG_ATLAS_OPENGRANTS_KEY`         | No            | `""`    | OpenGrants API key for increased rate limits.               |
 | `PG_ATLAS_LOG_LEVEL`              | No            | `INFO`  | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`).     |
 | `PG_ATLAS_JWKS_CACHE_TTL_SECONDS` | No            | `3600`  | How long to cache GitHub's JWKS in memory (seconds).        |
 
@@ -110,6 +117,14 @@ jobs:
 The action fetches the repo's SPDX 2.3 dependency graph from GitHub's Dependency Graph API and
 submits it to `POST /ingest/sbom`, authenticated via a short-lived GitHub OIDC token. No secrets need
 to be configured in the calling repository.
+
+## Conventional Commits
+
+Commits must follow [Conventional Commits](https://www.conventionalcommits.org/).
+Releases and `CHANGELOG.md` are managed automatically by
+[release-please](https://github.com/googleapis/release-please) on every push to `main`.
+See the [cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)
+on how to write _good_ commit messages.
 
 ## License
 
