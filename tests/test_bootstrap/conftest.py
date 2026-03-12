@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-FIXTURES = Path(__file__).resolve().parent.parent / "data_fixtures"
+FIXTURES = Path(__file__).resolve().parent / "data_fixtures"
 
 
 def _load_fixture(name: str) -> Any:
