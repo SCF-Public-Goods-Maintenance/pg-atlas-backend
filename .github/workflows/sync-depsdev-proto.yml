@@ -45,7 +45,7 @@ jobs:
       - name: Regenerate async client stubs
         if: steps.changes.outputs.changed == 'true'
         run: |
-          uv sync --group proto-build
+          uv sync --group proto-build --no-dev
           uv run python pg_atlas/deps_dev/generate_async_client.py
 
       # ── 3. Open PR ─────────────────────────────────────────────────

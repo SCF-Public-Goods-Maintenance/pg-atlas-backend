@@ -103,11 +103,16 @@ __all__ = (
 
 import datetime
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import betterproto2
-import grpc
+from betterproto2 import grpclib as betterproto2_grpclib
 
 from ...message_pool import default_message_pool
+
+if TYPE_CHECKING:
+    from betterproto2.grpclib.grpclib_client import MetadataLike
+    from grpclib.metadata import Deadline
 
 _COMPILER_VERSION = "0.9.0"
 betterproto2.check_compiler_version(_COMPILER_VERSION)
@@ -2413,7 +2418,7 @@ class VersionKey(betterproto2.Message):
 default_message_pool.register_message("deps_dev.v3alpha", "VersionKey", VersionKey)
 
 
-class InsightsStub:
+class InsightsStub(betterproto2_grpclib.ServiceStub):
     """
     The Deps.dev Insights API provides information about open source software
     packages, projects, and security advisories. The information is gathered
@@ -2421,46 +2426,80 @@ class InsightsStub:
     dependencies and relationships between entities.
     """
 
-    def __init__(self, channel: grpc.Channel):
-        self._channel = channel
-
-    def get_package(self, message: "GetPackageRequest") -> "Package":
+    async def get_package(
+        self,
+        message: "GetPackageRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Package":
         """
         GetPackage returns information about a package, including a list of its
         available versions, with the default version marked if known.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetPackage",
-            GetPackageRequest.SerializeToString,
-            Package.FromString,
-        )(message)
+            message,
+            Package,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_version(self, message: "GetVersionRequest") -> "Version":
+    async def get_version(
+        self,
+        message: "GetVersionRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Version":
         """
         GetVersion returns information about a specific package version, including
         its licenses and any security advisories known to affect it.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetVersion",
-            GetVersionRequest.SerializeToString,
-            Version.FromString,
-        )(message)
+            message,
+            Version,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_version_batch(self, message: "GetVersionBatchRequest") -> "VersionBatch":
+    async def get_version_batch(
+        self,
+        message: "GetVersionBatchRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "VersionBatch":
         """
         GetVersionBatch performs GetVersion requests for a batch of versions.
         Large result sets may be paginated.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetVersionBatch",
-            GetVersionBatchRequest.SerializeToString,
-            VersionBatch.FromString,
-        )(message)
+            message,
+            VersionBatch,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_requirements(self, message: "GetRequirementsRequest") -> "Requirements":
+    async def get_requirements(
+        self,
+        message: "GetRequirementsRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Requirements":
         """
         GetRequirements returns the requirements for a given version in a
         system-specific format. Requirements are currently available for
@@ -2469,13 +2508,23 @@ class InsightsStub:
         Requirements are the dependency constraints specified by the version.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetRequirements",
-            GetRequirementsRequest.SerializeToString,
-            Requirements.FromString,
-        )(message)
+            message,
+            Requirements,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_dependencies(self, message: "GetDependenciesRequest") -> "Dependencies":
+    async def get_dependencies(
+        self,
+        message: "GetDependenciesRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Dependencies":
         """
         GetDependencies returns a resolved dependency graph for the given package
         version. Dependencies are currently available for npm, Cargo, Maven
@@ -2490,13 +2539,23 @@ class InsightsStub:
         system.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetDependencies",
-            GetDependenciesRequest.SerializeToString,
-            Dependencies.FromString,
-        )(message)
+            message,
+            Dependencies,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_dependents(self, message: "GetDependentsRequest") -> "Dependents":
+    async def get_dependents(
+        self,
+        message: "GetDependentsRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Dependents":
         """
         GetDependents returns information about the number of distinct packages
         known to depend on the given package version. Dependent counts are
@@ -2508,50 +2567,90 @@ class InsightsStub:
         rather than precisely accurate.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetDependents",
-            GetDependentsRequest.SerializeToString,
-            Dependents.FromString,
-        )(message)
+            message,
+            Dependents,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_capabilities(self, message: "GetCapabilitiesRequest") -> "Capabilities":
+    async def get_capabilities(
+        self,
+        message: "GetCapabilitiesRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Capabilities":
         """
         GetCapabilityRequest returns counts for direct and indirect calls to
         Capslock capabilities for a given package version.
         Currently only available for Go.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetCapabilities",
-            GetCapabilitiesRequest.SerializeToString,
-            Capabilities.FromString,
-        )(message)
+            message,
+            Capabilities,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_project(self, message: "GetProjectRequest") -> "Project":
+    async def get_project(
+        self,
+        message: "GetProjectRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Project":
         """
         GetProject returns information about projects hosted by GitHub, GitLab, or
         BitBucket, when known to us.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetProject",
-            GetProjectRequest.SerializeToString,
-            Project.FromString,
-        )(message)
+            message,
+            Project,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_project_batch(self, message: "GetProjectBatchRequest") -> "ProjectBatch":
+    async def get_project_batch(
+        self,
+        message: "GetProjectBatchRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "ProjectBatch":
         """
         GetProjectBatch performs GetProjectBatch requests for a batch of projects.
         Large result sets may be paginated.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetProjectBatch",
-            GetProjectBatchRequest.SerializeToString,
-            ProjectBatch.FromString,
-        )(message)
+            message,
+            ProjectBatch,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_project_package_versions(self, message: "GetProjectPackageVersionsRequest") -> "ProjectPackageVersions":
+    async def get_project_package_versions(
+        self,
+        message: "GetProjectPackageVersionsRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "ProjectPackageVersions":
         """
         GetProjectPackageVersions returns known mappings between the requested
         project and package versions.
@@ -2559,36 +2658,66 @@ class InsightsStub:
         from attestations are served first.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetProjectPackageVersions",
-            GetProjectPackageVersionsRequest.SerializeToString,
-            ProjectPackageVersions.FromString,
-        )(message)
+            message,
+            ProjectPackageVersions,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_advisory(self, message: "GetAdvisoryRequest") -> "Advisory":
+    async def get_advisory(
+        self,
+        message: "GetAdvisoryRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Advisory":
         """
         GetAdvisory returns information about security advisories hosted by OSV.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetAdvisory",
-            GetAdvisoryRequest.SerializeToString,
-            Advisory.FromString,
-        )(message)
+            message,
+            Advisory,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def get_similarly_named_packages(self, message: "GetSimilarlyNamedPackagesRequest") -> "SimilarlyNamedPackages":
+    async def get_similarly_named_packages(
+        self,
+        message: "GetSimilarlyNamedPackagesRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "SimilarlyNamedPackages":
         """
         GetSimilarlyNamedPackages returns packages with names that are similar to
         the requested package. This similarity relation is computed by deps.dev.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/GetSimilarlyNamedPackages",
-            GetSimilarlyNamedPackagesRequest.SerializeToString,
-            SimilarlyNamedPackages.FromString,
-        )(message)
+            message,
+            SimilarlyNamedPackages,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def query(self, message: "QueryRequest") -> "QueryResult":
+    async def query(
+        self,
+        message: "QueryRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "QueryResult":
         """
         Query returns information about multiple package versions, which can be
         specified by name, content hash, or both. If a hash was specified in the
@@ -2601,13 +2730,23 @@ class InsightsStub:
         appear in several package versions.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/Query",
-            QueryRequest.SerializeToString,
-            QueryResult.FromString,
-        )(message)
+            message,
+            QueryResult,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def purl_lookup(self, message: "PurlLookupRequest") -> "PurlLookupResult":
+    async def purl_lookup(
+        self,
+        message: "PurlLookupRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "PurlLookupResult":
         """
         PurlLookup searches for a package or package version specified via
         [purl](https://github.com/package-url/purl-spec),
@@ -2634,13 +2773,23 @@ class InsightsStub:
         [purl spec](https://github.com/package-url/purl-spec/blob/master/PURL-SPECIFICATION.rst).
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/PurlLookup",
-            PurlLookupRequest.SerializeToString,
-            PurlLookupResult.FromString,
-        )(message)
+            message,
+            PurlLookupResult,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def purl_lookup_batch(self, message: "PurlLookupBatchRequest") -> "PurlLookupBatchResult":
+    async def purl_lookup_batch(
+        self,
+        message: "PurlLookupBatchRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "PurlLookupBatchResult":
         """
         PurlLookupBatch performs PurlLookup requests for a batch of purls.
         This endpoint only supports version lookups. Purls in requests
@@ -2656,13 +2805,23 @@ class InsightsStub:
         Large result sets may be paginated.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/PurlLookupBatch",
-            PurlLookupBatchRequest.SerializeToString,
-            PurlLookupBatchResult.FromString,
-        )(message)
+            message,
+            PurlLookupBatchResult,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
-    def query_container_images(self, message: "QueryContainerImagesRequest") -> "QueryContainerImagesResult":
+    async def query_container_images(
+        self,
+        message: "QueryContainerImagesRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "QueryContainerImagesResult":
         """
         QueryContainerImages searches for container image repositories on
         DockerHub that match the requested OCI Chain ID. At most 1000 image
@@ -2679,11 +2838,14 @@ class InsightsStub:
         the calculation and one computed by excluding them.
         """
 
-        return self._channel.unary_unary(
+        return await self._unary_unary(
             "/deps_dev.v3alpha.Insights/QueryContainerImages",
-            QueryContainerImagesRequest.SerializeToString,
-            QueryContainerImagesResult.FromString,
-        )(message)
+            message,
+            QueryContainerImagesResult,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
 
 from ...google import protobuf as __google__protobuf__

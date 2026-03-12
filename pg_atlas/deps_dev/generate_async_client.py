@@ -76,6 +76,7 @@ def generate() -> int:
         f"-I{grpc_tools_proto_dir}",
         f"--python_betterproto2_out={OUTPUT_DIR}",
         str(PROTO_FILE),
+        "--python_betterproto2_opt=client_generation=async",
     ]
 
     print(f"🔧 Compiling {PROTO_FILE.name} → {OUTPUT_DIR}/")
