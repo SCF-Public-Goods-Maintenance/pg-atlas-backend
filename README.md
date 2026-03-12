@@ -118,6 +118,14 @@ The action fetches the repo's SPDX 2.3 dependency graph from GitHub's Dependency
 submits it to `POST /ingest/sbom`, authenticated via a short-lived GitHub OIDC token. No secrets need
 to be configured in the calling repository.
 
+## Conventional Commits
+
+Commits must follow [Conventional Commits](https://www.conventionalcommits.org/).
+Releases and `CHANGELOG.md` are managed automatically by
+[release-please](https://github.com/googleapis/release-please) on every push to `main`.
+See the [cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)
+on how to write _good_ commit messages.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)

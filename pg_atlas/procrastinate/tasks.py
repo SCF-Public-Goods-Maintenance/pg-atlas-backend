@@ -28,13 +28,16 @@ from typing import Any
 import httpx
 import yaml
 from github import Auth, Github, GithubException
+from procrastinate.exceptions import AlreadyEnqueued
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
+from pg_atlas.ingestion.persist import strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
     get_package,
     get_project_batch,
+    get_project_package_versions,
     get_requirements,
 )
 from pg_atlas.procrastinate.opengrants import fetch_scf_projects
@@ -48,6 +51,8 @@ from pg_atlas.procrastinate.upserts import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_RELEASE_ENTRIES = 555
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -208,7 +213,8 @@ def _detect_packages_from_repo(owner: str, repo_name: str) -> list[dict[str, str
     except GithubException as exc:
         logger.warning("Failed to detect packages in %s/%s: %s", owner, repo_name, exc)
 
-    # FIXME: the package dict format must be compatible with `DepsDevProjectInfo.package_versions`
+    # Keep the same shape produced by get_project_package_versions():
+    # {"system": "...", "name": "..."} plus optional keys.
     return packages
 
 
@@ -268,6 +274,23 @@ def _load_git_mapping() -> dict[str, dict[str, str]]:
         data: dict[str, dict[str, str]] = yaml.safe_load(f) or {}
 
     return data
+
+
+async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+    """
+    Defer a Procrastinate task and suppress expected duplicate-lock noise.
+
+    Returns ``True`` when a new job was enqueued, ``False`` when it was
+    already present in the queue.
+    """
+    try:
+        await task.configure(queueing_lock=queueing_lock).defer_async(**kwargs)
+
+        return True
+    except AlreadyEnqueued as exc:
+        logger.warning(str(exc))
+
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -367,8 +390,13 @@ async def process_project(
         except DepsDevError as exc:
             logger.warning("GetProjectBatch failed for %s: %s", project_canonical_id, exc)
 
+    for project_key, depsdev_info in depsdev_projects.items():
+        try:
+            depsdev_info.package_versions = await get_project_package_versions(project_key)
+        except DepsDevError as exc:
+            logger.warning("GetProjectPackageVersions failed for %s: %s", project_key, exc)
+
     # ----- Determine project type -----
-    # FIXME: needs to call GetProjectPackageVersions; propagate fix to all `depsdev_info.package_versions` access
     has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
     project_type = ProjectType.public_good if has_packages else ProjectType.scf_project
 
@@ -388,7 +416,6 @@ async def process_project(
         depsdev_key = f"github.com/{repo_full}".lower()
         depsdev_info = depsdev_projects.get(depsdev_key)
 
-        # FIXME: this should be populated by depsdev_info; it never is
         packages: list[dict[str, str]] = []
         adoption_stars = repo_info.get("stars", 0)
         adoption_forks = repo_info.get("forks", 0)
@@ -447,9 +474,22 @@ async def crawl_github_repo(
         packages = _detect_packages_from_repo(owner, repo)
         logger.info("Detected %d packages in %s/%s", len(packages), owner, repo)
 
+    # Deps.dev project package versions can include many entries per package
+    # (one row per version). Collapse to unique package keys before crawling.
+    unique_packages: dict[tuple[str, str], dict[str, str]] = {}
+    for pkg in packages:
+        system = pkg.get("system", "")
+        name = pkg.get("name", "")
+        if not system or not name:
+            continue
+
+        unique_packages[(system, name)] = pkg
+
+    packages_to_process = list(unique_packages.values())
+
     # ----- Build releases from package info -----
     releases: list[dict[str, Any]] = []
-    for pkg in packages:
+    for pkg in packages_to_process:
         system = pkg.get("system", "")
         name = pkg.get("name", "")
 
@@ -460,12 +500,22 @@ async def crawl_github_repo(
                     {
                         "version": v.get("version", ""),
                         "release_date": v.get("published_at"),
-                        "purl": v.get("purl", ""),  # FIXME: strip version suffix from PURL
+                        "purl": strip_purl_version(v.get("purl", "")),
                     }
                 )
 
         except DepsDevError:
             logger.debug("Package not found on deps.dev: %s/%s", system, name)
+
+    if len(releases) > _MAX_RELEASE_ENTRIES:
+        logger.warning(
+            "Truncating releases for %s/%s from %d to %d entries",
+            owner,
+            repo,
+            len(releases),
+            _MAX_RELEASE_ENTRIES,
+        )
+        releases = releases[-_MAX_RELEASE_ENTRIES:]
 
     # ----- Determine latest_version -----
     if releases:
@@ -490,7 +540,7 @@ async def crawl_github_repo(
     )
 
     # ----- For each package: promote ExternalRepo → Repo if needed -----
-    for pkg in packages:
+    for pkg in packages_to_process:
         system = pkg.get("system", "")
         name = pkg.get("name", "")
 
@@ -514,13 +564,13 @@ async def crawl_github_repo(
     await associate_repo_with_project(repo_canonical_id, project_id)
 
     # ----- Defer crawl_package_deps for each package -----
-    for pkg in packages:
+    for pkg in packages_to_process:
         system = pkg.get("system", "")
         name = pkg.get("name", "")
 
-        await crawl_package_deps.configure(
+        await _defer_with_lock(
+            crawl_package_deps,
             queueing_lock=f"{system}:{name}",
-        ).defer_async(
             system=system,
             package_name=name,
             source_repo_canonical_id=repo_canonical_id,
@@ -530,8 +580,8 @@ async def crawl_github_repo(
         "crawl_github_repo: %s/%s — %d packages, deferred %d crawl_package_deps tasks",
         owner,
         repo,
-        len(packages),
-        len(packages),
+        len(packages_to_process),
+        len(packages_to_process),
     )
 
 
@@ -587,11 +637,7 @@ async def crawl_package_deps(
 
         return
 
-    # ----- Resolve source vertex ID -----
-    purl_type = _purl_type_for_system(system)
-    source_canonical_id = f"pkg:{purl_type}/{package_name}" if purl_type else package_name.lower()
-
-    # Look up the source Repo ID. It should exist from crawl_github_repo.
+    # ----- Resolve source vertex ID from explicit caller argument -----
     from pg_atlas.db_models.repo_vertex import RepoVertex
     from pg_atlas.db_models.session import get_session_factory
 
@@ -601,11 +647,11 @@ async def crawl_package_deps(
     try:
         from sqlalchemy import select
 
-        result = await session.execute(select(RepoVertex.id).where(RepoVertex.canonical_id == source_canonical_id))
+        result = await session.execute(select(RepoVertex.id).where(RepoVertex.canonical_id == source_repo_canonical_id))
         row = result.one_or_none()
 
         if row is None:
-            logger.warning("Source vertex %s not found — skipping deps", source_canonical_id)
+            logger.warning("Source vertex %s not found — skipping deps", source_repo_canonical_id)
 
             return
 
@@ -618,6 +664,11 @@ async def crawl_package_deps(
     for req in reqs:
         dep_purl_type = _purl_type_for_system(req.system)
         dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
+
+        if dep_canonical_id == source_repo_canonical_id:
+            logger.debug("Skipping self-recursive dependency %s", dep_canonical_id)
+
+            continue
 
         # Check if this dependency belongs to a known Project (already a Repo).
         dep_is_project_repo = await is_project_repo(dep_canonical_id)
@@ -637,9 +688,9 @@ async def crawl_package_deps(
             )
 
             # Recurse into Repo's own dependencies.
-            await crawl_package_deps.configure(
+            await _defer_with_lock(
+                crawl_package_deps,
                 queueing_lock=f"{req.system}:{req.name}",
-            ).defer_async(
                 system=req.system,
                 package_name=req.name,
                 source_repo_canonical_id=dep_canonical_id,
