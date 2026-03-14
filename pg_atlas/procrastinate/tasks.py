@@ -19,9 +19,9 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -36,7 +36,6 @@ from pg_atlas.ingestion.persist import strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
-    ProjectPackageVersion,
     get_package,
     get_project_batch,
     get_project_package_versions,
@@ -71,47 +70,10 @@ _MAPPING_PATH = Path(__file__).parent / "project-git-mapping.yml"
 # Module-level singletons
 _gh_client: Github | None = None
 _gh_lock = Lock()
-
-
-@dataclass
-class GitHubRepoMetadata:
-    """Internal normalized metadata for a crawled GitHub repository."""
-
-    name: str
-    full_name: str
-    description: str
-    default_branch: str
-    stars: int
-    forks: int
-    language: str
-    topics: list[str]
-
-
-@dataclass
-class PackageReference:
-    """Internal typed package descriptor used during crawl orchestration."""
-
-    system: str
-    name: str
-    version: str = ""
-    purl: str = ""
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, str]) -> PackageReference:
-        """Create a package reference from deferred-task payload data."""
-
-        return cls(
-            system=payload.get("system", ""),
-            name=payload.get("name", ""),
-            version=payload.get("version", ""),
-            purl=payload.get("purl", ""),
-        )
-
-
 #: In-process cache for GitHub org → list of repo names.
 #: Populated once per ``process_project`` invocation; avoids duplicate API
 #: calls when multiple projects share the same GitHub org.
-_gh_org_repos_cache: dict[str, list[GitHubRepoMetadata]] = {}
+_gh_org_repos_cache: dict[str, list[dict[str, Any]]] = {}
 
 
 def get_github_client() -> Github:
@@ -137,7 +99,7 @@ def get_github_client() -> Github:
     return _gh_client
 
 
-def _list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
+def _list_org_repos(owner: str) -> list[dict[str, Any]]:
     """
     Return metadata for every public repo owned by *owner*.
 
@@ -150,33 +112,34 @@ def _list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
     gh = get_github_client()
 
     try:
-        repos: list[GitHubRepoMetadata] = []
+        repos: list[dict[str, Any]] = []
         for repo in gh.get_user(owner).get_repos(type="public"):
             repos.append(
-                GitHubRepoMetadata(
-                    name=repo.name,
-                    full_name=repo.full_name,
-                    description=repo.description or "",
-                    default_branch=repo.default_branch,
-                    stars=repo.stargazers_count,
-                    forks=repo.forks_count,
-                    language=repo.language or "",
-                    topics=repo.topics,
-                )
+                {
+                    "name": repo.name,
+                    "full_name": repo.full_name,
+                    "description": repo.description or "",
+                    "default_branch": repo.default_branch,
+                    "stars": repo.stargazers_count,
+                    "forks": repo.forks_count,
+                    "pushed_at": repo.pushed_at,
+                    "language": repo.language or "",
+                    "topics": repo.topics,
+                }
             )
 
         _gh_org_repos_cache[owner] = repos
-        logger.info(f"Listed {len(repos)} public repos for {owner}")
+        logger.info("Listed %d public repos for %s", len(repos), owner)
 
         return repos
 
     except GithubException as exc:
-        logger.error(f"GitHub API error listing repos for {owner}: {exc}")
+        logger.error("GitHub API error listing repos for %s: %s", owner, exc)
 
         return []
 
 
-def _get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
+def _get_single_repo(owner: str, repo_name: str) -> list[dict[str, Any]]:
     """
     Return metadata for a single public repo owned by *owner*.
     """
@@ -185,32 +148,33 @@ def _get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
     try:
         repo = gh.get_repo(f"{owner}/{repo_name}")
         return [
-            GitHubRepoMetadata(
-                name=repo.name,
-                full_name=repo.full_name,
-                description=repo.description or "",
-                default_branch=repo.default_branch,
-                stars=repo.stargazers_count,
-                forks=repo.forks_count,
-                language=repo.language or "",
-                topics=repo.topics,
-            )
+            {
+                "name": repo.name,
+                "full_name": repo.full_name,
+                "description": repo.description or "",
+                "default_branch": repo.default_branch,
+                "stars": repo.stargazers_count,
+                "forks": repo.forks_count,
+                "pushed_at": repo.pushed_at,
+                "language": repo.language or "",
+                "topics": repo.topics,
+            }
         ]
 
     except GithubException as exc:
-        logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
+        logger.error("GitHub API error getting repo %s/%s: %s", owner, repo_name, exc)
 
         return []
 
 
-def _detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:
+def _detect_packages_from_repo(owner: str, repo_name: str) -> list[dict[str, str]]:
     """
     Detect published packages by inspecting repo root for manifest files.
 
     Returns a list of ``{system, name}`` dicts.
     """
     gh = get_github_client()
-    packages: list[PackageReference] = []
+    packages: list[dict[str, str]] = []
 
     try:
         repo = gh.get_repo(f"{owner}/{repo_name}")
@@ -222,7 +186,7 @@ def _detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageRefere
         filenames = {c.name for c in contents}
 
         if "Cargo.toml" in filenames:
-            packages.append(PackageReference(system="CARGO", name=repo_name))
+            packages.append({"system": "CARGO", "name": repo_name})
 
         if "package.json" in filenames:
             # Try to read the actual package name from package.json.
@@ -232,25 +196,25 @@ def _detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageRefere
                 pj = repo.get_contents("package.json")
                 pkg_data = json.loads(pj.decoded_content)  # type: ignore[union-attr]
                 npm_name = pkg_data.get("name", repo_name)
-                packages.append(PackageReference(system="NPM", name=npm_name))
+                packages.append({"system": "NPM", "name": npm_name})
 
             except Exception:
-                packages.append(PackageReference(system="NPM", name=repo_name))
+                packages.append({"system": "NPM", "name": repo_name})
 
         if "pyproject.toml" in filenames or "setup.py" in filenames or "setup.cfg" in filenames:
-            packages.append(PackageReference(system="PYPI", name=repo_name))
+            packages.append({"system": "PYPI", "name": repo_name})
 
         if "pom.xml" in filenames:
-            packages.append(PackageReference(system="MAVEN", name=repo_name))
+            packages.append({"system": "MAVEN", "name": repo_name})
 
         if "go.mod" in filenames:
-            packages.append(PackageReference(system="GO", name=f"github.com/{owner}/{repo_name}"))
+            packages.append({"system": "GO", "name": f"github.com/{owner}/{repo_name}"})
 
         if f"{repo_name}.gemspec" in filenames or "Gemfile" in filenames:
-            packages.append(PackageReference(system="RUBYGEMS", name=repo_name))
+            packages.append({"system": "RUBYGEMS", "name": repo_name})
 
     except GithubException as exc:
-        logger.warning(f"Failed to detect packages in {owner}/{repo_name}: {exc}")
+        logger.warning("Failed to detect packages in %s/%s: %s", owner, repo_name, exc)
 
     # Keep the same shape produced by get_project_package_versions():
     # {"system": "...", "name": "..."} plus optional keys.
@@ -352,7 +316,7 @@ async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -
     async with httpx.AsyncClient(timeout=60.0) as client:
         projects = await fetch_scf_projects(client)
 
-    logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
+    logger.info("sync_opengrants: %d projects from OpenGrants", len(projects))
 
     for proj in projects:
         # Enrich from manual mapping when io.scf.code was missing.
@@ -371,7 +335,7 @@ async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -
             extended_universe=extended_universe,
         )
 
-    logger.info(f"sync_opengrants: deferred {len(projects)} process_project tasks")
+    logger.info("sync_opengrants: deferred %d process_project tasks", len(projects))
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +361,7 @@ async def process_project(
     3. Upsert a ``Project`` row.
     4. Defer ``crawl_github_repo`` for each repo to crawl.
     """
-    logger.info(f"process_project: {display_name} ({project_canonical_id})")
+    logger.info("process_project: %s (%s)", display_name, project_canonical_id)
 
     status = ActivityStatus(activity_status)
 
@@ -407,7 +371,7 @@ async def process_project(
         # "https://github.com/<owner>" → "<owner>"
         owner = git_org_url.rstrip("/").rsplit("/", 1)[-1]
 
-    repos_to_crawl: list[GitHubRepoMetadata] = []
+    repos_to_crawl: list[dict[str, Any]] = []
     if owner:
         if extended_universe or not git_repo_url:
             repos_to_crawl = _list_org_repos(owner)
@@ -418,7 +382,7 @@ async def process_project(
 
     # ----- deps.dev GetProjectBatch -----
     # Build project IDs of the form "github.com/owner/repo".
-    repo_project_ids = [f"github.com/{repo.full_name}" for repo in repos_to_crawl]
+    repo_project_ids = [f"github.com/{r['full_name']}" for r in repos_to_crawl]
 
     depsdev_projects: dict[str, Any] = {}
     if repo_project_ids:
@@ -427,13 +391,13 @@ async def process_project(
                 [pid.lower() for pid in repo_project_ids],
             )
         except DepsDevError as exc:
-            logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
+            logger.warning("GetProjectBatch failed for %s: %s", project_canonical_id, exc)
 
     for project_key, depsdev_info in depsdev_projects.items():
         try:
             depsdev_info.package_versions = await get_project_package_versions(project_key)
         except DepsDevError as exc:
-            logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
+            logger.warning("GetProjectPackageVersions failed for %s: %s", project_key, exc)
 
     # ----- Determine project type -----
     has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
@@ -451,13 +415,14 @@ async def process_project(
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
     for repo_info in repos_to_crawl:
-        repo_full = repo_info.full_name
+        repo_full = repo_info["full_name"]
         depsdev_key = f"github.com/{repo_full}".lower()
         depsdev_info = depsdev_projects.get(depsdev_key)
 
-        packages: list[ProjectPackageVersion] = []
-        adoption_stars = repo_info.stars
-        adoption_forks = repo_info.forks
+        packages: list[dict[str, str]] = []
+        adoption_stars = repo_info.get("stars", 0)
+        adoption_forks = repo_info.get("forks", 0)
+        pushed_at: datetime.datetime | None = repo_info.get("pushed_at")
 
         if depsdev_info:
             packages = depsdev_info.package_versions
@@ -472,20 +437,17 @@ async def process_project(
             owner=repo_owner,
             repo=repo_name,
             project_id=project_id,
-            packages=[
-                {
-                    "system": pkg.system,
-                    "name": pkg.name,
-                    "version": pkg.version,
-                    "purl": pkg.purl,
-                }
-                for pkg in packages
-            ],
+            packages=packages,
+            latest_commit_date=pushed_at.isoformat() if pushed_at is not None else None,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
         )
 
-    logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {project_canonical_id}")
+    logger.info(
+        "process_project: deferred %d crawl_github_repo tasks for %s",
+        len(repos_to_crawl),
+        project_canonical_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +463,7 @@ async def crawl_github_repo(
     packages: list[dict[str, str]],
     adoption_stars: int,
     adoption_forks: int,
+    latest_commit_date: str | None = None,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -511,19 +474,18 @@ async def crawl_github_repo(
     3. Ensure a ``Repo`` vertex ``pkg:github/owner/repo`` exists.
     4. Defer ``crawl_package_deps`` for each package.
     """
-    logger.info(f"crawl_github_repo: {owner}/{repo} (project_id={project_id})")
+    logger.info("crawl_github_repo: %s/%s (project_id=%d)", owner, repo, project_id)
 
-    package_refs = [PackageReference.from_payload(pkg) for pkg in packages]
-    if not package_refs:
-        package_refs = _detect_packages_from_repo(owner, repo)
-        logger.info(f"Detected {len(package_refs)} packages in {owner}/{repo}")
+    if not packages:
+        packages = _detect_packages_from_repo(owner, repo)
+        logger.info("Detected %d packages in %s/%s", len(packages), owner, repo)
 
     # Deps.dev project package versions can include many entries per package
     # (one row per version). Collapse to unique package keys before crawling.
-    unique_packages: dict[tuple[str, str], PackageReference] = {}
-    for pkg in package_refs:
-        system = pkg.system
-        name = pkg.name
+    unique_packages: dict[tuple[str, str], dict[str, str]] = {}
+    for pkg in packages:
+        system = pkg.get("system", "")
+        name = pkg.get("name", "")
         if not system or not name:
             continue
 
@@ -534,22 +496,22 @@ async def crawl_github_repo(
     # ----- Build releases from package info -----
     releases: list[dict[str, Any]] = []
     for pkg in packages_to_process:
-        system = pkg.system
-        name = pkg.name
+        system = pkg.get("system", "")
+        name = pkg.get("name", "")
 
         try:
             pkg_info = await get_package(system, name)
             for v in pkg_info.versions:
                 releases.append(
                     {
-                        "version": v.version,
-                        "release_date": v.published_at,
-                        "purl": strip_purl_version(v.purl),
+                        "version": v.get("version", ""),
+                        "release_date": v.get("published_at"),
+                        "purl": strip_purl_version(v.get("purl", "")),
                     }
                 )
 
         except DepsDevError:
-            logger.debug(f"Package not found on deps.dev: {system}/{name}")
+            logger.debug("Package not found on deps.dev: %s/%s", system, name)
 
     if len(releases) > _MAX_RELEASE_ENTRIES:
         logger.warning(
@@ -572,12 +534,20 @@ async def crawl_github_repo(
     repo_canonical_id = f"pkg:github/{owner}/{repo}"
     repo_url = f"https://github.com/{owner}/{repo}"
 
+    parsed_commit_date: datetime.datetime | None = None
+    if latest_commit_date is not None:
+        try:
+            parsed_commit_date = datetime.datetime.fromisoformat(latest_commit_date)
+        except ValueError:
+            logger.warning("crawl_github_repo: unparseable latest_commit_date=%r", latest_commit_date)
+
     await upsert_repo(
         canonical_id=repo_canonical_id,
         display_name=repo,
         latest_version=latest_version,
         project_id=project_id,
         repo_url=repo_url,
+        latest_commit_date=parsed_commit_date,
         adoption_stars=adoption_stars,
         adoption_forks=adoption_forks,
         releases=releases if releases else None,
@@ -585,8 +555,8 @@ async def crawl_github_repo(
 
     # ----- For each package: promote ExternalRepo → Repo if needed -----
     for pkg in packages_to_process:
-        system = pkg.system
-        name = pkg.name
+        system = pkg.get("system", "")
+        name = pkg.get("name", "")
 
         # Build the canonical_id this package would have as a vertex.
         purl_type = _purl_type_for_system(system)
@@ -609,8 +579,8 @@ async def crawl_github_repo(
 
     # ----- Defer crawl_package_deps for each package -----
     for pkg in packages_to_process:
-        system = pkg.system
-        name = pkg.name
+        system = pkg.get("system", "")
+        name = pkg.get("name", "")
 
         await _defer_with_lock(
             crawl_package_deps,
@@ -621,8 +591,11 @@ async def crawl_github_repo(
         )
 
     logger.info(
-        f"crawl_github_repo: {owner}/{repo} - {len(packages_to_process)} packages, "
-        f"deferred {len(packages_to_process)} crawl_package_deps tasks"
+        "crawl_github_repo: %s/%s — %d packages, deferred %d crawl_package_deps tasks",
+        owner,
+        repo,
+        len(packages_to_process),
+        len(packages_to_process),
     )
 
 
@@ -649,19 +622,19 @@ async def crawl_package_deps(
     4. If the dep is a ``Repo``, recurse by deferring another
        ``crawl_package_deps`` task.
     """
-    logger.info(f"crawl_package_deps: {system}/{package_name}")
+    logger.info("crawl_package_deps: %s/%s", system, package_name)
 
     # ----- Get package info to find default version -----
     try:
         pkg_info = await get_package(system, package_name)
     except DepsDevError as exc:
-        logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
+        logger.warning("Skipping %s/%s — package not found: %s", system, package_name, exc)
 
         return
 
     version = pkg_info.default_version
     if not version:
-        logger.warning(f"No default version for {system}/{package_name} - skipping")
+        logger.warning("No default version for %s/%s — skipping", system, package_name)
 
         return
 
@@ -669,12 +642,12 @@ async def crawl_package_deps(
     try:
         reqs = await get_requirements(system, package_name, version)
     except DepsDevError as exc:
-        logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
+        logger.warning("Failed to get requirements for %s/%s@%s: %s", system, package_name, version, exc)
 
         return
 
     if not reqs:
-        logger.info(f"No requirements for {system}/{package_name}@{version}")
+        logger.info("No requirements for %s/%s@%s", system, package_name, version)
 
         return
 
@@ -692,7 +665,7 @@ async def crawl_package_deps(
         row = result.one_or_none()
 
         if row is None:
-            logger.warning(f"Source vertex {source_repo_canonical_id} not found - skipping deps")
+            logger.warning("Source vertex %s not found — skipping deps", source_repo_canonical_id)
 
             return
 
@@ -707,7 +680,7 @@ async def crawl_package_deps(
         dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
 
         if dep_canonical_id == source_repo_canonical_id:
-            logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
+            logger.debug("Skipping self-recursive dependency %s", dep_canonical_id)
 
             continue
 
@@ -751,7 +724,13 @@ async def crawl_package_deps(
                 version_range=req.version_constraint,
             )
 
-    logger.info(f"crawl_package_deps: {system}/{package_name}@{version} - {len(reqs)} deps processed")
+    logger.info(
+        "crawl_package_deps: %s/%s@%s — %d deps processed",
+        system,
+        package_name,
+        version,
+        len(reqs),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any
 
@@ -129,6 +130,7 @@ async def upsert_repo(
     latest_version: str,
     project_id: int | None = None,
     repo_url: str | None = None,
+    latest_commit_date: datetime.datetime | None = None,
     adoption_stars: int | None = None,
     adoption_forks: int | None = None,
     releases: list[dict[str, Any]] | None = None,
@@ -155,6 +157,7 @@ async def upsert_repo(
                 latest_version=latest_version,
                 project_id=project_id,
                 repo_url=repo_url,
+                latest_commit_date=latest_commit_date,
                 adoption_stars=adoption_stars,
                 adoption_forks=adoption_forks,
                 releases=releases,
@@ -175,6 +178,8 @@ async def upsert_repo(
                 vertex.repo_url = repo_url
             if adoption_stars is not None:
                 vertex.adoption_stars = adoption_stars
+            if latest_commit_date is not None:
+                vertex.latest_commit_date = latest_commit_date
             if adoption_forks is not None:
                 vertex.adoption_forks = adoption_forks
             if releases is not None:
@@ -196,6 +201,7 @@ async def upsert_repo(
             latest_version=latest_version,
             project_id=project_id,
             repo_url=repo_url,
+            latest_commit_date=latest_commit_date,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
             releases=releases,
@@ -295,6 +301,7 @@ async def _promote_external_to_repo(
     latest_version: str,
     project_id: int | None,
     repo_url: str | None,
+    latest_commit_date: datetime.datetime | None,
     adoption_stars: int | None,
     adoption_forks: int | None,
     releases: list[dict[str, Any]] | None,
@@ -337,6 +344,7 @@ async def _promote_external_to_repo(
             latest_version=latest_version,
             project_id=project_id,
             repo_url=repo_url,
+            latest_commit_date=latest_commit_date,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
             releases=releases,
