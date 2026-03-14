@@ -13,3 +13,8 @@ htmlcov/
 .coverage
 artifact_store/
 logs/
+
+
+#Ignore windsurf AI rules
+.windsurfrules
+.windsurf/
