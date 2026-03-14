@@ -18,3 +18,12 @@ logs/
 #Ignore windsurf AI rules
 .windsurfrules
 .windsurf/
+
+# Private brainstorming workspace — never committed
+.private/
+
+# Local Claude agent profiles
+.claude/
+
+# Local Codacy CLI files
+.codacy/
