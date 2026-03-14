@@ -22,6 +22,8 @@ dependencies = [
     "psycopg[binary,pool]>=3.3.3",
     "pygithub>=2.8.1",
     "betterproto2[all]>=0.9.1",
+    "networkx>=3.0",
+    "numpy>=1.26",
 ]
 
 [dependency-groups]
@@ -34,6 +36,8 @@ dev = [
     "types-cachetools",
     "pytest-cov>=7.0.0",
     "types-pyyaml>=6.0.12.20250915",
+    "matplotlib>=3.10.8",
+    "scipy>=1.17.1",
 ]
 proto-build = [
     "betterproto2-compiler>=0.9.0",
