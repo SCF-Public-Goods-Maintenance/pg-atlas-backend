@@ -18,6 +18,7 @@ DEFAULT_BOT_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r".*\[bot\]$", re.IGNORECASE),  # All GitHub App bots
     re.compile(r"^dependabot$", re.IGNORECASE),  # dependabot without [bot]
     re.compile(r"^greenkeeper$", re.IGNORECASE),  # Greenkeeper (deprecated)
+    re.compile(r"^(bitnami|upptime) bot$", re.IGNORECASE),  # ecosystem bots
 )
 
 # Patterns matched against author_email (case-insensitive)

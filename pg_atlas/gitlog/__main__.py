@@ -147,8 +147,9 @@ async def main() -> None:
         error_urls: list[str] = []
 
         for i, repo in enumerate(repos, 1):
+            assert repo.repo_url
             result = await parse_repo(
-                repo.repo_url,  # type: ignore[arg-type]  # repo_url is non-null (filtered above)
+                repo.repo_url,
                 clone_dir,
                 args.since_months,
                 settings.GITLOG_CLONE_TIMEOUT,

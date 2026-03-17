@@ -12,12 +12,13 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 import hashlib
 import logging
 import re
 import urllib.parse
 from dataclasses import dataclass, field
+from operator import attrgetter
 from pathlib import Path
 
 from pg_atlas.gitlog.filters import is_bot
@@ -36,7 +37,7 @@ class CommitRecord:
 
     author_name: str
     author_email: str  # raw, before normalization
-    timestamp: datetime.datetime
+    timestamp: dt.datetime
     commit_hash: str
 
 
@@ -47,8 +48,8 @@ class ContributorStats:
     email_hash: str  # SHA-256 hex of normalized email
     display_name: str  # most recent author name seen
     number_of_commits: int
-    first_commit_date: datetime.datetime
-    last_commit_date: datetime.datetime
+    first_commit_date: dt.datetime
+    last_commit_date: dt.datetime
 
 
 @dataclass
@@ -57,7 +58,7 @@ class RepoParseResult:
 
     repo_url: str
     contributors: list[ContributorStats]  # human contributors ONLY (bots excluded)
-    latest_commit_date: datetime.datetime | None  # None if no commits
+    latest_commit_date: dt.datetime | None  # None if no commits
     total_commits: int  # parsed commits in window (before bot filtering)
     bot_commit_count: int  # commits excluded because author is a bot
     bot_contributor_count: int  # unique bot authors excluded
@@ -93,7 +94,7 @@ def _repo_url_to_path(repo_url: str) -> str:
     """
     Convert a repo URL to a safe, unique filesystem path.
 
-    Example: ``https://github.com/Org/repo.git`` → ``github.com/Org/repo``
+    Example: ``https://github.com/org/repo.git`` → ``github.com/org/repo``
     """
     parsed = urllib.parse.urlparse(repo_url)
     hostname = parsed.hostname or ""
@@ -210,6 +211,7 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
             msg = f"{msg}: {last_err}"
         raise RuntimeError(msg)
 
+    # TODO: store raw output as artifact
     return _parse_log_output(stdout.decode(errors="replace"))
 
 
@@ -230,7 +232,7 @@ def _parse_log_output(raw: str) -> list[CommitRecord]:
             continue
 
         try:
-            ts = datetime.datetime.fromisoformat(iso_ts).astimezone(datetime.UTC)
+            ts = dt.datetime.fromisoformat(iso_ts).astimezone(dt.UTC)
         except ValueError:
             logger.warning("Skipping commit %s with unparseable timestamp: %r", commit_hash, iso_ts)
             continue
@@ -266,7 +268,7 @@ def aggregate_contributors(commits: list[CommitRecord]) -> tuple[list[Contributo
 
     for _email_key, group_commits in groups.items():
         # Find the most recent commit for display_name and bot check
-        latest = max(group_commits, key=lambda c: c.timestamp)
+        latest = max(group_commits, key=attrgetter("timestamp"))
         display_name = latest.author_name
         raw_email = latest.author_email
 
@@ -286,7 +288,7 @@ def aggregate_contributors(commits: list[CommitRecord]) -> tuple[list[Contributo
         )
 
     # Sort by commit count descending
-    human_stats.sort(key=lambda s: s.number_of_commits, reverse=True)
+    human_stats.sort(key=attrgetter("number_of_commits"), reverse=True)
 
     return human_stats, bot_commit_count, bot_contributor_count
 
@@ -325,7 +327,7 @@ async def parse_repo(
 
     contributors, bot_commit_count, bot_contributor_count = aggregate_contributors(commits)
 
-    latest_commit_date: datetime.datetime | None = None
+    latest_commit_date: dt.datetime | None = None
     if commits:
         latest_commit_date = max(c.timestamp for c in commits)
 
