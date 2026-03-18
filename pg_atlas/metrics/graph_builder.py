@@ -19,49 +19,15 @@ import logging
 from typing import Any
 
 import networkx as nx
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.project import Project
+from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.metrics.config import DEFAULT_METRICS_CONFIG, MetricsConfig
 
 logger = logging.getLogger(__name__)
-
-# DB enum value -> title-case label used as NetworkX node attribute
-_VERTEX_TYPE_MAP: dict[str, str] = {
-    "repo": "Repo",
-    "external-repo": "ExternalRepo",
-}
-
-# Batch SQL: all repo_vertices with subtype columns via LEFT JOIN.
-# Avoids N+1 — one round-trip fetches every node in the graph.
-_NODES_SQL = text("""
-    SELECT rv.canonical_id,
-           rv.vertex_type,
-           r.project_id,
-           r.latest_commit_date,
-           r.adoption_stars,
-           r.adoption_forks
-    FROM repo_vertices rv
-    LEFT JOIN repos r ON r.id = rv.id
-    LEFT JOIN external_repos er ON er.id = rv.id
-""")
-
-# Batch SQL: all dependency edges with canonical_id resolution.
-# in_canonical_id depends on out_canonical_id.
-_EDGES_SQL = text("""
-    SELECT rv_in.canonical_id  AS in_canonical_id,
-           rv_out.canonical_id AS out_canonical_id,
-           d.confidence,
-           d.version_range
-    FROM depends_on d
-    JOIN repo_vertices rv_in  ON rv_in.id  = d.in_vertex_id
-    JOIN repo_vertices rv_out ON rv_out.id = d.out_vertex_id
-""")
-
-_PROJECTS_SQL = text("""
-    SELECT p.id, p.canonical_id, p.display_name
-    FROM projects p
-""")
 
 
 async def build_dependency_graph(
@@ -89,7 +55,7 @@ async def build_dependency_graph(
         confidence (str): "verified-sbom" | "inferred-shadow"
         version_range (str | None): semver constraint, if recorded
 
-    Uses two batch SQL queries (no ORM selectinload) to avoid N+1 round-trips.
+    Uses ORM queries with selectin loading (JTI auto-JOIN for vertices; selectin batch-loads for edges and projects). No N+1 round-trips.
     """
     ref = reference_date or datetime.date.today()
 
@@ -97,33 +63,43 @@ async def build_dependency_graph(
     G.graph["source"] = "postgresql"
     G.graph["reference_date"] = ref.isoformat()
 
-    rows = (await session.execute(_NODES_SQL)).mappings().all()
-    for row in rows:
-        canonical_id: str = row["canonical_id"]
-        raw_type: str = row["vertex_type"]
-        vertex_type = _VERTEX_TYPE_MAP.get(raw_type, raw_type)
+    vertices: list[RepoVertex] = (await session.execute(select(RepoVertex))).scalars().all()
+    for rv in vertices:
+        if isinstance(rv, Repo):
+            commit_dt = rv.latest_commit_date
+            commit_date = commit_dt.date() if commit_dt is not None else None
+            days_since: int | None = (ref - commit_date).days if commit_date is not None else None
+            project_type: str | None = rv.project.project_type.value if rv.project else None
+            attrs: dict[str, Any] = {
+                "vertex_type": "Repo",
+                "project_id": rv.project_id,
+                "project_type": project_type,
+                "latest_commit_date": commit_date,
+                "days_since_commit": days_since,
+                "adoption_stars": rv.adoption_stars or 0,
+                "adoption_forks": rv.adoption_forks or 0,
+            }
+        elif isinstance(rv, ExternalRepo):
+            attrs = {
+                "vertex_type": "ExternalRepo",
+                "project_id": None,
+                "project_type": None,
+                "latest_commit_date": None,
+                "days_since_commit": None,
+                "adoption_stars": 0,
+                "adoption_forks": 0,
+            }
+        else:
+            attrs = {"vertex_type": rv.vertex_type}
+        G.add_node(rv.canonical_id, **attrs)
 
-        commit_dt: datetime.datetime | None = row["latest_commit_date"]
-        commit_date: datetime.date | None = commit_dt.date() if commit_dt is not None else None
-        days_since: int | None = (ref - commit_date).days if commit_date is not None else None
-
-        attrs: dict[str, Any] = {
-            "vertex_type": vertex_type,
-            "project_id": row["project_id"],
-            "latest_commit_date": commit_date,
-            "days_since_commit": days_since,
-            "adoption_stars": row["adoption_stars"] or 0,
-            "adoption_forks": row["adoption_forks"] or 0,
-        }
-        G.add_node(canonical_id, **attrs)
-
-    edge_rows = (await session.execute(_EDGES_SQL)).mappings().all()
-    for row in edge_rows:
+    edges: list[DependsOn] = (await session.execute(select(DependsOn))).scalars().all()
+    for edge in edges:
         G.add_edge(
-            row["in_canonical_id"],
-            row["out_canonical_id"],
-            confidence=row["confidence"],
-            version_range=row["version_range"],
+            edge.in_node.canonical_id,
+            edge.out_node.canonical_id,
+            confidence=edge.confidence.value,
+            version_range=edge.version_range,
         )
 
     logger.info(
@@ -155,13 +131,13 @@ async def build_full_graph(
     """
     G = await build_dependency_graph(session, config, reference_date)
 
-    project_rows = (await session.execute(_PROJECTS_SQL)).mappings().all()
-    for row in project_rows:
+    projects: list[Project] = (await session.execute(select(Project))).scalars().all()
+    for proj in projects:
         G.add_node(
-            row["canonical_id"],
+            proj.canonical_id,
             vertex_type="Project",
-            project_id=row["id"],
-            display_name=row["display_name"],
+            project_id=proj.id,
+            display_name=proj.display_name,
         )
 
     # Build project_id -> project canonical_id lookup (O(n)) before linking
