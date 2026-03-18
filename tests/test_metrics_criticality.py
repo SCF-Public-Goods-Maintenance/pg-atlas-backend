@@ -9,12 +9,12 @@ import networkx as nx
 from pg_atlas.metrics.criticality import compute_criticality, compute_percentile_ranks
 
 
-def _repo(active: bool = True) -> dict:
-    return {"vertex_type": "Repo", "active": active}
+def _repo() -> dict:
+    return {"vertex_type": "Repo"}
 
 
-def _ext(active: bool = True) -> dict:
-    return {"vertex_type": "ExternalRepo", "active": active}
+def _ext() -> dict:
+    return {"vertex_type": "ExternalRepo"}
 
 
 # ---------------------------------------------------------------------------
@@ -96,17 +96,16 @@ def test_isolated_node_has_zero_criticality():
 # ---------------------------------------------------------------------------
 
 
-def test_inactive_dependents_not_counted():
-    """Nodes with active=False must not inflate criticality scores."""
+def test_all_graph_members_count_toward_criticality():
+    """All nodes in the active subgraph count toward criticality — graph membership is sufficient."""
     G = nx.DiGraph()
-    G.add_node("active_dep", **_repo(active=True))
-    G.add_node("dormant_dep", **_repo(active=False))
-    G.add_node("lib", **_ext(active=True))
-    G.add_edge("active_dep", "lib")
-    G.add_edge("dormant_dep", "lib")
+    G.add_node("dep_a", **_repo())
+    G.add_node("dep_b", **_repo())
+    G.add_node("lib", **_ext())
+    G.add_edge("dep_a", "lib")
+    G.add_edge("dep_b", "lib")
     scores = compute_criticality(G)
-    # Only active_dep should count; dormant_dep is filtered out
-    assert scores["lib"] == 1
+    assert scores["lib"] == 2  # both dependents count
 
 
 # ---------------------------------------------------------------------------
@@ -121,8 +120,8 @@ def test_empty_graph_returns_empty():
 def test_no_dep_layer_nodes_returns_empty():
     """Graphs with only Project/Contributor nodes have no dep-layer nodes."""
     G = nx.DiGraph()
-    G.add_node("P", vertex_type="Project", active=True)
-    G.add_node("C", vertex_type="Contributor", active=True)
+    G.add_node("P", vertex_type="Project")
+    G.add_node("C", vertex_type="Contributor")
     assert compute_criticality(G) == {}
 
 
@@ -164,3 +163,14 @@ def test_percentile_values_in_range():
 
 def test_percentile_empty_returns_empty():
     assert compute_percentile_ranks({}) == {}
+
+
+def test_percentile_ranking_nodes_restricts_result():
+    """ranking_nodes limits both the reference distribution and the result set."""
+    scores = {"a": 10, "b": 5, "c": 1}
+    pool = {"a", "b"}
+    pcts = compute_percentile_ranks(scores, ranking_nodes=pool)
+    assert set(pcts.keys()) == pool
+    # within the pool: "b" < "a", so "b" is 0th percentile
+    assert pcts["b"] == 0.0
+    assert pcts["a"] > 0.0

@@ -18,7 +18,7 @@ Production adaptations:
 - Input graph carries `vertex_type` (title-cased) rather than `node_type`.
 - `days_since_commit` is computed by graph_builder from `latest_commit_date`.
 - Returns only `nx.DiGraph` (not a tuple) — dormant set is in graph metadata.
-- Sets `active=True` on every retained node for downstream criticality scoring.
+- Dormant repos are excluded from metric computation but not from the database.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -45,8 +45,7 @@ def project_active_subgraph(
     Algorithm (O(V + E)):
         1. Classify every node as active or dormant using retention rules below.
         2. Build induced subgraph over the active node set (copy preserves edge attrs).
-        3. Set ``active=True`` on every retained node.
-        4. Annotate the returned graph with audit metadata.
+        3. Annotate the returned graph with audit metadata.
 
     Retention rules by vertex_type:
         "Project":     Always retained — funding layer is not activity-filtered.
@@ -67,14 +66,10 @@ def project_active_subgraph(
         nodes_removed (int): count of pruned dormant nodes
         dormant_nodes (list[str]): canonical_ids of pruned nodes (audit trail)
 
-    Important:
-        Sets ``active=True`` on every node in the returned subgraph.
-        ``compute_criticality`` reads ``G_active.nodes[n].get("active", False)``
-        to count only active transitive dependents — without this flag the
-        criticality computation returns 0 for all nodes.
-
     Returns:
         nx.DiGraph: induced subgraph copy. Mutations do not affect the original G.
+        All nodes in the returned subgraph are active by virtue of graph membership.
+        Callers do not need to check a flag.
     """
     window: int = config.activity_window_days
 
@@ -94,6 +89,7 @@ def project_active_subgraph(
             continue
 
         if vertex_type == "Repo":
+            # Pragmatic reactivation heuristic — absence of commit data ≠ permanently dormant.
             days: int | None = data.get("days_since_commit")
             archived: bool = bool(data.get("archived", False))
 
@@ -117,11 +113,6 @@ def project_active_subgraph(
         active_nodes.append(node)
 
     G_active: nx.DiGraph = G.subgraph(active_nodes).copy()
-
-    # Set active=True on all retained nodes.
-    # Required by compute_criticality: descendants are only counted when active=True.
-    for n in G_active.nodes():
-        G_active.nodes[n]["active"] = True
 
     G_active.graph.update(
         active_window_days=window,

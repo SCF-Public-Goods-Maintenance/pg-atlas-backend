@@ -1,13 +1,14 @@
 """
 A9: Transitive Criticality.
 
-Measures structural indispensability: how many active ecosystem packages
-transitively depend on a given package. High criticality = high blast radius
-if this package degrades or disappears from the ecosystem.
+Measures structural indispensability: how many ecosystem packages transitively
+depend on a given package. High criticality = high ecosystem value built upon
+this package — many packages in the portfolio depend on it, directly or
+transitively.
 
-Ecological framing: a keystone species whose removal causes cascading trophic
-collapse in downstream consumers. Criticality counts the active organisms that
-depend — directly or transitively — on this one package.
+Ecological framing: a keystone species that the rest of the food web is built
+upon — not modelled by its removal impact, but by how much biomass is stacked
+on top of it.
 
 Algorithm: BFS on the reversed dependency subgraph.
 The dependency graph has edges pointing toward dependencies (A -> B means
@@ -26,7 +27,7 @@ Production adaptations:
 - Node attribute is `vertex_type` (title-cased) rather than `node_type`.
 - No `edge_type` filter needed — use `build_dependency_graph` as input
   (dep-only graph; no contributor edges present).
-- `active=True` flag is set by `project_active_subgraph` on all retained nodes.
+- All nodes in the active subgraph are active by graph membership; no flag needed.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -53,14 +54,8 @@ def compute_criticality(G_active: nx.DiGraph) -> dict[str, int]:
         3. Reverse: G_rev edges flow from depended-upon package to its dependents.
         4. For each dep-layer node P:
                transitive_dependents = nx.descendants(G_rev, P)
-               active_dependents     = {n for n in transitive_dependents
-                                        if G_active.nodes[n].get("active", False)}
-               criticality[P]        = len(active_dependents)
-
-    Precondition:
-        G_active must have ``active=True`` set on all nodes. This is guaranteed
-        when G_active is the output of ``project_active_subgraph``. Without this
-        flag, all criticality scores will be 0.
+               criticality[P]        = len(transitive_dependents)
+           (all nodes in the active subgraph are active by graph membership)
 
     Input:
         Use ``build_dependency_graph`` (not ``build_full_graph``) as source — the
@@ -89,8 +84,7 @@ def compute_criticality(G_active: nx.DiGraph) -> dict[str, int]:
     criticality: dict[str, int] = {}
     for node in dep_nodes:
         transitive_dependents = nx.descendants(G_rev, node)
-        active_dependents = {n for n in transitive_dependents if G_active.nodes[n].get("active", False)}
-        criticality[node] = len(active_dependents)
+        criticality[node] = len(transitive_dependents)
 
     nonzero = sum(1 for v in criticality.values() if v > 0)
     logger.info(
@@ -102,13 +96,22 @@ def compute_criticality(G_active: nx.DiGraph) -> dict[str, int]:
     return criticality
 
 
-def compute_percentile_ranks(scores: dict[str, int | float]) -> dict[str, float]:
+def compute_percentile_ranks(
+    scores: dict[str, int | float],
+    ranking_nodes: set[str] | None = None,
+) -> dict[str, float]:
     """
     Convert raw scores to percentile ranks within [0.0, 100.0).
 
     Uses numpy searchsorted (exclusive / left-side rank):
         rank        = searchsorted(sorted_scores, score)   # 0-based count of scores < this score
         percentile  = rank / n * 100.0
+
+    Parameters:
+        scores: raw scores keyed by canonical_id.
+        ranking_nodes: when provided, restrict the ranking reference distribution
+            and result to this node set (e.g., only ``project_type="public-good"``
+            Repos). Pass ``None`` to rank all nodes (default).
 
     Properties:
         - Minimum score  -> 0th percentile (rank = 0).
@@ -124,6 +127,9 @@ def compute_percentile_ranks(scores: dict[str, int | float]) -> dict[str, float]
         dict[canonical_id, float] — all values in [0.0, 100.0).
         Empty dict when scores is empty.
     """
+    if ranking_nodes is not None:
+        scores = {k: v for k, v in scores.items() if k in ranking_nodes}
+
     if not scores:
         return {}
 

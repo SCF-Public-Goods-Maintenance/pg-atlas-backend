@@ -137,23 +137,6 @@ def test_graph_metadata_dormant_nodes_list():
 
 
 # ---------------------------------------------------------------------------
-# active=True flag (required by compute_criticality)
-# ---------------------------------------------------------------------------
-
-
-def test_active_flag_set_on_all_retained_nodes():
-    """All nodes in active subgraph must carry active=True."""
-    G = _g(
-        ("A", {"vertex_type": "Repo", "days_since_commit": 10}),
-        ("E", {"vertex_type": "ExternalRepo", "days_since_commit": None}),
-        ("P", {"vertex_type": "Project"}),
-    )
-    G_active = project_active_subgraph(G, CFG)
-    for node in G_active.nodes():
-        assert G_active.nodes[node].get("active") is True, f"Node {node!r} is missing active=True"
-
-
-# ---------------------------------------------------------------------------
 # Immutability
 # ---------------------------------------------------------------------------
 
