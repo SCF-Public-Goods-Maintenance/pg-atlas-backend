@@ -40,36 +40,25 @@ def _log_repo_summary(result: RepoParseResult, persist: PersistResult | None, in
     top = ", ".join(f"{c.display_name} ({c.number_of_commits})" for c in result.contributors[:5])
 
     logger.info(
-        "[%d/%d] Repo: %s\n"
-        "  Commits in window: %d (%d months)\n"
-        "  Bot commits excluded: %d from %d bots (%.1f%% of total)\n"
-        "  Human contributors: %d\n"
-        "  Fly-by contributors: %s\n"
-        "  Top contributors: %s",
-        index,
-        total,
-        result.repo_url,
-        result.total_commits,
-        since,
-        result.bot_commit_count,
-        result.bot_contributor_count,
-        bot_pct,
-        human_count,
-        flyby_str,
-        top or "(none)",
+        f"""
+[{index}/{total}] Repo: {result.repo_url}
+  Commits in window: {result.total_commits} ({since} months)
+  Bot commits excluded: {result.bot_commit_count} from {result.bot_contributor_count} bots ({bot_pct:.1f}% of total)
+  Human contributors: {human_count}
+  Fly-by contributors: {flyby_str}
+  Top contributors: {top or "(none)"}
+    """.strip()
     )
 
     if result.errors:
         for err in result.errors:
-            logger.warning("  Error: %s", err)
+            logger.warning(f"  Error: {err}")
 
     if persist:
         logger.info(
-            "  DB: %d contributors created, %d updated; %d edges created, %d updated",
-            persist.contributors_created,
-            persist.contributors_updated,
-            persist.edges_created,
-            persist.edges_updated,
+            f"  DB: {persist.contributors_created} contributors created, "
+            f"{persist.contributors_updated} updated; {persist.edges_created} edges created, "
+            f"{persist.edges_updated} updated"
         )
 
 
@@ -89,7 +78,7 @@ async def _resolve_repos(
             stmt = select(Repo).where(Repo.repo_url.isnot(None), Repo.repo_url != "")
             db_result = await session.execute(stmt)
             found = list(db_result.scalars().all())
-            logger.info("Found %d repos with repo_url in database", len(found))
+            logger.info(f"Found {len(found)} repos with repo_url in database")
             return found
 
         matched: list[Repo] = []
@@ -98,7 +87,7 @@ async def _resolve_repos(
             db_result = await session.execute(stmt)
             repo = db_result.scalar_one_or_none()
             if repo is None:
-                logger.warning("No Repo found for URL %s — skipping", url)
+                logger.warning(f"No Repo found for URL {url} - skipping")
                 continue
             matched.append(repo)
         return matched
@@ -162,7 +151,7 @@ async def main() -> None:
                     await session.commit()
                 except SQLAlchemyError, ValueError:
                     await session.rollback()
-                    logger.exception("Failed to persist %s", repo.repo_url)
+                    logger.exception(f"Failed to persist {repo.repo_url}")
                     error_urls.append(repo.repo_url or "(unknown)")
                     _log_repo_summary(result, None, i, len(repos))
                     continue
@@ -186,21 +175,16 @@ async def main() -> None:
 
         # Final summary
         logger.info(
-            "Git log parsing complete:\n"
-            "  Repos processed: %d (%d errors)\n"
-            "  Total contributors stored: %d\n"
-            "  Total bot commits excluded: %d from %d unique bots\n"
-            "  Total edges created/updated: %d created, %d updated",
-            len(repos),
-            len(error_urls),
-            total_contributors_stored,
-            total_bot_commits,
-            total_bot_contributors,
-            total_edges_created,
-            total_edges_updated,
+            f"""
+Git log parsing complete:
+  Repos processed: {len(repos)} ({len(error_urls)} errors)
+  Total contributors stored: {total_contributors_stored}
+  Total bot commits excluded: {total_bot_commits} from {total_bot_contributors} unique bots
+  Total edges created/updated: {total_edges_created} created, {total_edges_updated} updated
+            """.strip()
         )
         if error_urls:
-            logger.info("  Errors: %s", error_urls)
+            logger.info(f"  Errors: {error_urls}")
 
     finally:
         await engine.dispose()

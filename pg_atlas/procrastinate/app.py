@@ -51,7 +51,7 @@ def _get_database_url() -> str:
 
 
 _dsn = _get_database_url()
-logger.info("Opening Procrastinate connection to %s", _dsn.split("@")[-1])
+logger.info(f"Opening Procrastinate connection to {_dsn.split('@')[-1]}")
 app = procrastinate.App(
     connector=procrastinate.PsycopgConnector(conninfo=_dsn),
     import_paths=["pg_atlas.procrastinate.tasks"],

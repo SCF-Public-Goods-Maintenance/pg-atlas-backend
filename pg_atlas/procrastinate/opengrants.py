@@ -218,7 +218,7 @@ async def fetch_grant_pools(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 
     Returns the raw API response ``data`` items (DAOIP-5 GrantPool dicts).
     """
-    logger.info("Fetching SCF grant pools from %s", BASE_URL)
+    logger.info(f"Fetching SCF grant pools from {BASE_URL}")
 
     pools = await _paginated_get(
         client,
@@ -226,7 +226,7 @@ async def fetch_grant_pools(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         {"system": "scf", "sortOrder": "asc"},
     )
 
-    logger.info("Fetched %d grant pools", len(pools))
+    logger.info(f"Fetched {len(pools)} grant pools")
 
     return pools
 
@@ -246,7 +246,7 @@ async def fetch_grant_applications(
     Returns:
         The raw API response ``data`` items (DAOIP-5 GrantApplication dicts).
     """
-    logger.debug("Fetching applications for pool %s", pool_id)
+    logger.debug(f"Fetching applications for pool {pool_id}")
 
     applications = await _paginated_get(
         client,
@@ -254,7 +254,7 @@ async def fetch_grant_applications(
         {"system": "scf", "sortOrder": "asc", "poolId": pool_id},
     )
 
-    logger.debug("Fetched %d applications for pool %s", len(applications), pool_id)
+    logger.debug(f"Fetched {len(applications)} applications for pool {pool_id}")
 
     return applications
 
@@ -364,11 +364,7 @@ def _map_application(
         org_url, repo_url = parse_github_url(raw_code_url)
 
         if org_url is None:
-            logger.warning(
-                "Invalid GitHub URL in io.scf.code for project %s: %r",
-                canonical_id,
-                raw_code_url,
-            )
+            logger.warning(f"Invalid GitHub URL in io.scf.code for project {canonical_id}: {raw_code_url!r}")
         else:
             git_org_url = org_url
             git_repo_url = repo_url
@@ -420,19 +416,14 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
         try:
             apps = await fetch_grant_applications(client, pool_id)
         except httpx.HTTPStatusError as exc:
-            logger.error(
-                "Failed to fetch applications for pool %s (%s): %s",
-                pool_id,
-                pool_name,
-                exc,
-            )
+            logger.error(f"Failed to fetch applications for pool {pool_id} ({pool_name}): {exc}")
 
             continue
 
-        logger.info("Pool %s (%s): %d applications", pool_id, pool_name, len(apps))
+        logger.info(f"Pool {pool_id} ({pool_name}): {len(apps)} applications")
         all_apps.extend(apps)
 
-    logger.info("Total applications fetched across all pools: %d", len(all_apps))
+    logger.info(f"Total applications fetched across all pools: {len(all_apps)}")
 
     # ------------------------------------------------------------------
     # Deduplicate by projectId — keep the latest application's fields
@@ -465,10 +456,6 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
         project = _map_application(latest_app, submissions)
         projects.append(project)
 
-    logger.info(
-        "Deduplicated to %d unique projects from %d total applications",
-        len(projects),
-        len(all_apps),
-    )
+    logger.info(f"Deduplicated to {len(projects)} unique projects from {len(all_apps)} total applications")
 
     return projects

@@ -73,6 +73,9 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
     or logical section.
   - Use blank lines between adjacent control structures (like an `if` block followed by a `for` loop).
 - Prefer `f"hey {agent}!"` format strings over older string interpolation.
+- Style normalization scope: apply breathing-space and interpolation to authored app/test code;
+  do not mass-normalize migration/revision scripts (`pg_atlas/migrations/versions/`,
+  `pg_atlas/procrastinate/versions/`) unless specifically fixing a functional defect.
 - Exception handling: be precise — do not use bare `except Exception` to catch expected errors;
   name the specific exception types (e.g. `except PyJWKClientError, OSError`).
 - Fail fast over silent fallbacks: if a required config value is missing, raise `ValueError` at
@@ -242,3 +245,15 @@ These conventions emerged during A5 implementation and apply to all future task/
 - `ruff per-file-ignores`: `E501` for Procrastinate migration files (embedded SQL).
 - `mypy exclude`: `pg_atlas/deps_dev/lib` (generated code).
 - `types-PyYAML` added to dev deps for mypy stubs.
+
+## Test Cleanup Contract (2026-03-18)
+
+These conventions emerged during DB test-isolation hardening and apply to DB-integrating tests.
+
+- Shared cleanup utilities live in `tests/db_cleanup.py`.
+- Cleanup strategy is snapshot + diff on primary keys: capture pre-test rows, delete only rows created during the test.
+- Never blanket-clear all tables in test teardown; preserve any pre-existing developer data.
+- Debug controls:
+  - `PG_ATLAS_TEST_BREAK_BEFORE_CLEANUP=1` triggers `breakpoint()` before teardown deletion.
+  - `PG_ATLAS_TEST_SKIP_CLEANUP=1` skips teardown deletion (for interactive debugging only).
+- Keep table cleanup ordering FK-safe: edge/child tables before parent tables.

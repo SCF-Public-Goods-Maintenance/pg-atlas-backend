@@ -116,13 +116,13 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
             document = parse_file(tmp.name)
     except SPDXParsingError as exc:
         messages = [str(m) for m in exc.get_messages()]
-        logger.info("SPDX validation failed: %s", messages)
+        logger.info(f"SPDX validation failed: {messages}")
         raise SpdxValidationError(
             detail="Invalid SPDX 2.3 document.",
             messages=messages,
         ) from exc
     except Exception as exc:
-        logger.warning("Unexpected error during SPDX parsing: %s", exc)
+        logger.warning(f"Unexpected error during SPDX parsing: {exc}")
         raise SpdxValidationError(
             detail=f"Could not parse SPDX document: {exc}",
         ) from exc
@@ -130,9 +130,9 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
     assert document, "Document is None"
     package_count = len(document.packages)
     logger.info(
-        "SPDX document parsed OK: name=%r spdx_version=%s packages=%d",
-        document.creation_info.name,
-        document.creation_info.spdx_version,
-        package_count,
+        "SPDX document parsed OK: "
+        f"name={document.creation_info.name!r} "
+        f"spdx_version={document.creation_info.spdx_version} "
+        f"packages={package_count}"
     )
     return ParsedSbom(document=document, package_count=package_count)

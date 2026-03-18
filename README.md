@@ -76,6 +76,17 @@ docker compose up --build
 uv run pytest
 ```
 
+DB integration tests use selective cleanup (snapshot + delete created rows only) so
+existing local development data is preserved.
+
+Debug toggles for DB test teardown:
+
+- `PG_ATLAS_TEST_BREAK_BEFORE_CLEANUP=1`: triggers `breakpoint()` immediately before cleanup.
+- `PG_ATLAS_TEST_SKIP_CLEANUP=1`: skips cleanup deletion for the current run.
+
+When `PG_ATLAS_TEST_SKIP_CLEANUP=1` is enabled, reset it before normal runs to
+restore test isolation guarantees.
+
 Lint and type checks:
 
 ```sh

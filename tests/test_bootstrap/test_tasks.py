@@ -17,11 +17,19 @@ import pytest
 from procrastinate.exceptions import AlreadyEnqueued
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
-from pg_atlas.procrastinate.depsdev import DepsDevError, DepsDevPackageInfo, DepsDevProjectInfo, DepsDevRequirement
+from pg_atlas.procrastinate.depsdev import (
+    DepsDevError,
+    DepsDevPackageInfo,
+    DepsDevProjectInfo,
+    DepsDevRequirement,
+    DepsDevVersionInfo,
+    ProjectPackageVersion,
+)
 from pg_atlas.procrastinate.opengrants import ScfProject
 
 try:
     from pg_atlas.procrastinate.tasks import (
+        GitHubRepoMetadata,
         _defer_with_lock,
         _load_git_mapping,
         _purl_type_for_system,
@@ -101,7 +109,18 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks._list_org_repos",
-        return_value=[{"name": "repo", "full_name": "org/repo", "stars": 1, "forks": 1}],
+        return_value=[
+            GitHubRepoMetadata(
+                name="repo",
+                full_name="org/repo",
+                description="",
+                default_branch="main",
+                stars=1,
+                forks=1,
+                language="",
+                topics=[],
+            )
+        ],
     )
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_project_batch",
@@ -120,7 +139,16 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     )
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_project_package_versions",
-        new=mocker.AsyncMock(return_value=[{"system": "PYPI", "name": "stellar-sdk"}]),
+        new=mocker.AsyncMock(
+            return_value=[
+                ProjectPackageVersion(
+                    system="PYPI",
+                    name="stellar-sdk",
+                    version="11.1.0",
+                    purl="pkg:pypi/stellar-sdk@11.1.0",
+                )
+            ]
+        ),
     )
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
     mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
@@ -136,7 +164,14 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
 
     assert upsert_project_mock.call_args.kwargs["project_type"] == ProjectType.public_good
     call_kwargs = crawl_github_repo.defer_async.call_args.kwargs
-    assert call_kwargs["packages"] == [{"system": "PYPI", "name": "stellar-sdk"}]
+    assert call_kwargs["packages"] == [
+        {
+            "system": "PYPI",
+            "name": "stellar-sdk",
+            "version": "11.1.0",
+            "purl": "pkg:pypi/stellar-sdk@11.1.0",
+        }
+    ]
 
 
 async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
@@ -148,7 +183,14 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
                 name="stellar-sdk",
                 purl="pkg:pypi/stellar-sdk",
                 default_version="11.1.0",
-                versions=[{"version": "11.1.0", "published_at": None, "purl": "pkg:pypi/stellar-sdk@11.1.0"}],
+                versions=[
+                    DepsDevVersionInfo(
+                        version="11.1.0",
+                        purl="pkg:pypi/stellar-sdk@11.1.0",
+                        published_at=None,
+                        is_default=True,
+                    )
+                ],
             )
         ),
     )

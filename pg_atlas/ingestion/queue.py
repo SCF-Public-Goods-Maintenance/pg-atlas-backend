@@ -40,12 +40,7 @@ def queue_sbom(sbom: ParsedSbom, claims: dict[str, Any]) -> dict[str, Any]:
     repository: str = claims["repository"]
     actor: str = claims["actor"]
 
-    logger.info(
-        "SBOM submission received: repository=%s actor=%s packages=%d",
-        repository,
-        actor,
-        sbom.package_count,
-    )
+    logger.info(f"SBOM submission received: repository={repository} actor={actor} packages={sbom.package_count}")
 
     return {
         "message": "queued",

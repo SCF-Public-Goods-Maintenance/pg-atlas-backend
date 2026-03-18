@@ -199,7 +199,7 @@ async def process_queue(
         for round_number in range(1, drain_rounds + 1):
             pending_before = _pending_jobs_count(queue_name)
             if pending_before == 0:
-                logger.info("Queue %s is empty before round %d", queue_name, round_number)
+                logger.info(f"Queue {queue_name} is empty before round {round_number}")
                 break
 
             logger.info(
@@ -219,7 +219,7 @@ async def process_queue(
 
             pending_after = _pending_jobs_count(queue_name)
             if pending_after == 0:
-                logger.info("Queue %s drained after round %d", queue_name, round_number)
+                logger.info(f"Queue {queue_name} drained after round {round_number}")
                 break
 
         else:
@@ -241,7 +241,7 @@ async def process_queue(
             status_counts["aborted"],
         )
 
-    logger.info("Worker finished: queue=%s", queue_name)
+    logger.info(f"Worker finished: queue={queue_name}")
 
 
 def main() -> None:

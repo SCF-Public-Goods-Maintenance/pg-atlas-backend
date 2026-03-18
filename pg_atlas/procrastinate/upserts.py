@@ -104,7 +104,7 @@ async def upsert_project(
         project_id: int = project.id
         await session.commit()
 
-        logger.info("Upserted Project %s (id=%d)", canonical_id, project_id)
+        logger.info(f"Upserted Project {canonical_id} (id={project_id})")
 
         return project_id
 
@@ -206,7 +206,7 @@ async def upsert_repo(
         repo_id = repo.id
         await session.commit()
 
-        logger.info("Upserted Repo %s (id=%d)", canonical_id, repo_id)
+        logger.info(f"Upserted Repo {canonical_id} (id={repo_id})")
 
         return repo_id
 
@@ -345,7 +345,7 @@ async def _promote_external_to_repo(
     )
     await session.flush()
 
-    logger.info("Promoted ExternalRepo → Repo (vertex_id=%d)", vertex_id)
+    logger.info(f"Promoted ExternalRepo -> Repo (vertex_id={vertex_id})")
 
     return vertex_id
 

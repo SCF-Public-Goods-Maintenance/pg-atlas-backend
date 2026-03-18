@@ -79,6 +79,26 @@ class DepsDevError(Exception):
 
 
 @dataclass
+class DepsDevVersionInfo:
+    """A version entry returned by deps.dev GetPackage."""
+
+    version: str
+    purl: str
+    published_at: str | None
+    is_default: bool
+
+
+@dataclass
+class ProjectPackageVersion:
+    """A project package/version mapping returned by deps.dev."""
+
+    system: str
+    name: str
+    version: str
+    purl: str
+
+
+@dataclass
 class DepsDevPackageInfo:
     """Info about a package from deps.dev GetPackage."""
 
@@ -86,7 +106,7 @@ class DepsDevPackageInfo:
     name: str
     purl: str
     default_version: str
-    versions: list[dict[str, Any]] = field(default_factory=list)
+    versions: list[DepsDevVersionInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -107,7 +127,7 @@ class DepsDevProjectInfo:
     forks_count: int
     license: str
     description: str
-    package_versions: list[dict[str, str]] = field(default_factory=list)
+    package_versions: list[ProjectPackageVersion] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -227,23 +247,24 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
         if _is_not_found_error(exc):
             raise DepsDevError(f"Package not found: {system}/{name}") from exc
 
-        logger.warning("deps.dev GetPackage error for %s/%s: %s", system, name, exc)
+        logger.warning(f"deps.dev GetPackage error for {system}/{name}: {exc}")
 
         raise DepsDevError(f"GetPackage failed for {system}/{name}: {exc}") from exc
 
     default_version = ""
-    version_dicts: list[dict[str, Any]] = []
+    version_entries: list[DepsDevVersionInfo] = []
 
     for v in pkg.versions:
         vk = v.version_key
         ver_str = vk.version if vk else ""
-        entry: dict[str, Any] = {
-            "version": ver_str,
-            "purl": v.purl,
-            "published_at": v.published_at.isoformat() if v.published_at else None,
-            "is_default": v.is_default,
-        }
-        version_dicts.append(entry)
+        version_entries.append(
+            DepsDevVersionInfo(
+                version=ver_str,
+                purl=v.purl,
+                published_at=v.published_at.isoformat() if v.published_at else None,
+                is_default=v.is_default,
+            )
+        )
 
         if v.is_default:
             default_version = ver_str
@@ -253,7 +274,7 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
         name=pkg.package_key.name if pkg.package_key else name,
         purl=pkg.purl,
         default_version=default_version,
-        versions=version_dicts,
+        versions=version_entries,
     )
 
 
@@ -342,11 +363,11 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
         reqs = await _get_requirements_message(system, name, version)
     except (GRPCError, grpc.RpcError) as exc:
         if _is_not_found_error(exc):
-            logger.info("No requirements found for %s/%s@%s (NOT_FOUND)", system, name, version)
+            logger.info(f"No requirements found for {system}/{name}@{version} (NOT_FOUND)")
 
             return []
 
-        logger.warning("deps.dev GetRequirements error for %s/%s@%s: %s", system, name, version, exc)
+        logger.warning(f"deps.dev GetRequirements error for {system}/{name}@{version}: {exc}")
 
         raise DepsDevError(f"GetRequirements failed for {system}/{name}@{version}: {exc}") from exc
 
@@ -369,7 +390,7 @@ async def _get_project_batch_page(project_ids: list[str], page_token: str = "") 
     return list(batch.responses), batch.next_page_token
 
 
-async def get_project_package_versions(project_id: str) -> list[dict[str, str]]:
+async def get_project_package_versions(project_id: str) -> list[ProjectPackageVersion]:
     """
     Fetch package-version mappings for one project.
 
@@ -384,7 +405,7 @@ async def get_project_package_versions(project_id: str) -> list[dict[str, str]]:
 
         raise DepsDevError(f"GetProjectPackageVersions failed for {project_id}: {exc}") from exc
 
-    package_versions: list[dict[str, str]] = []
+    package_versions: list[ProjectPackageVersion] = []
     for version in response.versions:
         version_key = version.version_key
         if version_key is None:
@@ -395,15 +416,15 @@ async def get_project_package_versions(project_id: str) -> list[dict[str, str]]:
             continue
 
         package_versions.append(
-            {
-                "system": system_name,
-                "name": version_key.name,
-                "version": version_key.version,
-                "purl": (
+            ProjectPackageVersion(
+                system=system_name,
+                name=version_key.name,
+                version=version_key.version,
+                purl=(
                     f"pkg:{_SYSTEM_TO_PURL_TYPE.get(system_name, system_name.lower())}/"
                     f"{version_key.name}@{version_key.version}"
                 ),
-            }
+            )
         )
 
     return package_versions
@@ -440,7 +461,7 @@ async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectI
 
                 return results
 
-            logger.warning("deps.dev GetProjectBatch error: %s", exc)
+            logger.warning(f"deps.dev GetProjectBatch error: {exc}")
 
             raise DepsDevError(f"GetProjectBatch failed: {exc}") from exc
 

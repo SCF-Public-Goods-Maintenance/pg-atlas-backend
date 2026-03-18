@@ -65,15 +65,11 @@ async def main() -> None:
         await engine.dispose()
 
     logger.info(
-        "Crawl complete: %d packages, %d vertices, %d edges, %d skipped, %d errors",
-        result.packages_processed,
-        result.vertices_upserted,
-        result.edges_created,
-        result.edges_skipped,
-        len(result.errors),
+        f"Crawl complete: {result.packages_processed} packages, {result.vertices_upserted} vertices, "
+        f"{result.edges_created} edges, {result.edges_skipped} skipped, {len(result.errors)} errors"
     )
     for error in result.errors:
-        logger.warning("  Error: %s", error)
+        logger.warning(f"  Error: {error}")
 
 
 if __name__ == "__main__":
