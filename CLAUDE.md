@@ -100,3 +100,14 @@ uv run pytest
 ```
 
 All four must pass. The pre-commit hook enforces Conventional Commits on every commit.
+
+## Context Refresh
+
+Before starting any new task or resuming a PR branch:
+
+1. Pull latest `main` and re-read `CLAUDE.md` — it is the single source of truth.
+2. Run `git log --oneline -10` to understand what is already committed on the branch.
+3. Run the quality gate to confirm the branch is clean before adding new commits.
+4. Grep for known removed patterns if picking up stale context:
+   - `git grep "active=True"` — flag convention removed in D6 metrics layer
+   - `git grep 'text("'` in `pg_atlas/metrics/` — raw SQL replaced by ORM
