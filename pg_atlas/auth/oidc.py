@@ -57,7 +57,7 @@ def _get_jwks_client() -> PyJWKClient:
     if cached is not None:
         return cached
 
-    logger.debug("JWKS cache miss — fetching from %s", GITHUB_JWKS_URL)
+    logger.debug(f"JWKS cache miss — fetching from {GITHUB_JWKS_URL}")
     client = PyJWKClient(GITHUB_JWKS_URL)
     _jwks_cache[GITHUB_JWKS_URL] = client
     return client
@@ -94,7 +94,7 @@ async def verify_github_oidc_token(
         jwks_client = _get_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
     except (PyJWKClientError, OSError) as exc:
-        logger.warning("JWKS retrieval or key selection failed: %s", exc)
+        logger.warning(f"JWKS retrieval or key selection failed: {exc}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Unable to retrieve or select JWKS signing key.",
@@ -118,17 +118,13 @@ async def verify_github_oidc_token(
         # Decode without verification to surface the submitted aud claim.
         unverified = jwt.decode(token, options={"verify_signature": False})
         submitted_aud = unverified.get("aud", "<not present>")
-        logger.warning(
-            "OIDC audience mismatch: token has %r, API expects %r",
-            submitted_aud,
-            settings.API_URL,
-        )
+        logger.warning(f"OIDC audience mismatch: token has {submitted_aud!r}, API expects {settings.API_URL!r}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"OIDC token validation failed: Audience {submitted_aud!r} doesn't match {settings.API_URL!r}",
         ) from exc
     except jwt.InvalidTokenError as exc:
-        logger.warning("OIDC token validation failed: %s", exc)
+        logger.warning(f"OIDC token validation failed: {exc}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"OIDC token validation failed: {exc}",

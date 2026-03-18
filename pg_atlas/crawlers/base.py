@@ -169,7 +169,7 @@ async def _upsert_edge(
                 await session.flush()
         except IntegrityError as exc:
             session.expunge(new_edge)
-            logger.debug("Edge %d->%d already exists: %s", in_vertex_id, out_vertex_id, exc)
+            logger.debug(f"Edge {in_vertex_id}->{out_vertex_id} already exists: {exc}")
             return None
         return True
 
@@ -233,7 +233,7 @@ class RegistryCrawler(ABC):
                 last_exc = exc
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
-                    logger.warning("Timeout fetching %s, retrying in %ds", url, wait)
+                    logger.warning(f"Timeout fetching {url}, retrying in {wait}s")
                     await asyncio.sleep(wait)
                     continue
                 raise
@@ -249,7 +249,7 @@ class RegistryCrawler(ABC):
                     retry_after = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
                 except ValueError:
                     retry_after = 2 ** (attempt + 1)
-                logger.warning("Rate limited on %s, waiting %ds", url, retry_after)
+                logger.warning(f"Rate limited on {url}, waiting {retry_after}s")
                 await asyncio.sleep(retry_after)
                 continue
 
@@ -261,7 +261,7 @@ class RegistryCrawler(ABC):
                 )
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
-                    logger.warning("Server error %d on %s, retrying in %ds", resp.status_code, url, wait)
+                    logger.warning(f"Server error {resp.status_code} on {url}, retrying in {wait}s")
                     await asyncio.sleep(wait)
                     continue
                 raise last_exc
@@ -291,7 +291,7 @@ class RegistryCrawler(ABC):
                 except Exception as exc:
                     await session.rollback()
                     result.errors.append(f"{package_name}: {exc}")
-                    logger.warning("Crawl failed for %s: %s", package_name, exc)
+                    logger.warning(f"Crawl failed for {package_name}: {exc}")
 
             # Rate limit between packages (skip after last)
             if i < len(package_names) - 1:

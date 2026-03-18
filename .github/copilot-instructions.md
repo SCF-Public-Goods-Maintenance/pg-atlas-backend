@@ -23,6 +23,10 @@ Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (i
 changes in the working tree, summarize what is ready, and wait for the user to review before any
 commit is created.
 
+## Known Issues
+
+As mandatory preparation for any task, use your GitHub tools to inspect all open _and_ closed issues for the current repo. Read all open issues and their comments in full. Read the closed issues in full only when they are relevant for the current task.
+
 ---
 
 # PG Atlas Backend — Project-Specific Instructions
@@ -69,8 +73,11 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
     or logical section.
   - Use blank lines between adjacent control structures (like an `if` block followed by a `for` loop).
 - Prefer `f"hey {agent}!"` format strings over older string interpolation.
+- Style normalization scope: apply breathing-space and interpolation to authored app/test code;
+  do not mass-normalize migration/revision scripts (`pg_atlas/migrations/versions/`,
+  `pg_atlas/procrastinate/versions/`) unless specifically fixing a functional defect.
 - Exception handling: be precise — do not use bare `except Exception` to catch expected errors;
-  name the specific exception types (e.g. `except (PyJWKClientError, OSError)`).
+  name the specific exception types (e.g. `except PyJWKClientError, OSError`).
 - Fail fast over silent fallbacks: if a required config value is missing, raise `ValueError` at
   import/startup rather than falling back to a placeholder that silently misbehaves later.
 - Conventional Commits for all commit messages. release-please handles changelog and version bumps.
@@ -83,8 +90,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 
 ## Current Deployment State
 
-- **A1 complete**: SBOM ingestion (`POST /ingest/sbom`, OIDC auth, SPDX 2.3 parsing, 202 Accepted),
-  health endpoint (`GET /health`), CI green, DO App Platform live at
+- **A1 complete**: , CI green, DO App Platform live at
   `https://pg-atlas-backend-h8gen.ondigitalocean.app` (`basic-xxs`, region `ams3`).
 - **A2 complete**: PostgreSQL schema (`pg_atlas/db_models/`), Alembic migration (revision
   `f3d946ade07e`), artifact storage (`pg_atlas/storage/artifacts.py`). Schema refined in a follow-up
@@ -92,22 +98,25 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   required on `Repo`/`ExternalRepo`; `artifact_path` made non-nullable; enum values now use
   `values_callable=enum_values` throughout; `email_hash` stored as BYTEA via `HexBinary`.
   Hosted DB (`pg-atlas-dev`, PG 18) lives on DO App Platform; `entrypoint.sh` runs
-  `alembic upgrade head` at startup. See A2 notes below.
-- **A3 complete**: SBOM write path — `pg_atlas/ingestion/persist.py` implements full end-to-end
+  `alembic upgrade head` at startup.
+- **A3 complete**: SBOM ingestion (`POST /ingest/sbom`, OIDC auth, SPDX 2.3 parsing, 202 Accepted),
+  health endpoint (`GET /health`). SBOM write path — `pg_atlas/ingestion/persist.py` implements full end-to-end
   persistence: `Repo`/`ExternalRepo` upserts (PURL canonical IDs), bulk-replace `depends_on` edges
   (`confidence=verified_sbom`), `SbomSubmission` audit rows, artifact storage. Router uses
   `maybe_db_session` dependency (falls back to log-only when `DATABASE_URL` is unset).
-  See A3 notes below.
-- **A5 almost complete**: Reference Graph Bootstrapping — Procrastinate + GitHub Actions crawl of
+- **A5 complete**: Reference Graph Bootstrapping — Procrastinate + GitHub Actions crawl of
   OpenGrants, GitHub, and deps.dev. `pg_atlas/procrastinate/` sub-package with `app.py` (App +
   PsycopgConnector), `worker.py` (CLI), `seed.py` (defers root task), `opengrants.py` (async
   HTTP client for OpenGrants API), `depsdev.py` (deps.dev gRPC wrapper via `betterproto2`),
   `upserts.py` (async SQLAlchemy upsert helpers), `tasks.py` (4 Procrastinate task definitions:
   `sync_opengrants` → `process_project` → `crawl_github_repo` → `crawl_package_deps`).
-  Procrastinate schema via Alembic migration (`procrastinate_001`). deps.dev proto sync tooling
+  Procrastinate schema via Alembic migration (`procrastinate_001`). deps.dev tooling
   in `pg_atlas/deps_dev/`. GitHub Actions workflows: `bootstrap.yml` (weekly), `sync-depsdev-proto.yml`
   (daily). Manual `project-git-mapping.yml` for early-round projects missing `io.scf.code`.
-  See A5 notes below. Not complete: ingestion of SCF Impact Survey results for activity status.
+- Not complete: ingestion of SCF Impact Survey results for activity status (still blocked).
+- A6 partly complete: Registry Crawlers incorporated in the graph bootstrapper. Active Subgraph Projection in review.
+- A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.
+- A8: the SBOM post-validation processing needs to be moved to a new Procrastinate queue.
 
 ## Keeping These Instructions Current
 
@@ -208,58 +217,6 @@ pg_atlas/db_models/
     sbom_submission.py   # SbomSubmission audit table
     session.py           # async session manager; uses a lazy singleton factory; tests must bypass it with `NullPool`.
 ```
-## A5 Planning Notes
-
-These notes document key decisions made during A5 planning that future sessions should be aware of.
-
-### Procrastinate + GitHub Actions
-- Task queue: **Procrastinate ≥ 3.0** with `PsycopgConnector` (psycopg3). Add `procrastinate[psycopg]`
-  and `psycopg[binary,pool]` to `pyproject.toml`. SQLAlchemy continues to use `asyncpg` — both
-  drivers coexist on the same PostgreSQL instance.
-- Worker DSN: `_get_database_url()` in `app.py` reads `PG_ATLAS_DATABASE_URL`, strips `+asyncpg`,
-  normalizes `postgres://` to `postgresql://`, and removes query parameters.
-- Worker runs in GitHub Actions with `run_worker_async(wait=False, concurrency=N)`. The `wait=False`
-  flag causes it to exit once the queue is empty — required for GH Actions to complete.
-- Procrastinate schema: new Alembic migration using the "multiple bases" pattern, populated by `procrastinate schema --print`
-  SQL via `op.execute()`. `entrypoint.sh` then applies it on every deploy automatically.
-- Procrastinate `@app.task` returns a `Task` object, not a regular function. Use
-  `task.configure(queueing_lock=...).defer_async(...)` for dynamic lock keys. In tests, call
-  `await task(...)` to execute the underlying function directly.
-
-### OpenGrants API
-- 1. Fetch SCF rounds: `https://grants.daostar.org/api/v1/grantPools?system=scf&sortOrder=asc&limit=100`
-- 2. For each round, fetch all submissions, e.g.: `https://grants.daostar.org/api/v1/grantApplications?system=scf&sortOrder=asc&poolId=daoip-5%3Ascf%3AgrantPool%3Ascf_%2339&limit=100`
-- Available extension fields differ per round (and project); recent rounds have `io.scf.code` that may contain a GitHub URL. Some fields need to be copied to `Project.metadata`.
-- Pagination: `limit` + `offset` (not cursor-based). `pagination.hasNext` signals more pages.
-
-### deps.dev API
-- Use gRPC through `betterproto2` async client.
-- `InsightsStub` must be native async, generated by `betterproto2`.
-- `GetRequirements` returns ecosystem-specific nested structures; extraction logic in `depsdev.py`
-  handles all 7 supported ecosystems with per-system parsing.
-
-### Module placement
-```
-pg_atlas/procrastinate/
-    app.py           # Procrastinate App + PsycopgConnector
-    worker.py        # CLI argparse entry point
-    seed.py          # Defers root sync_opengrants task
-    opengrants.py    # Async HTTP client for OpenGrants API
-    depsdev.py       # deps.dev gRPC wrapper
-    upserts.py       # Async SQLAlchemy upsert helpers
-    tasks.py         # 4 task definitions (sync_opengrants → process_project → crawl_github_repo → crawl_package_deps)
-    project-git-mapping.yml  # Manual projectId → GitHub URL mappings
-    versions/        # Alembic migrations (procrastinate schema)
-pg_atlas/deps_dev/
-    sync_proto.py           # Proto sync script
-    generate_async_client.py # Code generation
-    protos/                 # .proto files
-    lib/                    # Generated gRPC client (excluded from ruff + mypy)
-.github/workflows/
-    bootstrap.yml            # Weekly reference graph bootstrap
-    sync-depsdev-proto.yml   # Daily proto sync
-```
-- See `devops.md` § A5 for task hierarchy and acceptance criteria.
 
 ## A5 Implementation Notes
 
@@ -288,3 +245,15 @@ These conventions emerged during A5 implementation and apply to all future task/
 - `ruff per-file-ignores`: `E501` for Procrastinate migration files (embedded SQL).
 - `mypy exclude`: `pg_atlas/deps_dev/lib` (generated code).
 - `types-PyYAML` added to dev deps for mypy stubs.
+
+## Test Cleanup Contract (2026-03-18)
+
+These conventions emerged during DB test-isolation hardening and apply to DB-integrating tests.
+
+- Shared cleanup utilities live in `tests/db_cleanup.py`.
+- Cleanup strategy is snapshot + diff on primary keys: capture pre-test rows, delete only rows created during the test.
+- Never blanket-clear all tables in test teardown; preserve any pre-existing developer data.
+- Debug controls:
+  - `PG_ATLAS_TEST_BREAK_BEFORE_CLEANUP=1` triggers `breakpoint()` before teardown deletion.
+  - `PG_ATLAS_TEST_SKIP_CLEANUP=1` skips teardown deletion (for interactive debugging only).
+- Keep table cleanup ordering FK-safe: edge/child tables before parent tables.

@@ -71,5 +71,5 @@ async def store_artifact(data: bytes, filename: str) -> tuple[str, str]:
     # Offload the blocking I/O to a thread-pool executor so the event loop is not blocked.
     await asyncio.get_running_loop().run_in_executor(None, _write_sync, dest, data)
 
-    logger.debug("Stored artifact %s (sha256=%s)", dest, content_hex)
+    logger.debug(f"Stored artifact {dest} (sha256={content_hex})")
     return str(filename), content_hex

@@ -10,7 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime
-import os
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -21,12 +21,23 @@ from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.gitlog.parser import ContributorStats, RepoParseResult, hash_email
 from pg_atlas.gitlog.persist import persist_repo_result
+from tests.conftest import get_test_database_url
 from tests.test_gitlog.conftest import create_test_repo
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("PG_ATLAS_DATABASE_URL"),
-    reason="PG_ATLAS_DATABASE_URL not set; skipping database integration tests",
+    not get_test_database_url(),
+    reason="PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration tests",
 )
+
+
+def _unique_repo_identity() -> tuple[str, str]:
+    """Return unique canonical_id and repo_url values for DB-isolated tests."""
+
+    suffix = uuid.uuid4().hex[:8]
+    return (
+        f"pkg:github/test-org/test-repo-{suffix}",
+        f"https://github.com/test-org/test-repo-{suffix}",
+    )
 
 
 def _make_stats(email: str, name: str, commits: int) -> ContributorStats:
@@ -66,15 +77,16 @@ async def test_full_pipeline_with_real_db(
     db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None
 ) -> None:
     """Create a Repo, persist contributor data, verify all DB state."""
+    canonical_id, repo_url = _unique_repo_identity()
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        await create_test_repo(session, canonical_id=canonical_id, repo_url=repo_url)
         await session.commit()
 
     stats = [_make_stats("alice@ex.com", "Alice", 10), _make_stats("bob@ex.com", "Bob", 5)]
-    result = _make_result("https://github.com/test-org/test-repo", stats)
+    result = _make_result(repo_url, stats)
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         persist = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -83,8 +95,8 @@ async def test_full_pipeline_with_real_db(
 
     async with db_session_factory() as session:
         contributors = (await session.execute(select(Contributor))).scalars().all()
-        edges = (await session.execute(select(ContributedTo))).scalars().all()
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
+        edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
 
     assert len(contributors) == 2
     assert len(edges) == 2
@@ -93,22 +105,23 @@ async def test_full_pipeline_with_real_db(
 
 async def test_idempotent_rerun(db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None) -> None:
     """Run twice with same data — no duplicates, counts updated."""
+    canonical_id, repo_url = _unique_repo_identity()
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        await create_test_repo(session, canonical_id=canonical_id, repo_url=repo_url)
         await session.commit()
 
     stats = [_make_stats("alice@ex.com", "Alice", 10)]
-    result = _make_result("https://github.com/test-org/test-repo", stats)
+    result = _make_result(repo_url, stats)
 
     # First run
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         await persist_repo_result(session, repo, result)
         await session.commit()
 
     # Second run
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         persist2 = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -118,7 +131,8 @@ async def test_idempotent_rerun(db_session_factory: async_sessionmaker[AsyncSess
     # Verify no duplicates
     async with db_session_factory() as session:
         contributors = (await session.execute(select(Contributor))).scalars().all()
-        edges = (await session.execute(select(ContributedTo))).scalars().all()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
+        edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
     assert len(contributors) == 1
     assert len(edges) == 1
 
@@ -158,14 +172,15 @@ async def test_bot_contributor_not_stored(
     The RepoParseResult.contributors list contains humans only — bots
     never reach persist_repo_result. Verify no bot data in DB.
     """
+    canonical_id, repo_url = _unique_repo_identity()
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        await create_test_repo(session, canonical_id=canonical_id, repo_url=repo_url)
         await session.commit()
 
     # Only human stats in the result (bots already filtered by parser)
     human_stats = [_make_stats("human@ex.com", "Human", 10)]
     result = _make_result(
-        "https://github.com/test-org/test-repo",
+        repo_url,
         human_stats,
         total_commits=15,  # 10 human + 5 bot (pre-filter)
         bot_commit_count=5,
@@ -173,13 +188,13 @@ async def test_bot_contributor_not_stored(
     )
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         await persist_repo_result(session, repo, result)
         await session.commit()
 
     async with db_session_factory() as session:
         contributors = (await session.execute(select(Contributor))).scalars().all()
-        edges = (await session.execute(select(ContributedTo))).scalars().all()
+        edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
 
     assert len(contributors) == 1
     assert contributors[0].name == "Human"

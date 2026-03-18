@@ -104,6 +104,7 @@ async def test_upsert_contributed_to_existing_overwrites_count(
     """On update, number_of_commits is OVERWRITTEN (not summed)."""
     async with db_session_factory() as session:
         repo = await create_test_repo(session)
+        repo_id = repo.id
         contributor, _ = await upsert_contributor(session, hash_email("a@b.com"), "Alice")
         stats1 = ContributorStats(
             email_hash="",
@@ -116,7 +117,7 @@ async def test_upsert_contributed_to_existing_overwrites_count(
         await session.commit()
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         stmt = select(Contributor).where(Contributor.email_hash == hash_email("a@b.com"))
         contributor = (await session.execute(stmt)).scalar_one()
 
@@ -148,6 +149,7 @@ async def test_upsert_contributed_to_merge_dates(
     """Takes min of first_commit_date, max of last_commit_date."""
     async with db_session_factory() as session:
         repo = await create_test_repo(session)
+        repo_id = repo.id
         contributor, _ = await upsert_contributor(session, hash_email("a@b.com"), "Alice")
         stats1 = ContributorStats(
             email_hash="",
@@ -162,7 +164,7 @@ async def test_upsert_contributed_to_merge_dates(
     async with db_session_factory() as session:
         stmt = select(Contributor).where(Contributor.email_hash == hash_email("a@b.com"))
         contributor = (await session.execute(stmt)).scalar_one()
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
 
         stats2 = ContributorStats(
             email_hash="",
@@ -198,7 +200,8 @@ async def test_persist_repo_result_success(
     clean_gitlog_tables: None,
 ) -> None:
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        repo = await create_test_repo(session)
+        repo_id = repo.id
         await session.commit()
 
     result = RepoParseResult(
@@ -211,7 +214,7 @@ async def test_persist_repo_result_success(
     )
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         persist = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -222,7 +225,7 @@ async def test_persist_repo_result_success(
     async with db_session_factory() as session:
         contributors = (await session.execute(select(Contributor))).scalars().all()
         edges = (await session.execute(select(ContributedTo))).scalars().all()
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
 
     assert len(contributors) == 2
     assert len(edges) == 2
@@ -234,7 +237,8 @@ async def test_persist_repo_result_empty(
 ) -> None:
     """No contributors — repo.latest_commit_date still updated."""
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        repo = await create_test_repo(session)
+        repo_id = repo.id
         await session.commit()
 
     result = RepoParseResult(
@@ -247,7 +251,7 @@ async def test_persist_repo_result_empty(
     )
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         persist = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -259,7 +263,8 @@ async def test_persist_repo_result_updates_latest_commit_date(
     db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None
 ) -> None:
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        repo = await create_test_repo(session)
+        repo_id = repo.id
         await session.commit()
 
     new_date = datetime.datetime(2025, 12, 25, tzinfo=datetime.UTC)
@@ -273,12 +278,12 @@ async def test_persist_repo_result_updates_latest_commit_date(
     )
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         await persist_repo_result(session, repo, result)
         await session.commit()
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
     assert repo.latest_commit_date == new_date
 
 
@@ -286,7 +291,8 @@ async def test_persist_repo_result_multiple_contributors(
     db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None
 ) -> None:
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        repo = await create_test_repo(session)
+        repo_id = repo.id
         await session.commit()
 
     stats = [
@@ -309,7 +315,7 @@ async def test_persist_repo_result_multiple_contributors(
     )
 
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         persist = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -320,7 +326,8 @@ async def test_persist_repo_result_multiple_contributors(
 async def test_persist_result_counts(db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None) -> None:
     """Run twice — first creates, second updates. Verify counts."""
     async with db_session_factory() as session:
-        await create_test_repo(session)
+        repo = await create_test_repo(session)
+        repo_id = repo.id
         await session.commit()
 
     stats = [
@@ -343,7 +350,7 @@ async def test_persist_result_counts(db_session_factory: async_sessionmaker[Asyn
 
     # First run
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         persist1 = await persist_repo_result(session, repo, result)
         await session.commit()
 
@@ -352,7 +359,7 @@ async def test_persist_result_counts(db_session_factory: async_sessionmaker[Asyn
 
     # Second run (same data)
     async with db_session_factory() as session:
-        repo = (await session.execute(select(Repo))).scalar_one()
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
         persist2 = await persist_repo_result(session, repo, result)
         await session.commit()
 

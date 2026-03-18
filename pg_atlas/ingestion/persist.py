@@ -397,13 +397,9 @@ async def handle_sbom_submission(
             )
             session.add(failed_submission)
             await session.commit()
-            logger.info(
-                "SBOM validation failed, recorded for triage: repository=%s hash=%s",
-                repository,
-                content_hash_hex,
-            )
+            logger.info(f"SBOM validation failed, recorded for triage: repository={repository} hash={content_hash_hex}")
         except Exception:
-            logger.exception("Failed to record failed SBOM submission for %s", repository)
+            logger.exception(f"Failed to record failed SBOM submission for {repository}")
         raise spdx_error
 
     assert sbom is not None
@@ -438,7 +434,7 @@ async def handle_sbom_submission(
         for pkg in sbom.document.packages:
             pkg_canonical_id = canonical_id_for_spdx_package(pkg)
             if pkg_canonical_id == submitting_canonical_id:
-                logger.debug("Skipping self-referential package %s", pkg_canonical_id)
+                logger.debug(f"Skipping self-referential package {pkg_canonical_id}")
                 continue
 
             version = _version_for_spdx_package(pkg)
@@ -460,16 +456,13 @@ async def handle_sbom_submission(
         await session.commit()
 
         logger.info(
-            "SBOM submission processed: repository=%s actor=%s packages=%d deps=%d",
-            repository,
-            actor,
-            sbom.package_count,
-            len(dep_vertex_ids),
+            f"SBOM submission processed: repository={repository} actor={actor} "
+            f"packages={sbom.package_count} deps={len(dep_vertex_ids)}"
         )
 
     except Exception as exc:
         await session.rollback()
-        logger.exception("DB write failed for SBOM submission from %s", repository)
+        logger.exception(f"DB write failed for SBOM submission from {repository}")
         # Best-effort: commit a failed audit row so the raw artifact is not silently lost
         try:
             fail_record = SbomSubmission(
@@ -483,7 +476,7 @@ async def handle_sbom_submission(
             session.add(fail_record)
             await session.commit()
         except Exception:
-            logger.exception("Failed to commit failure record for %s", repository)
+            logger.exception(f"Failed to commit failure record for {repository}")
         raise
 
     return {

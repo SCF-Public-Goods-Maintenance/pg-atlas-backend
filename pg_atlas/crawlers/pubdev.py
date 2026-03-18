@@ -63,7 +63,7 @@ class PubDevCrawler(RegistryCrawler):
             metrics_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/metrics")
             metrics_data = metrics_resp.json()
         except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
-            logger.warning("Failed to fetch metrics for %s: %s", package_name, exc)
+            logger.warning(f"Failed to fetch metrics for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, metrics_data)
 
@@ -97,7 +97,7 @@ class PubDevCrawler(RegistryCrawler):
             url = data.get("next", "")
 
         if len(dependents) >= max_dependents:
-            logger.warning("Truncated dependents for %s at %d", package_name, max_dependents)
+            logger.warning(f"Truncated dependents for {package_name} at {max_dependents}")
 
         return dependents
 

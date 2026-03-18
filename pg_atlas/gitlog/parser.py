@@ -202,7 +202,7 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
             break
         except RuntimeError as exc:
             last_err = exc
-            logger.debug("ref %s failed for %s: %s", ref, repo_path, exc)
+            logger.debug(f"ref {ref} failed for {repo_path}: {exc}")
             continue
 
     if stdout is None:
@@ -221,20 +221,20 @@ def _parse_log_output(raw: str) -> list[CommitRecord]:
     for line in raw.strip().splitlines():
         parts = line.split("\x00")
         if len(parts) != 4:
-            logger.warning("Skipping malformed git log line: %r", line[:120])
+            logger.warning(f"Skipping malformed git log line: {line[:120]!r}")
             continue
 
         name, email, iso_ts, commit_hash = parts
 
         # Skip commits with empty email
         if not email or not email.strip():
-            logger.warning("Skipping commit %s with empty email", commit_hash)
+            logger.warning(f"Skipping commit {commit_hash} with empty email")
             continue
 
         try:
             ts = dt.datetime.fromisoformat(iso_ts).astimezone(dt.UTC)
         except ValueError:
-            logger.warning("Skipping commit %s with unparseable timestamp: %r", commit_hash, iso_ts)
+            logger.warning(f"Skipping commit {commit_hash} with unparseable timestamp: {iso_ts!r}")
             continue
 
         records.append(CommitRecord(author_name=name, author_email=email, timestamp=ts, commit_hash=commit_hash))
@@ -314,7 +314,7 @@ async def parse_repo(
         repo_path = await clone_or_fetch_repo(repo_url, clone_dir, timeout)
         commits = await parse_git_log(repo_path, since_months)
     except (RuntimeError, asyncio.TimeoutError, OSError) as exc:
-        logger.exception("Failed to clone/parse %s", repo_url)
+        logger.exception(f"Failed to clone/parse {repo_url}")
         return RepoParseResult(
             repo_url=repo_url,
             contributors=[],

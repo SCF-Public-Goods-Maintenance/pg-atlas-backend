@@ -20,6 +20,7 @@ from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
     DepsDevPackageInfo,
     DepsDevProjectInfo,
+    ProjectPackageVersion,
     _extract_requirements,
     get_package,
     get_project_batch,
@@ -137,8 +138,9 @@ async def test_get_project_package_versions_success(mocker: Any) -> None:
 
     versions = await get_project_package_versions("github.com/stellarcn/py-stellar-base")
 
-    assert versions[0]["system"] == "PYPI"
-    assert versions[0]["name"] == "stellar-sdk"
+    assert isinstance(versions[0], ProjectPackageVersion)
+    assert versions[0].system == "PYPI"
+    assert versions[0].name == "stellar-sdk"
 
 
 async def test_get_requirements_not_found_grpclib(mocker: Any) -> None:

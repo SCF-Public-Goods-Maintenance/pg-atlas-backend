@@ -34,7 +34,7 @@ async def seed() -> None:
         from pg_atlas.procrastinate.tasks import sync_opengrants
 
         job_id = await sync_opengrants.defer_async()
-        logger.info("Deferred sync_opengrants task: job_id=%s", job_id)
+        logger.info(f"Deferred sync_opengrants task: job_id={job_id}")
 
 
 if __name__ == "__main__":

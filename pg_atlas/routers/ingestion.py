@@ -278,9 +278,9 @@ async def get_sbom_submission(
             artifact_full_path,
         )
     except FileNotFoundError:
-        logger.warning("Artifact file not found: %s", artifact_full_path)
+        logger.warning(f"Artifact file not found: {artifact_full_path}")
     except OSError:
-        logger.exception("Error reading artifact file: %s", artifact_full_path)
+        logger.exception(f"Error reading artifact file: {artifact_full_path}")
 
     detail = SbomSubmissionDetailResponse.model_validate(row)
     detail.raw_artifact = raw_artifact

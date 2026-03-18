@@ -75,7 +75,7 @@ class PackagistCrawler(RegistryCrawler):
             dl_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/downloads.json")
             downloads_data = dl_resp.json()
         except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
-            logger.warning("Failed to fetch downloads for %s: %s", package_name, exc)
+            logger.warning(f"Failed to fetch downloads for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, downloads_data)
 
@@ -89,12 +89,12 @@ class PackagistCrawler(RegistryCrawler):
         try:
             resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/dependents.json")
         except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
-            logger.warning("Failed to fetch dependents for %s: %s", package_name, exc)
+            logger.warning(f"Failed to fetch dependents for {package_name}: {exc}")
             return []
 
         content_type = resp.headers.get("content-type", "")
         if "json" not in content_type:
-            logger.warning("Dependents endpoint returned non-JSON for %s: %s", package_name, content_type)
+            logger.warning(f"Dependents endpoint returned non-JSON for {package_name}: {content_type}")
             return []
 
         data: dict[str, Any] = resp.json()
