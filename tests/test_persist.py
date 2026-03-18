@@ -15,8 +15,8 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import hashlib
-import os
 import uuid
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +34,27 @@ from pg_atlas.ingestion.persist import (
     handle_sbom_submission,
     strip_purl_version,
 )
+from tests.conftest import get_test_database_url
+from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
 FIXTURES = Path(__file__).parent / "data_fixtures"
 
-_DB_AVAILABLE = bool(os.environ.get("PG_ATLAS_DATABASE_URL"))
+_DB_AVAILABLE = bool(get_test_database_url())
+
+
+@pytest.fixture
+async def cleanup_db_rows_for_db_tests(
+    db_session: AsyncSession,
+) -> AsyncGenerator[None, None]:
+    """
+    Remove only rows created by DB integration tests in this module.
+
+    This fixture is applied only to DB integration tests in this module.
+    """
+
+    snapshot = await capture_snapshot(db_session, SBOM_DB_TABLE_SPECS)
+    yield
+    await cleanup_created_rows(db_session, SBOM_DB_TABLE_SPECS, snapshot)
 
 
 def _unique_claims(owner: str = "test-org") -> dict[str, Any]:
@@ -94,7 +111,10 @@ def test_canonical_id_for_spdx_package_fallback() -> None:
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_handle_sbom_submission_valid(db_session: AsyncSession) -> None:
+async def test_handle_sbom_submission_valid(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+) -> None:
     """
     A valid SPDX 2.3 submission creates a processed SbomSubmission, upserts a
     Repo for the submitting repo, creates ExternalRepo vertices for each
@@ -141,7 +161,10 @@ async def test_handle_sbom_submission_valid(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_handle_sbom_submission_is_idempotent(db_session: AsyncSession) -> None:
+async def test_handle_sbom_submission_is_idempotent(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+) -> None:
     """
     Re-submitting the same SBOM twice must not create duplicate Repo vertices.
     Each submission produces an audit row, but the canonical vertex is upserted.
@@ -157,7 +180,10 @@ async def test_handle_sbom_submission_is_idempotent(db_session: AsyncSession) ->
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_handle_sbom_submission_github_dep_graph(db_session: AsyncSession) -> None:
+async def test_handle_sbom_submission_github_dep_graph(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+) -> None:
     """
     A GitHub Dependency Graph SBOM (with PURL externalRefs and a DESCRIBES
     relationship for the subject package) is processed without duplicating the
@@ -195,7 +221,10 @@ async def test_handle_sbom_submission_github_dep_graph(db_session: AsyncSession)
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_handle_sbom_submission_duplicate_edges(db_session: AsyncSession) -> None:
+async def test_handle_sbom_submission_duplicate_edges(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+) -> None:
     """
     See how `handle_sbom_submission` handles duplicate PURLs within a single SBOM.
     It deduplicates after parsing and stores the last seen version identifier
@@ -221,7 +250,10 @@ async def test_handle_sbom_submission_duplicate_edges(db_session: AsyncSession) 
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_handle_sbom_submission_invalid_records_failed_row(db_session: AsyncSession) -> None:
+async def test_handle_sbom_submission_invalid_records_failed_row(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+) -> None:
     """
     An invalid SBOM must create a ``failed`` SbomSubmission row (so the raw
     bytes are retained for triage) and raise ``SpdxValidationError``.

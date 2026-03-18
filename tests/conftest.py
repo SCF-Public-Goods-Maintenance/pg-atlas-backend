@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("PG_ATLAS_API_URL", "https://test.pg-atlas.example")
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
+from pg_atlas.config import Settings, settings
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.main import app
 
@@ -35,6 +36,21 @@ MOCK_OIDC_CLAIMS: dict[str, Any] = {
     "iss": "https://token.actions.githubusercontent.com",
     "aud": TEST_API_URL,
 }
+
+
+def get_test_database_url() -> str | None:
+    """
+    Return the database URL used by DB integration tests.
+
+    Test-specific configuration takes precedence so contributors can run tests
+    against an isolated database without touching their local development data.
+    """
+
+    test_database_url = os.environ.get("PG_ATLAS_TEST_DATABASE_URL")
+    if test_database_url:
+        return Settings.coerce_async_driver(test_database_url)
+
+    return settings.DATABASE_URL or None
 
 
 @pytest.fixture
@@ -122,12 +138,11 @@ async def db_session() -> AsyncGenerator[Any, None]:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from pg_atlas.config import settings as app_settings
+    database_url = get_test_database_url()
+    if not database_url:
+        pytest.skip("PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration test")
 
-    if not app_settings.DATABASE_URL:
-        pytest.skip("PG_ATLAS_DATABASE_URL not set; skipping database integration test")
-
-    engine = create_async_engine(app_settings.DATABASE_URL, poolclass=NullPool)
+    engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
             engine, class_=AsyncSession, expire_on_commit=False

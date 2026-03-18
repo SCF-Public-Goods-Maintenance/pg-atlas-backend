@@ -14,17 +14,16 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import os
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from pg_atlas.config import settings
 from pg_atlas.crawlers.base import (
     CrawledDependency,
     CrawledDependent,
@@ -34,14 +33,16 @@ from pg_atlas.crawlers.base import (
 from pg_atlas.db_models.base import EdgeConfidence, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from tests.conftest import get_test_database_url
+from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
 # ---------------------------------------------------------------------------
 # Skip when no DB configured
 # ---------------------------------------------------------------------------
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("PG_ATLAS_DATABASE_URL"),
-    reason="PG_ATLAS_DATABASE_URL not set; skipping database integration tests",
+    not get_test_database_url(),
+    reason="PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration tests",
 )
 
 
@@ -53,7 +54,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 async def db_engine() -> AsyncGenerator[Any, None]:
     """Create a fresh async engine with NullPool for test isolation."""
-    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    database_url = get_test_database_url()
+    assert database_url is not None
+    engine = create_async_engine(database_url, poolclass=NullPool)
     yield engine
     await engine.dispose()
 
@@ -67,19 +70,15 @@ async def db_session_factory(db_engine: Any) -> async_sessionmaker[AsyncSession]
 @pytest.fixture(autouse=True)
 async def clean_tables(db_session_factory: async_sessionmaker[AsyncSession]) -> AsyncGenerator[None, None]:
     """
-    Truncate crawler-affected tables before and after each test.
-
-    Truncation runs with CASCADE to handle FK constraints between tables.
+    Remove only rows created by each crawler DB integration test.
     """
     async with db_session_factory() as session:
-        await session.execute(text("TRUNCATE TABLE depends_on, repos, external_repos, repo_vertices CASCADE"))
-        await session.commit()
+        snapshot = await capture_snapshot(session, SBOM_DB_TABLE_SPECS)
 
     yield
 
     async with db_session_factory() as session:
-        await session.execute(text("TRUNCATE TABLE depends_on, repos, external_repos, repo_vertices CASCADE"))
-        await session.commit()
+        await cleanup_created_rows(session, SBOM_DB_TABLE_SPECS, snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +126,12 @@ def _make_package(
         metadata={},
         dependencies=dependencies or [],
     )
+
+
+def _unique_suffix() -> str:
+    """Return a short unique suffix to avoid collisions with pre-existing DB rows."""
+
+    return uuid.uuid4().hex[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -337,29 +342,46 @@ async def test_crawl_idempotent(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Running the same crawl twice produces the same DB state."""
-    dep = CrawledDependency(canonical_id="pkg:pub/idemp_dep", display_name="idemp_dep", version_range="^1.0")
+    suffix = _unique_suffix()
+    package_cid = f"pkg:pub/idemp_pkg_{suffix}"
+    dep_cid = f"pkg:pub/idemp_dep_{suffix}"
+    dep = CrawledDependency(canonical_id=dep_cid, display_name=f"idemp_dep_{suffix}", version_range="^1.0")
     pkg = _make_package(
-        canonical_id="pkg:pub/idemp_pkg",
-        display_name="idemp_pkg",
+        canonical_id=package_cid,
+        display_name=f"idemp_pkg_{suffix}",
         dependencies=[dep],
     )
     crawler = IntegrationStubCrawler(
         session_factory=db_session_factory,
-        packages={"idemp_pkg": pkg},
+        packages={f"idemp_pkg_{suffix}": pkg},
     )
 
-    result1 = await crawler.crawl_and_persist(["idemp_pkg"])
-    result2 = await crawler.crawl_and_persist(["idemp_pkg"])
+    result1 = await crawler.crawl_and_persist([f"idemp_pkg_{suffix}"])
+    result2 = await crawler.crawl_and_persist([f"idemp_pkg_{suffix}"])
 
     assert result1.packages_processed == 1
     assert result2.packages_processed == 1
 
-    # Should have same number of vertices and edges
+    # Assert idempotency only for rows created by this test run.
     async with db_session_factory() as session:
-        vertices = (await session.execute(select(RepoVertex))).scalars().all()
-        edges = (await session.execute(select(DependsOn))).scalars().all()
-        assert len(vertices) == 2  # main pkg + dep
-        assert len(edges) == 1
+        vertices = (
+            (await session.execute(select(RepoVertex).where(RepoVertex.canonical_id.in_([package_cid, dep_cid]))))
+            .scalars()
+            .all()
+        )
+        assert len(vertices) == 2
+
+        package_vertex = next(v for v in vertices if v.canonical_id == package_cid)
+        dependency_vertex = next(v for v in vertices if v.canonical_id == dep_cid)
+        edge = (
+            await session.execute(
+                select(DependsOn).where(
+                    DependsOn.in_vertex_id == package_vertex.id,
+                    DependsOn.out_vertex_id == dependency_vertex.id,
+                )
+            )
+        ).scalar_one_or_none()
+        assert edge is not None
 
 
 async def test_crawl_does_not_downgrade_repo_to_external(
@@ -393,35 +415,45 @@ async def test_crawl_empty_dependency_list(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Package with zero deps creates only the package vertex, no edges."""
-    pkg = _make_package(canonical_id="pkg:pub/no_deps", display_name="no_deps", dependencies=[])
+    suffix = _unique_suffix()
+    package_cid = f"pkg:pub/no_deps_{suffix}"
+    pkg = _make_package(canonical_id=package_cid, display_name=f"no_deps_{suffix}", dependencies=[])
     crawler = IntegrationStubCrawler(
         session_factory=db_session_factory,
-        packages={"no_deps": pkg},
+        packages={f"no_deps_{suffix}": pkg},
     )
-    result = await crawler.crawl_and_persist(["no_deps"])
+    result = await crawler.crawl_and_persist([f"no_deps_{suffix}"])
 
     assert result.edges_created == 0
     async with db_session_factory() as session:
-        edges = (await session.execute(select(DependsOn))).scalars().all()
-        assert len(edges) == 0
+        package_vertex = (await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == package_cid))).scalar_one()
+        edge = (
+            await session.execute(select(DependsOn).where(DependsOn.in_vertex_id == package_vertex.id))
+        ).scalar_one_or_none()
+        assert edge is None
 
 
 async def test_crawl_empty_dependents_list(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Package with zero dependents creates no reverse edges."""
-    pkg = _make_package(canonical_id="pkg:pub/no_rev", display_name="no_rev")
+    suffix = _unique_suffix()
+    package_cid = f"pkg:pub/no_rev_{suffix}"
+    pkg = _make_package(canonical_id=package_cid, display_name=f"no_rev_{suffix}")
     crawler = IntegrationStubCrawler(
         session_factory=db_session_factory,
-        packages={"no_rev": pkg},
-        dependents={"no_rev": []},
+        packages={f"no_rev_{suffix}": pkg},
+        dependents={f"no_rev_{suffix}": []},
     )
-    result = await crawler.crawl_and_persist(["no_rev"])
+    result = await crawler.crawl_and_persist([f"no_rev_{suffix}"])
 
     assert result.packages_processed == 1
     async with db_session_factory() as session:
-        edges = (await session.execute(select(DependsOn))).scalars().all()
-        assert len(edges) == 0
+        package_vertex = (await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == package_cid))).scalar_one()
+        edge = (
+            await session.execute(select(DependsOn).where(DependsOn.out_vertex_id == package_vertex.id))
+        ).scalar_one_or_none()
+        assert edge is None
 
 
 async def test_crawl_result_counts(

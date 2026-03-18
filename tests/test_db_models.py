@@ -12,6 +12,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,27 @@ from pg_atlas.db_models.base import (
     SubmissionStatus,
     Visibility,
 )
+from tests.db_cleanup import DB_MODELS_TABLE_SPECS, capture_snapshot, cleanup_created_rows
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_db_rows_for_model_tests(
+    request: pytest.FixtureRequest,
+    db_session: AsyncSession,
+) -> AsyncGenerator[None, None]:
+    """
+    Remove only rows created by model tests that use ``db_session``.
+    """
+
+    if "db_session" not in request.fixturenames:
+        yield
+
+        return
+
+    snapshot = await capture_snapshot(db_session, DB_MODELS_TABLE_SPECS)
+    yield
+    await cleanup_created_rows(db_session, DB_MODELS_TABLE_SPECS, snapshot)
+
 
 # ---------------------------------------------------------------------------
 # Vertex round-trip tests
@@ -55,8 +78,6 @@ async def test_project_roundtrip(db_session: AsyncSession) -> None:
     assert result.project_type is ProjectType.scf_project
     assert result.updated_at is not None
 
-    await db_session.rollback()
-
 
 @pytest.mark.usefixtures("db_session")
 async def test_repo_vertex_roundtrip(db_session: AsyncSession) -> None:
@@ -76,8 +97,6 @@ async def test_repo_vertex_roundtrip(db_session: AsyncSession) -> None:
     assert isinstance(result, Repo)
     assert result.vertex_type == RepoVertexType.repo
 
-    await db_session.rollback()
-
 
 @pytest.mark.usefixtures("db_session")
 async def test_external_repo_roundtrip(db_session: AsyncSession) -> None:
@@ -93,8 +112,6 @@ async def test_external_repo_roundtrip(db_session: AsyncSession) -> None:
     result = await db_session.scalar(select(ExternalRepo).where(ExternalRepo.canonical_id == "npm:express"))
     assert result is not None
     assert result.vertex_type == RepoVertexType.external_repo
-
-    await db_session.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +151,6 @@ async def test_depends_on_edge_roundtrip(db_session: AsyncSession) -> None:
     assert result.version_range == "^4.17.0"
     assert result.confidence is EdgeConfidence.verified_sbom
 
-    await db_session.rollback()
-
 
 # ---------------------------------------------------------------------------
 # SbomSubmission content hash test
@@ -160,5 +175,3 @@ async def test_sbom_submission_content_hash_roundtrip(db_session: AsyncSession) 
     assert result.sbom_content_hash == sha256_hex
     assert result.status is SubmissionStatus.pending
     assert result.submitted_at is not None
-
-    await db_session.rollback()

@@ -22,7 +22,6 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import hashlib
-import os
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -36,8 +35,10 @@ from pg_atlas.config import settings
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.main import app
+from tests.conftest import get_test_database_url
+from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
-_DB_AVAILABLE = bool(os.environ.get("PG_ATLAS_DATABASE_URL"))
+_DB_AVAILABLE = bool(get_test_database_url())
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +114,11 @@ async def db_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession], None]:
 
     Skipped when ``PG_ATLAS_DATABASE_URL`` is not set.
     """
-    if not settings.DATABASE_URL:
-        pytest.skip("PG_ATLAS_DATABASE_URL not set")
+    database_url = get_test_database_url()
+    if not database_url:
+        pytest.skip("PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set")
 
-    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    engine = create_async_engine(database_url, poolclass=NullPool)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine,
         class_=AsyncSession,
@@ -141,6 +143,19 @@ async def db_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession], None]:
             app.dependency_overrides.pop(maybe_db_session, None)
 
     await engine.dispose()
+
+
+@pytest.fixture
+async def cleanup_db_rows_for_db_client_tests(
+    db_client: tuple[AsyncClient, AsyncSession],
+) -> AsyncGenerator[None, None]:
+    """
+    Remove only rows created by tests that use ``db_client``.
+    """
+    _, seed_session = db_client
+    snapshot = await capture_snapshot(seed_session, SBOM_DB_TABLE_SPECS)
+    yield
+    await cleanup_created_rows(seed_session, SBOM_DB_TABLE_SPECS, snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +183,10 @@ async def test_detail_returns_503_without_db(no_db_client: AsyncClient) -> None:
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_list_empty(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_list_empty(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom with a non-matching repository filter returns an empty list."""
     client, _ = db_client
 
@@ -183,7 +201,10 @@ async def test_list_empty(db_client: tuple[AsyncClient, AsyncSession]) -> None:
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_list_with_records(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_list_with_records(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom returns seeded submissions when filtered by repository."""
     client, session = db_client
     repo = _unique_repo()
@@ -205,7 +226,10 @@ async def test_list_with_records(db_client: tuple[AsyncClient, AsyncSession]) ->
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_list_filter_by_repository(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_list_filter_by_repository(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom?repository=... returns only matching submissions."""
     client, session = db_client
     repo_a = _unique_repo("org-a/repo-a")
@@ -229,7 +253,10 @@ async def test_list_filter_by_repository(db_client: tuple[AsyncClient, AsyncSess
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_list_pagination(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_list_pagination(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom respects limit and offset query parameters."""
     client, session = db_client
     repo = _unique_repo()
@@ -267,6 +294,7 @@ async def test_list_pagination(db_client: tuple[AsyncClient, AsyncSession]) -> N
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
 async def test_detail_with_artifact(
     db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,7 +325,10 @@ async def test_detail_with_artifact(
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_detail_missing_artifact(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_detail_missing_artifact(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom/{id} returns null raw_artifact when the file is missing."""
     client, session = db_client
     repo = _unique_repo()
@@ -316,7 +347,10 @@ async def test_detail_missing_artifact(db_client: tuple[AsyncClient, AsyncSessio
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
-async def test_detail_not_found(db_client: tuple[AsyncClient, AsyncSession]) -> None:
+async def test_detail_not_found(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+) -> None:
     """GET /ingest/sbom/{id} returns 404 for a non-existent submission."""
     client, _ = db_client
 
