@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import networkx as nx
@@ -55,7 +56,8 @@ async def build_dependency_graph(
         confidence (str): "verified-sbom" | "inferred-shadow"
         version_range (str | None): semver constraint, if recorded
 
-    Uses ORM queries with selectin loading (JTI auto-JOIN for vertices; selectin batch-loads for edges and projects). No N+1 round-trips.
+    Uses ORM queries with selectin loading (JTI auto-JOIN for vertices;
+    selectin batch-loads for edges and projects). No N+1 round-trips.
     """
     ref = reference_date or datetime.date.today()
 
@@ -63,7 +65,7 @@ async def build_dependency_graph(
     G.graph["source"] = "postgresql"
     G.graph["reference_date"] = ref.isoformat()
 
-    vertices: list[RepoVertex] = (await session.execute(select(RepoVertex))).scalars().all()
+    vertices: Sequence[RepoVertex] = (await session.execute(select(RepoVertex))).scalars().all()
     for rv in vertices:
         if isinstance(rv, Repo):
             commit_dt = rv.latest_commit_date
@@ -93,7 +95,7 @@ async def build_dependency_graph(
             attrs = {"vertex_type": rv.vertex_type}
         G.add_node(rv.canonical_id, **attrs)
 
-    edges: list[DependsOn] = (await session.execute(select(DependsOn))).scalars().all()
+    edges: Sequence[DependsOn] = (await session.execute(select(DependsOn))).scalars().all()
     for edge in edges:
         G.add_edge(
             edge.in_node.canonical_id,
@@ -131,7 +133,7 @@ async def build_full_graph(
     """
     G = await build_dependency_graph(session, config, reference_date)
 
-    projects: list[Project] = (await session.execute(select(Project))).scalars().all()
+    projects: Sequence[Project] = (await session.execute(select(Project))).scalars().all()
     for proj in projects:
         G.add_node(
             proj.canonical_id,
