@@ -504,9 +504,9 @@ async def crawl_github_repo(
             for v in pkg_info.versions:
                 releases.append(
                     {
-                        "version": v.get("version", ""),
-                        "release_date": v.get("published_at"),
-                        "purl": strip_purl_version(v.get("purl", "")),
+                        "version": v.version,
+                        "release_date": v.published_at,
+                        "purl": strip_purl_version(v.purl),
                     }
                 )
 
