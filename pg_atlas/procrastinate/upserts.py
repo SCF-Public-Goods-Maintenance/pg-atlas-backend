@@ -142,6 +142,11 @@ async def upsert_repo(
     If a ``RepoVertex`` with the same ``canonical_id`` already exists as an
     ``ExternalRepo``, it is promoted to ``Repo`` via
     ``promote_external_to_repo``.
+
+    ``latest_commit_date`` is written only when it is greater than the
+    currently stored value (or the stored value is ``None``).  This
+    ensures that the most recent date wins regardless of whether it was
+    set by the bootstrap crawler (``pushed_at``) or the gitlog parser.
     """
     session = await _session()
 
@@ -178,7 +183,9 @@ async def upsert_repo(
                 vertex.repo_url = repo_url
             if adoption_stars is not None:
                 vertex.adoption_stars = adoption_stars
-            if latest_commit_date is not None:
+            if latest_commit_date is not None and (
+                vertex.latest_commit_date is None or latest_commit_date > vertex.latest_commit_date
+            ):
                 vertex.latest_commit_date = latest_commit_date
             if adoption_forks is not None:
                 vertex.adoption_forks = adoption_forks
