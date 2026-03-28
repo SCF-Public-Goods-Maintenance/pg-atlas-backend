@@ -22,11 +22,11 @@ from typing import Any
 import networkx as nx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectin_polymorphic
 
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.vertex_ops import get_all_vertices
 from pg_atlas.metrics.config import DEFAULT_METRICS_CONFIG, MetricsConfig
 
 logger = logging.getLogger(__name__)
@@ -66,11 +66,7 @@ async def build_dependency_graph(
     G.graph["source"] = "postgresql"
     G.graph["reference_date"] = ref.isoformat()
 
-    vertices: Sequence[RepoVertex] = (
-        (await session.execute(select(RepoVertex).options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))))
-        .scalars()
-        .all()
-    )
+    vertices: Sequence[RepoVertex] = await get_all_vertices(session)
     for rv in vertices:
         if isinstance(rv, Repo):
             commit_dt = rv.latest_commit_date

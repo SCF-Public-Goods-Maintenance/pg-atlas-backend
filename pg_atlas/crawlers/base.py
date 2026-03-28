@@ -22,11 +22,11 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectin_polymorphic
 
 from pg_atlas.db_models.base import EdgeConfidence
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.vertex_ops import get_vertex
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +100,7 @@ async def _upsert_vertex(
     NEVER create a Repo — only SBOM ingestion creates Repos (via OIDC claims).
     NEVER downgrade a Repo to ExternalRepo.
     """
-    result = await session.execute(
-        select(RepoVertex)
-        .where(RepoVertex.canonical_id == canonical_id)
-        .options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))
-    )
-    vertex = result.scalar_one_or_none()
+    vertex = await get_vertex(session, canonical_id)
 
     if vertex is not None:
         # Both Repo and ExternalRepo have these attributes but RepoVertex (the
@@ -131,12 +126,8 @@ async def _upsert_vertex(
             await session.flush()
     except IntegrityError:
         session.expunge(ext)
-        retry = await session.execute(
-            select(RepoVertex)
-            .where(RepoVertex.canonical_id == canonical_id)
-            .options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))
-        )
-        ext = retry.scalar_one()  # type: ignore[assignment]
+        ext = await get_vertex(session, canonical_id)  # type: ignore[assignment]
+
     return ext
 
 
