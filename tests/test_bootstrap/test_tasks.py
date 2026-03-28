@@ -117,6 +117,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
                 default_branch="main",
                 stars=1,
                 forks=1,
+                pushed_at=None,
                 language="",
                 topics=[],
             )
