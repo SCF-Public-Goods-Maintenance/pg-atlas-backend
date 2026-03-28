@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectin_polymorphic
 
 from pg_atlas.db_models.base import (
     ActivityStatus,
@@ -151,7 +152,11 @@ async def upsert_repo(
     session = await _session()
 
     try:
-        result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
+        result = await session.execute(
+            select(RepoVertex)
+            .where(RepoVertex.canonical_id == canonical_id)
+            .options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))
+        )
         vertex = result.scalar_one_or_none()
 
         if vertex is not None and isinstance(vertex, ExternalRepo):
@@ -254,7 +259,11 @@ async def upsert_external_repo(
     session = await _session()
 
     try:
-        result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
+        result = await session.execute(
+            select(RepoVertex)
+            .where(RepoVertex.canonical_id == canonical_id)
+            .options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))
+        )
         vertex = result.scalar_one_or_none()
 
         if vertex is not None:

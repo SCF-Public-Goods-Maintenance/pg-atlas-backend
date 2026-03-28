@@ -35,7 +35,7 @@ from typing import Any, cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import make_transient
+from sqlalchemy.orm import make_transient, selectin_polymorphic
 
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
@@ -213,7 +213,11 @@ async def _upsert_external_repo(
     ``session.flush()`` is called so the returned object has its ``id`` set.
     """
     # Check the shared JTI base table — canonical_id is unique across ALL subtypes.
-    result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
+    result = await session.execute(
+        select(RepoVertex)
+        .where(RepoVertex.canonical_id == canonical_id)
+        .options(selectin_polymorphic(RepoVertex, [Repo, ExternalRepo]))
+    )
     vertex = result.scalar_one_or_none()
     if vertex is not None:
         if isinstance(vertex, ExternalRepo):

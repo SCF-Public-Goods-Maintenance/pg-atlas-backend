@@ -7,4 +7,7 @@
     ],
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
+    "chat.tools.terminal.autoApprove": {
+        "uv run python": true
+    },
 }
