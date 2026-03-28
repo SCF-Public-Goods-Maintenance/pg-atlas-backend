@@ -11,6 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -117,7 +118,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
                 default_branch="main",
                 stars=1,
                 forks=1,
-                pushed_at=None,
+                pushed_at=dt.datetime(2015, 9, 30, 16, 46, 54, tzinfo=dt.UTC),
                 language="",
                 topics=[],
             )
