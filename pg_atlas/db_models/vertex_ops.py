@@ -13,6 +13,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from sqlalchemy import select
@@ -20,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectin_polymorphic
 
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+
+logger = logging.getLogger(__name__)
 
 # Reusable loader option — tells SQLAlchemy to eagerly batch-load JTI child
 # tables so that Repo/ExternalRepo attributes are available without lazy loads.
@@ -68,6 +71,7 @@ async def upsert_external_repo(
 
             await session.flush()
 
+        logger.warning(f"prevented overwrite of Repo {vertex.canonical_id} with ExternalRepo")
         return vertex
 
     ext = ExternalRepo(

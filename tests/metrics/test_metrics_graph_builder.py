@@ -7,27 +7,19 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import os
-
 import networkx as nx
 import pytest
-
-pytestmark = pytest.mark.skipif(
-    not os.getenv("PG_ATLAS_TEST_DATABASE_URL") and not os.getenv("PG_ATLAS_DATABASE_URL"),
-    reason="requires database (set PG_ATLAS_TEST_DATABASE_URL or PG_ATLAS_DATABASE_URL)",
-)
-
-# db_session fixture is provided by tests/conftest.py
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def test_build_dependency_graph_returns_digraph(db_session):
+async def test_build_dependency_graph_returns_digraph(db_session: AsyncSession):
     from pg_atlas.metrics.graph_builder import build_dependency_graph
 
     G = await build_dependency_graph(db_session)
     assert isinstance(G, nx.DiGraph)
 
 
-async def test_build_dependency_graph_has_nodes(db_session):
+async def test_build_dependency_graph_has_nodes(db_session: AsyncSession):
     from sqlalchemy import text
 
     from pg_atlas.metrics.graph_builder import build_dependency_graph
@@ -40,7 +32,7 @@ async def test_build_dependency_graph_has_nodes(db_session):
     assert G.number_of_nodes() > 0, "Expected populated repo_vertices table"
 
 
-async def test_build_dependency_graph_node_keys_are_strings(db_session):
+async def test_build_dependency_graph_node_keys_are_strings(db_session: AsyncSession):
     from pg_atlas.metrics.graph_builder import build_dependency_graph
 
     G = await build_dependency_graph(db_session)
@@ -48,7 +40,7 @@ async def test_build_dependency_graph_node_keys_are_strings(db_session):
         assert isinstance(node, str), f"Node key must be str (canonical_id), got {type(node)}"
 
 
-async def test_build_dependency_graph_vertex_type_title_cased(db_session):
+async def test_build_dependency_graph_vertex_type_title_cased(db_session: AsyncSession):
     """DB enum values ('repo', 'external-repo') must be mapped to title-case labels."""
     from pg_atlas.metrics.graph_builder import build_dependency_graph
 
@@ -59,7 +51,7 @@ async def test_build_dependency_graph_vertex_type_title_cased(db_session):
         assert vt in valid_types, f"Node {node!r}: unexpected vertex_type={vt!r}"
 
 
-async def test_build_dependency_graph_metadata(db_session):
+async def test_build_dependency_graph_metadata(db_session: AsyncSession):
     from pg_atlas.metrics.graph_builder import build_dependency_graph
 
     G = await build_dependency_graph(db_session)
@@ -67,7 +59,7 @@ async def test_build_dependency_graph_metadata(db_session):
     assert "reference_date" in G.graph
 
 
-async def test_build_dependency_graph_days_since_commit_type(db_session):
+async def test_build_dependency_graph_days_since_commit_type(db_session: AsyncSession):
     """days_since_commit must be int or None, never a datetime or float."""
     from pg_atlas.metrics.graph_builder import build_dependency_graph
 
@@ -77,7 +69,7 @@ async def test_build_dependency_graph_days_since_commit_type(db_session):
         assert dsc is None or isinstance(dsc, int), f"days_since_commit must be int or None, got {type(dsc)} on {node!r}"
 
 
-async def test_build_full_graph_has_project_nodes(db_session):
+async def test_build_full_graph_has_project_nodes(db_session: AsyncSession):
     from sqlalchemy import text
 
     from pg_atlas.metrics.graph_builder import build_full_graph
@@ -91,7 +83,7 @@ async def test_build_full_graph_has_project_nodes(db_session):
     assert len(project_nodes) > 0, "Expected Project nodes from projects table"
 
 
-async def test_build_full_graph_has_owns_edges(db_session):
+async def test_build_full_graph_has_owns_edges(db_session: AsyncSession):
     from sqlalchemy import text
 
     from pg_atlas.metrics.graph_builder import build_full_graph
