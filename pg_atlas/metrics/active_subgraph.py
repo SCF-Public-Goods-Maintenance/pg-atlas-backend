@@ -10,16 +10,6 @@ Ecological framing: like removing seasonally dormant organisms from a trophic
 web analysis — they may return, but their current influence on energy flow is
 negligible. Only the living, active part of the ecosystem is scored.
 
-Ported and adapted from:
-    SCF_PG-Atlas/pg_atlas/graph/active_subgraph.py
-    Author: Jay Gutierrez, PhD | SCF #41 — Building the Backbone
-
-Production adaptations:
-- Input graph carries `vertex_type` (title-cased) rather than `node_type`.
-- `days_since_commit` is computed by graph_builder from `latest_commit_date`.
-- Returns only `nx.DiGraph` (not a tuple) — dormant set is in graph metadata.
-- Dormant repos are excluded from metric computation but not from the database.
-
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
 """

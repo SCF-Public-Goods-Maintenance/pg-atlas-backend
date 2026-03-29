@@ -19,16 +19,6 @@ is exactly the set of packages that transitively depend on P.
 Chain invariant: for A -> B -> C (A depends on B, B depends on C):
     C.criticality = 2, B.criticality = 1, A.criticality = 0
 
-Ported and adapted from:
-    SCF_PG-Atlas/pg_atlas/metrics/criticality.py
-    Author: Jay Gutierrez, PhD | SCF #41 — Building the Backbone
-
-Production adaptations:
-- Node attribute is `vertex_type` (title-cased) rather than `node_type`.
-- No `edge_type` filter needed — use `build_dependency_graph` as input
-  (dep-only graph; no contributor edges present).
-- All nodes in the active subgraph are active by graph membership; no flag needed.
-
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
 """
