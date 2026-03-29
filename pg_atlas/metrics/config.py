@@ -26,15 +26,6 @@ class MetricsConfig:
     hhi_critical: int = 5000
     """HHI above this -> critically concentrated (matches standard economic definition)."""
 
-    criticality_percentile_gate: float = 50.0
-    """Criticality percentile must exceed this to pass the metric gate."""
-
-    adoption_percentile_gate: float = 40.0
-    """Adoption percentile must exceed this to pass the metric gate."""
-
-    gate_min_signals: int = 2
-    """Minimum number of passing metric signals required (2-of-3 voting)."""
-
     decay_halflife_days: float = 30.0
     """Half-life in days for temporal decay weighting of contributor activity."""
 
