@@ -1,6 +1,9 @@
-# SPDX-FileCopyrightText: 2026 PG Atlas contributors
-# SPDX-License-Identifier: MPL-2.0
-"""All tunable metric thresholds. No magic numbers in any other metrics module."""
+"""
+All tunable metric thresholds. No magic numbers in any other metrics module.
+
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
+"""
 
 from __future__ import annotations
 

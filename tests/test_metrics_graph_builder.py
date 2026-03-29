@@ -1,6 +1,9 @@
-# SPDX-FileCopyrightText: 2026 PG Atlas contributors
-# SPDX-License-Identifier: MPL-2.0
-"""Integration tests for pg_atlas.metrics.graph_builder (requires database)."""
+"""
+Integration tests for pg_atlas.metrics.graph_builder (requires database).
+
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
+"""
 
 from __future__ import annotations
 

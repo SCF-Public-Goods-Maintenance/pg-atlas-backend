@@ -1,6 +1,9 @@
-# SPDX-FileCopyrightText: 2026 PG Atlas contributors
-# SPDX-License-Identifier: MPL-2.0
-"""Unit tests for pg_atlas.metrics.criticality (no database required)."""
+"""
+Unit tests for pg_atlas.metrics.criticality (no database required).
+
+SPDX-FileCopyrightText: 2026 PG Atlas contributors
+SPDX-License-Identifier: MPL-2.0
+"""
 
 from __future__ import annotations
 
