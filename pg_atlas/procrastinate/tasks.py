@@ -19,7 +19,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 import os
 from dataclasses import dataclass
@@ -84,7 +84,7 @@ class GitHubRepoMetadata:
     default_branch: str
     stars: int
     forks: int
-    pushed_at: datetime.datetime | None
+    pushed_at: dt.datetime | None
     language: str
     topics: list[str]
 
@@ -462,7 +462,10 @@ async def process_project(
         packages: list[ProjectPackageVersion] = []
         adoption_stars = repo_info.stars
         adoption_forks = repo_info.forks
-        pushed_at: datetime.datetime | None = repo_info.pushed_at
+        # normalize datetime to UTC before DB persistence
+        pushed_at_utc: dt.datetime | None = None
+        if repo_info.pushed_at:
+            pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
 
         if depsdev_info:
             packages = depsdev_info.package_versions
@@ -486,7 +489,7 @@ async def process_project(
                 }
                 for pkg in packages
             ],
-            latest_commit_date=pushed_at.isoformat() if pushed_at is not None else None,
+            pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
         )
@@ -507,7 +510,7 @@ async def crawl_github_repo(
     packages: list[dict[str, str]],
     adoption_stars: int,
     adoption_forks: int,
-    latest_commit_date: str | None = None,
+    pushed_at_isodt: str | None = None,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -579,12 +582,12 @@ async def crawl_github_repo(
     repo_canonical_id = f"pkg:github/{owner}/{repo}"
     repo_url = f"https://github.com/{owner}/{repo}"
 
-    parsed_commit_date: datetime.datetime | None = None
-    if latest_commit_date is not None:
+    parsed_commit_date: dt.datetime | None = None
+    if pushed_at_isodt is not None:
         try:
-            parsed_commit_date = datetime.datetime.fromisoformat(latest_commit_date)
+            parsed_commit_date = dt.datetime.fromisoformat(pushed_at_isodt)
         except ValueError:
-            logger.warning("crawl_github_repo: unparseable latest_commit_date=%r", latest_commit_date)
+            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt:r}")
 
     await upsert_repo(
         canonical_id=repo_canonical_id,
