@@ -9,21 +9,18 @@ from __future__ import annotations
 
 import networkx as nx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from pg_atlas.metrics.graph_builder import build_dependency_graph, build_full_graph
 
 
 async def test_build_dependency_graph_returns_digraph(db_session: AsyncSession):
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     G = await build_dependency_graph(db_session)
     assert isinstance(G, nx.DiGraph)
 
 
 async def test_build_dependency_graph_has_nodes(db_session: AsyncSession):
-    from sqlalchemy import text
-
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     result = await db_session.execute(text("SELECT COUNT(*) FROM repo_vertices"))
     if result.scalar_one() == 0:
         pytest.skip("repo_vertices table is empty; skipping data-presence assertion")
@@ -33,8 +30,6 @@ async def test_build_dependency_graph_has_nodes(db_session: AsyncSession):
 
 
 async def test_build_dependency_graph_node_keys_are_strings(db_session: AsyncSession):
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     G = await build_dependency_graph(db_session)
     for node in G.nodes():
         assert isinstance(node, str), f"Node key must be str (canonical_id), got {type(node)}"
@@ -42,8 +37,6 @@ async def test_build_dependency_graph_node_keys_are_strings(db_session: AsyncSes
 
 async def test_build_dependency_graph_vertex_type_title_cased(db_session: AsyncSession):
     """DB enum values ('repo', 'external-repo') must be mapped to title-case labels."""
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     G = await build_dependency_graph(db_session)
     valid_types = {"Repo", "ExternalRepo"}
     for node, data in G.nodes(data=True):
@@ -52,8 +45,6 @@ async def test_build_dependency_graph_vertex_type_title_cased(db_session: AsyncS
 
 
 async def test_build_dependency_graph_metadata(db_session: AsyncSession):
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     G = await build_dependency_graph(db_session)
     assert G.graph.get("source") == "postgresql"
     assert "reference_date" in G.graph
@@ -61,8 +52,6 @@ async def test_build_dependency_graph_metadata(db_session: AsyncSession):
 
 async def test_build_dependency_graph_days_since_commit_type(db_session: AsyncSession):
     """days_since_commit must be int or None, never a datetime or float."""
-    from pg_atlas.metrics.graph_builder import build_dependency_graph
-
     G = await build_dependency_graph(db_session)
     for node, data in G.nodes(data=True):
         dsc = data.get("days_since_commit")
@@ -70,10 +59,6 @@ async def test_build_dependency_graph_days_since_commit_type(db_session: AsyncSe
 
 
 async def test_build_full_graph_has_project_nodes(db_session: AsyncSession):
-    from sqlalchemy import text
-
-    from pg_atlas.metrics.graph_builder import build_full_graph
-
     result = await db_session.execute(text("SELECT COUNT(*) FROM projects"))
     if result.scalar_one() == 0:
         pytest.skip("projects table is empty; skipping project-node assertion")
@@ -84,10 +69,6 @@ async def test_build_full_graph_has_project_nodes(db_session: AsyncSession):
 
 
 async def test_build_full_graph_has_owns_edges(db_session: AsyncSession):
-    from sqlalchemy import text
-
-    from pg_atlas.metrics.graph_builder import build_full_graph
-
     # Skip when no Repo rows have project_id set (incomplete bootstrap state).
     result = await db_session.execute(text("SELECT COUNT(*) FROM repos WHERE project_id IS NOT NULL"))
     linked_count: int = result.scalar_one()
