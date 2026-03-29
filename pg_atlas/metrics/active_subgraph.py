@@ -30,14 +30,14 @@ import logging
 
 import networkx as nx
 
-from pg_atlas.metrics.config import DEFAULT_METRICS_CONFIG, MetricsConfig
+from pg_atlas.metrics.config import METRICS_CONFIG, MetricsConfig
 
 logger = logging.getLogger(__name__)
 
 
 def project_active_subgraph(
     G: nx.DiGraph,
-    config: MetricsConfig = DEFAULT_METRICS_CONFIG,
+    config: MetricsConfig = METRICS_CONFIG,
 ) -> nx.DiGraph:
     """
     Return the induced subgraph of ecologically active nodes.

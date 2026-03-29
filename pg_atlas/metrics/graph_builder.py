@@ -27,14 +27,12 @@ from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import get_all_vertices
-from pg_atlas.metrics.config import DEFAULT_METRICS_CONFIG, MetricsConfig
 
 logger = logging.getLogger(__name__)
 
 
 async def build_dependency_graph(
     session: AsyncSession,
-    config: MetricsConfig = DEFAULT_METRICS_CONFIG,
     reference_date: datetime.date | None = None,
 ) -> nx.DiGraph:
     """
@@ -116,7 +114,6 @@ async def build_dependency_graph(
 
 async def build_full_graph(
     session: AsyncSession,
-    config: MetricsConfig = DEFAULT_METRICS_CONFIG,
     reference_date: datetime.date | None = None,
 ) -> nx.DiGraph:
     """
@@ -132,7 +129,7 @@ async def build_full_graph(
     Warning: When passing this graph to compute_criticality, use
     build_dependency_graph instead to avoid contributor edges in the subgraph.
     """
-    G = await build_dependency_graph(session, config, reference_date)
+    G = await build_dependency_graph(session, reference_date)
 
     projects: Sequence[Project] = (await session.execute(select(Project))).scalars().all()
     for proj in projects:

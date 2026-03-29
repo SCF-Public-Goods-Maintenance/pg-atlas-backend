@@ -33,4 +33,4 @@ class MetricsConfig:
     """Half-life in days for temporal decay weighting of contributor activity."""
 
 
-DEFAULT_METRICS_CONFIG = MetricsConfig()
+METRICS_CONFIG = MetricsConfig()
