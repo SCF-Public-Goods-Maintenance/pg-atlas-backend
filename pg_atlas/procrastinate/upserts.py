@@ -70,6 +70,7 @@ async def upsert_project(
     project_type: ProjectType,
     activity_status: ActivityStatus,
     git_org_url: str | None = None,
+    category: str | None = None,
     project_metadata: dict[str, Any] | None = None,
 ) -> int:
     """
@@ -91,6 +92,7 @@ async def upsert_project(
                 project_type=project_type,
                 activity_status=activity_status,
                 git_org_url=git_org_url,
+                category=category,
                 project_metadata=project_metadata,
             )
             session.add(project)
@@ -100,6 +102,8 @@ async def upsert_project(
             project.activity_status = activity_status
             if git_org_url is not None:
                 project.git_org_url = git_org_url
+            if category is not None:
+                project.category = category
             if project_metadata is not None:
                 project.project_metadata = project_metadata
 

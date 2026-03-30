@@ -260,6 +260,27 @@ async def fetch_grant_applications(
     return applications
 
 
+async def fetch_opengrants_projects(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """
+    Fetch all SCF projects from the ``/projects`` endpoint.
+
+    Returns the raw API response ``data`` items (DAOIP-5 Project dicts) with
+    full extension data including ``integrationStatus``, ``category``,
+    ``socials``, and financial fields.
+    """
+    logger.info(f"Fetching SCF projects from {BASE_URL}/projects")
+
+    projects = await _paginated_get(
+        client,
+        f"{BASE_URL}/projects",
+        {"system": "scf"},
+    )
+
+    logger.info(f"Fetched {len(projects)} projects")
+
+    return projects
+
+
 # ---------------------------------------------------------------------------
 # Mapping helpers
 # ---------------------------------------------------------------------------
@@ -275,6 +296,85 @@ def _get_ext(app: dict[str, Any], key: str) -> Any:
     """
 
     return app.get("extensions", {}).get("org.stellar.communityfund", {}).get(key)
+
+
+# Map integrationStatus strings to ActivityStatus enum values.
+_INTEGRATION_STATUS_MAP: dict[str, ActivityStatus] = {
+    "Testnet": ActivityStatus.in_dev,
+    "Development": ActivityStatus.in_dev,
+    "Idea": ActivityStatus.in_dev,
+    "Unknown": ActivityStatus.non_responsive,
+    "Abandoned": ActivityStatus.discontinued,
+    "Completed": ActivityStatus.discontinued,
+    "Mainnet": ActivityStatus.live,
+    "Live (on Mainnet)": ActivityStatus.live,
+    "Expansion": ActivityStatus.live,
+}
+
+
+def _activity_status_from_integration_status(integration_status: str | None) -> ActivityStatus:
+    """
+    Derive ``ActivityStatus`` from the project-level ``integrationStatus`` field.
+
+    Falls back to ``in_dev`` for empty/falsy or unexpected values.
+    """
+    if not integration_status:
+        return ActivityStatus.in_dev
+
+    status = _INTEGRATION_STATUS_MAP.get(integration_status)
+    if status is not None:
+        return status
+
+    logger.warning(f"Unexpected integrationStatus {integration_status!r}, defaulting to in_dev")
+
+    return ActivityStatus.in_dev
+
+
+def _extract_github_from_socials(socials: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """
+    Extract GitHub org and repo URLs from a project's ``socials`` array.
+
+    Looks for ``{"name": "GitHub", "value": "<url>"}`` entries and passes
+    them through ``parse_github_url``.
+
+    Returns:
+        ``(org_url, repo_url)`` or ``(None, None)`` if no GitHub link found.
+    """
+    for social in socials:
+        if social.get("name") == "GitHub":
+            raw = str(social.get("value", ""))
+            if raw:
+                return parse_github_url(raw)
+
+    return None, None
+
+
+def _check_project_completion(
+    canonical_id: str,
+    activity_status: ActivityStatus,
+    total_awarded_usd: float | None,
+    total_paid_usd: float | None,
+) -> None:
+    """
+    Warn if a project is marked ``live`` but has not been fully paid out.
+
+    Calculates ``project_completion = totalPaidUSD / totalAwardedUSD`` and
+    logs a warning when the status is ``live`` but completion is below 1.0.
+    """
+    if activity_status != ActivityStatus.live:
+        return
+
+    if not total_awarded_usd or total_awarded_usd <= 0:
+        return
+
+    paid = total_paid_usd or 0.0
+    completion = paid / total_awarded_usd
+
+    if completion < 1.0:
+        logger.warning(
+            f"Project {canonical_id} is live but project_completion={completion:.2f} "
+            f"(paid={paid:.0f}, awarded={total_awarded_usd:.0f})"
+        )
 
 
 def _activity_status_from_tranche(app: dict[str, Any]) -> ActivityStatus:
@@ -301,40 +401,78 @@ def _activity_status_from_tranche(app: dict[str, Any]) -> ActivityStatus:
 
 
 def _build_project_metadata(
-    app: dict[str, Any],
+    *,
+    project: dict[str, Any] | None,
+    latest_app: dict[str, Any] | None,
     scf_submissions: list[dict[str, str]],
 ) -> dict[str, Any]:
     """
     Build the ``project_metadata`` JSONB dict for a ``ScfProject``.
 
-    Extracts description, technical architecture, website, X / Twitter profile,
-    SCF category, tranche completion, and the full round-history list.
+    Merges data from both the ``/projects`` endpoint and the latest grant
+    application.  Application values win when both sources provide a value.
+    Project-level financial and social fields fill gaps.
     """
     meta: dict[str, Any] = {}
 
-    description = _get_ext(app, "org.stellar.communityfund.oneSentenceDescription")
-    if description:
-        meta["description"] = description
+    # --- From application (wins when present) ---
+    if latest_app is not None:
+        description = _get_ext(latest_app, "org.stellar.communityfund.oneSentenceDescription")
+        if description:
+            meta["description"] = description
 
-    tech_arch = _get_ext(app, "org.stellar.communityfund.technicalArchitecture")
-    if tech_arch:
-        meta["technical_architecture"] = tech_arch
+        tech_arch = _get_ext(latest_app, "org.stellar.communityfund.technicalArchitecture")
+        if tech_arch:
+            meta["technical_architecture"] = tech_arch
 
-    website = _get_ext(app, "org.stellar.communityfund.website")
-    if website:
-        meta["website"] = website
+        tranche_completion = _get_ext(latest_app, "org.stellar.communityfund.trancheCompletion")
+        if tranche_completion:
+            meta["scf_tranche_completion"] = tranche_completion
 
-    x_profile = _get_ext(app, "org.stellar.communityfund.x")
-    if x_profile:
-        meta["x_profile"] = x_profile
+    # --- From project (fills gaps, adds financial/social fields) ---
+    if project is not None:
+        scf = project.get("extensions", {}).get("org.stellar.communityfund", {})
 
-    category = _get_ext(app, "org.stellar.communityfund.category")
-    if category:
-        meta["scf_category"] = category
+        website = scf.get("org.stellar.communityfund.website")
+        if website:
+            meta.setdefault("website", website)
 
-    tranche_completion = _get_ext(app, "org.stellar.communityfund.trancheCompletion")
-    if tranche_completion:
-        meta["scf_tranche_completion"] = tranche_completion
+        x_profile = scf.get("org.stellar.communityfund.x")
+        if x_profile:
+            meta.setdefault("x_profile", x_profile)
+
+        # Financial fields (project-level only)
+        for field_key, meta_key in (
+            ("org.stellar.communityfund.totalAwardedUSD", "total_awarded_usd"),
+            ("org.stellar.communityfund.totalPaidUSD", "total_paid_usd"),
+            ("org.stellar.communityfund.awardedSubmissionsCount", "awarded_submissions_count"),
+        ):
+            val = scf.get(field_key)
+            if val is not None:
+                meta[meta_key] = val
+
+        open_source = scf.get("org.stellar.communityfund.openSource")
+        if open_source is not None:
+            meta["open_source"] = open_source
+
+        # Social / analytics URLs
+        socials = project.get("socials", [])
+        if socials:
+            meta["socials"] = socials
+
+        analytics = scf.get("org.stellar.communityfund.analytics")
+        if analytics:
+            meta["analytics"] = analytics
+
+        regions = scf.get("org.stellar.communityfund.regionsOfOperation")
+        if regions:
+            meta["regions_of_operation"] = regions
+
+    # Always include description from project description if not yet set by app
+    if "description" not in meta and project is not None:
+        proj_desc = project.get("description")
+        if proj_desc:
+            meta["description"] = proj_desc
 
     meta["scf_submissions"] = scf_submissions
 
@@ -348,14 +486,12 @@ def _map_application(
     """
     Map a single OpenGrants GrantApplication dict to an ``ScfProject``.
 
-    Uses the application's fields for scalar properties and the merged
-    ``scf_submissions`` list (accumulated across all rounds) for history.
+    Used as fallback for applications that have no matching project record.
     """
     canonical_id = app.get("projectId") or app.get("id") or ""
     display_name = _get_ext(app, "org.stellar.communityfund.project") or app.get("projectName") or ""
     activity_status = _activity_status_from_tranche(app)
 
-    # --- GitHub URL extraction ---
     git_org_url: str | None = None
     git_repo_url: str | None = None
 
@@ -372,7 +508,7 @@ def _map_application(
             git_org_url = org_url
             git_repo_url = repo_url
 
-    project_metadata = _build_project_metadata(app, scf_submissions)
+    project_metadata = _build_project_metadata(project=None, latest_app=app, scf_submissions=scf_submissions)
 
     return ScfProject(
         canonical_id=canonical_id,
@@ -384,6 +520,72 @@ def _map_application(
     )
 
 
+def _merge_project_and_applications(
+    project: dict[str, Any],
+    latest_app: dict[str, Any] | None,
+    scf_submissions: list[dict[str, str]],
+) -> ScfProject:
+    """
+    Merge data from a ``/projects`` record and its latest grant application
+    into a single ``ScfProject``.
+
+    Priority: latest application wins for fields that exist in both sources;
+    the project record fills gaps.
+    """
+    scf = project.get("extensions", {}).get("org.stellar.communityfund", {})
+    canonical_id = project.get("id", "")
+    display_name = project.get("name", "")
+
+    # --- Activity status from integrationStatus ---
+    integration_status = scf.get("org.stellar.communityfund.integrationStatus")
+    activity_status = _activity_status_from_integration_status(integration_status)
+
+    # --- Completion check ---
+    total_awarded = scf.get("org.stellar.communityfund.totalAwardedUSD")
+    total_paid = scf.get("org.stellar.communityfund.totalPaidUSD")
+    _check_project_completion(canonical_id, activity_status, total_awarded, total_paid)
+
+    # --- Category ---
+    category = scf.get("org.stellar.communityfund.category")
+
+    # --- GitHub URL: latest application first, then project socials ---
+    git_org_url: str | None = None
+    git_repo_url: str | None = None
+
+    if latest_app is not None:
+        raw_code_url = _get_ext(latest_app, "org.stellar.communityfund.code")
+
+        if raw_code_url and isinstance(raw_code_url, str):
+            org_url, repo_url = parse_github_url(raw_code_url)
+
+            if org_url is None:
+                logger.warning(f"Invalid GitHub URL in application code for project {canonical_id}: {raw_code_url!r}")
+            else:
+                git_org_url = org_url
+                git_repo_url = repo_url
+
+    if git_org_url is None:
+        socials = project.get("socials", [])
+        git_org_url, git_repo_url = _extract_github_from_socials(socials)
+
+    # --- Metadata ---
+    project_metadata = _build_project_metadata(
+        project=project,
+        latest_app=latest_app,
+        scf_submissions=scf_submissions,
+    )
+
+    return ScfProject(
+        canonical_id=canonical_id,
+        display_name=display_name,
+        activity_status=activity_status,
+        git_org_url=git_org_url,
+        git_repo_url=git_repo_url,
+        category=category,
+        project_metadata=project_metadata,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -391,25 +593,36 @@ def _map_application(
 
 async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
     """
-    Fetch all SCF projects from OpenGrants and return deduplicated ``ScfProject`` instances.
+    Fetch all SCF projects from OpenGrants and return ``ScfProject`` instances.
+
+    Merges data from the ``/projects`` endpoint with grant applications from
+    ``/grantApplications``.  The latest application wins for fields that
+    exist in both sources; the project record fills gaps.
 
     Workflow:
-        1. Fetch all grant pools (SCF rounds).
-        2. For each pool, fetch all grant applications.
-        3. Group applications by ``projectId``.
-        4. For each group, keep the **latest** application's scalar fields
-           but merge ``scf_submissions`` entries from every round.
+        1. Fetch all projects via ``/projects``.
+        2. Fetch all grant pools and their applications.
+        3. Group applications by ``projectId``, keeping the latest per project.
+        4. For each project: merge with its latest application (if any).
+        5. Log warnings for projects without applications and vice versa.
 
     Args:
-        client: A pre-configured ``httpx.AsyncClient`` (the caller controls
-            timeouts, transport, and base-URL settings).
+        client: A pre-configured ``httpx.AsyncClient``.
 
     Returns:
         A list of ``ScfProject`` dataclasses ready for ``Project`` upsert.
     """
-    pools = await fetch_grant_pools(client)
+    # --- 1. Fetch projects ---
+    raw_projects = await fetch_opengrants_projects(client)
+    projects_by_id: dict[str, dict[str, Any]] = {}
 
-    # Collect all applications across every pool / round.
+    for proj in raw_projects:
+        pid = proj.get("id", "")
+        if pid:
+            projects_by_id[pid] = proj
+
+    # --- 2. Fetch all applications across all pools ---
+    pools = await fetch_grant_pools(client)
     all_apps: list[dict[str, Any]] = []
 
     for pool in pools:
@@ -428,14 +641,11 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
 
     logger.info(f"Total applications fetched across all pools: {len(all_apps)}")
 
-    # ------------------------------------------------------------------
-    # Deduplicate by projectId — keep the latest application's fields
-    # but accumulate scf_submissions from every round.
-    # ------------------------------------------------------------------
-    # Pools are fetched in ascending order, so the last application per
-    # projectId is the most recent one.
-    project_latest: dict[str, dict[str, Any]] = {}
-    project_submissions: dict[str, list[dict[str, str]]] = {}
+    # --- 3. Group applications by projectId ---
+    # Pools are fetched ascending, so the last seen application per projectId
+    # is the most recent one.
+    app_latest: dict[str, dict[str, Any]] = {}
+    app_submissions: dict[str, list[dict[str, str]]] = {}
 
     for app_data in all_apps:
         pid = app_data.get("projectId") or app_data.get("id") or ""
@@ -446,19 +656,40 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
         project_name = app_data.get("projectName") or ""
         submission_entry = {"round": scf_round, "title": project_name}
 
-        project_submissions.setdefault(pid, []).append(submission_entry)
+        app_submissions.setdefault(pid, []).append(submission_entry)
+        app_latest[pid] = app_data
 
-        # Overwrite with the latest (last seen = newest round).
-        project_latest[pid] = app_data
+    # --- 4. Merge projects with applications ---
+    results: list[ScfProject] = []
+    seen_project_ids: set[str] = set()
 
-    # Build ScfProject instances from the deduplicated map.
-    projects: list[ScfProject] = []
+    for pid, project in projects_by_id.items():
+        seen_project_ids.add(pid)
+        latest_app = app_latest.get(pid)
+        submissions = app_submissions.get(pid, [])
 
-    for pid, latest_app in project_latest.items():
-        submissions = project_submissions.get(pid, [])
-        project = _map_application(latest_app, submissions)
-        projects.append(project)
+        if latest_app is None:
+            name = project.get("name", pid)
+            logger.warning(f"Project {pid} ({name}) has no applications")
 
-    logger.info(f"Deduplicated to {len(projects)} unique projects from {len(all_apps)} total applications")
+        scf_project = _merge_project_and_applications(project, latest_app, submissions)
+        results.append(scf_project)
 
-    return projects
+    # --- 5. Handle applications with no matching project ---
+    orphan_count = 0
+
+    for pid, latest_app in app_latest.items():
+        if pid in seen_project_ids:
+            continue
+
+        orphan_count += 1
+        submissions = app_submissions.get(pid, [])
+        scf_project = _map_application(latest_app, submissions)
+        results.append(scf_project)
+
+    if orphan_count:
+        logger.warning(f"{orphan_count} applications had no matching project record")
+
+    logger.info(f"Merged {len(projects_by_id)} projects + {len(app_latest)} app groups → {len(results)} ScfProject instances")
+
+    return results

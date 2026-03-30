@@ -371,6 +371,7 @@ async def sync_opengrants(extended_universe: bool = False) -> None:
             activity_status=proj.activity_status.value,
             git_org_url=proj.git_org_url,
             git_repo_url=proj.git_repo_url,
+            category=proj.category,
             project_metadata=proj.project_metadata,
             extended_universe=extended_universe,
         )
@@ -391,19 +392,37 @@ async def process_project(
     git_org_url: str | None,
     git_repo_url: str | None,
     project_metadata: dict[str, Any] | None,
+    category: str | None = None,
     extended_universe: bool = False,
 ) -> None:
     """
     Process a single SCF project.
 
-    1. List GitHub repos in the org (cached), or single repo if specified and not extended.
-    2. Call deps.dev ``GetProjectBatch`` to discover repo → package linkages.
-    3. Upsert a ``Project`` row.
-    4. Defer ``crawl_github_repo`` for each repo to crawl.
+    1. Upsert a ``Project`` row.
+    2. If category is "Education & Community", skip GitHub/deps.dev crawling.
+    3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
     """
     logger.info(f"process_project: {display_name} ({project_canonical_id})")
 
     status = ActivityStatus(activity_status)
+
+    # ----- Determine project type (preliminary; may be refined after deps.dev) -----
+    project_type = ProjectType.scf_project
+
+    # ----- Education & Community: upsert project row only, skip crawling -----
+    if category == "Education & Community":
+        await upsert_project(
+            canonical_id=project_canonical_id,
+            display_name=display_name,
+            project_type=project_type,
+            activity_status=status,
+            git_org_url=git_org_url,
+            category=category,
+            project_metadata=project_metadata,
+        )
+        logger.info(f"process_project: skipping crawl for Education & Community project {project_canonical_id}")
+
+        return
 
     # ----- Resolve GitHub org + repos -----
     owner: str | None = None
@@ -450,6 +469,7 @@ async def process_project(
         project_type=project_type,
         activity_status=status,
         git_org_url=git_org_url,
+        category=category,
         project_metadata=project_metadata,
     )
 
