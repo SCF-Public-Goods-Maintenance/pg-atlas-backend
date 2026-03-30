@@ -112,6 +112,10 @@ async def build_dependency_graph(
     return G
 
 
+# FIXME: why do we need a full graph in memory, ever?
+# Instead of this, we need efficient incremental processing of single SBOMs
+# and a function to condense a repo-resolution dependency graph into a project-resolution
+# dependency graph
 async def build_full_graph(
     session: AsyncSession,
     reference_date: datetime.date | None = None,

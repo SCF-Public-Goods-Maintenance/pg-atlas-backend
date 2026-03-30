@@ -37,6 +37,13 @@ def project_active_subgraph(
         2. Build induced subgraph over the active node set (copy preserves edge attrs).
         3. Annotate the returned graph with audit metadata.
 
+    # NOTE: step 1 is a workaround for the lack of `activity_status` source data.
+    # TODO: only use `project.activity_status` for active repo node selection; remove retention rules
+    # FIXME: implement the *exact* upstream propagation specified in:
+    # <https://scf-public-goods-maintenance.github.io/pg-atlas/metric-computation/#active-subgraph-projection>
+    # (the algorithm in English is the correct reference, not the example code in Python)
+
+    # FIXME: this must only take a *dependency graph* as input
     Retention rules by vertex_type:
         "Project":     Always retained — funding layer is not activity-filtered.
         "Contributor": Always retained — contributor risk layer stays intact.
