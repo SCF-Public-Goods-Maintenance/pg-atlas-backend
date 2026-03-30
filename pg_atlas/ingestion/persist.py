@@ -39,8 +39,9 @@ from sqlalchemy.orm import make_transient
 
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
+from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import store_artifact
 
@@ -192,51 +193,6 @@ async def _upsert_repo(
     await session.flush()
 
     return repo
-
-
-async def _upsert_external_repo(
-    session: AsyncSession,
-    canonical_id: str,
-    display_name: str,
-    latest_version: str,
-    repo_url: str | None,
-) -> RepoVertex:
-    """
-    Insert an ``ExternalRepo`` vertex or return/update an existing one.
-
-    Checks the JTI base table (``repo_vertices``) first.  If a vertex already
-    exists with this ``canonical_id`` — even as a ``Repo`` subtype — it is
-    returned directly without attempting a duplicate insert.  This prevents
-    ``UniqueViolationError`` when an SBOM declares a dependency whose PURL
-    matches a package that has already been ingested as a first-party ``Repo``.
-
-    ``session.flush()`` is called so the returned object has its ``id`` set.
-    """
-    # Check the shared JTI base table — canonical_id is unique across ALL subtypes.
-    result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
-    vertex = result.scalar_one_or_none()
-    if vertex is not None:
-        if isinstance(vertex, ExternalRepo):
-            vertex.display_name = display_name
-            if latest_version:
-                vertex.latest_version = latest_version
-            if repo_url:
-                vertex.repo_url = repo_url
-
-            await session.flush()
-        # If it's a Repo (within-ecosystem), leave it unchanged and use it as the edge target.
-        return vertex
-
-    ext_repo = ExternalRepo(
-        canonical_id=canonical_id,
-        display_name=display_name,
-        latest_version=latest_version,
-        repo_url=repo_url,
-    )
-    session.add(ext_repo)
-    await session.flush()
-
-    return ext_repo
 
 
 async def _replace_depends_on_edges(

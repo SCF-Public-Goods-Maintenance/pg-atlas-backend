@@ -23,9 +23,12 @@ Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (i
 changes in the working tree, summarize what is ready, and wait for the user to review before any
 commit is created.
 
-## Known Issues
+## Known Issues and PR Context
 
 As mandatory preparation for any task, use your GitHub tools to inspect all open _and_ closed issues for the current repo. Read all open issues and their comments in full. Read the closed issues in full only when they are relevant for the current task.
+
+Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if the
+feature branch is associated with a PR: read the full PR including its comments to understand the input from team members. Do not assume your PR context is up-to-date; after changes have been pulled from the upstream/remote, use your GitHub tools again to read the current PR and its comments.
 
 ---
 

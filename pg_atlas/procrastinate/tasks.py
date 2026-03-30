@@ -19,6 +19,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 from dataclasses import dataclass
@@ -83,6 +84,7 @@ class GitHubRepoMetadata:
     default_branch: str
     stars: int
     forks: int
+    pushed_at: dt.datetime | None
     language: str
     topics: list[str]
 
@@ -160,6 +162,7 @@ def _list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
                     default_branch=repo.default_branch,
                     stars=repo.stargazers_count,
                     forks=repo.forks_count,
+                    pushed_at=repo.pushed_at,
                     language=repo.language or "",
                     topics=repo.topics,
                 )
@@ -192,6 +195,7 @@ def _get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
                 default_branch=repo.default_branch,
                 stars=repo.stargazers_count,
                 forks=repo.forks_count,
+                pushed_at=repo.pushed_at,
                 language=repo.language or "",
                 topics=repo.topics,
             )
@@ -458,6 +462,10 @@ async def process_project(
         packages: list[ProjectPackageVersion] = []
         adoption_stars = repo_info.stars
         adoption_forks = repo_info.forks
+        # normalize datetime to UTC before DB persistence
+        pushed_at_utc: dt.datetime | None = None
+        if repo_info.pushed_at:
+            pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
 
         if depsdev_info:
             packages = depsdev_info.package_versions
@@ -481,6 +489,7 @@ async def process_project(
                 }
                 for pkg in packages
             ],
+            pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
         )
@@ -501,6 +510,7 @@ async def crawl_github_repo(
     packages: list[dict[str, str]],
     adoption_stars: int,
     adoption_forks: int,
+    pushed_at_isodt: str | None = None,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -572,12 +582,20 @@ async def crawl_github_repo(
     repo_canonical_id = f"pkg:github/{owner}/{repo}"
     repo_url = f"https://github.com/{owner}/{repo}"
 
+    parsed_commit_date: dt.datetime | None = None
+    if pushed_at_isodt is not None:
+        try:
+            parsed_commit_date = dt.datetime.fromisoformat(pushed_at_isodt)
+        except ValueError:
+            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt:r}")
+
     await upsert_repo(
         canonical_id=repo_canonical_id,
         display_name=repo,
         latest_version=latest_version,
         project_id=project_id,
         repo_url=repo_url,
+        latest_commit_date=parsed_commit_date,
         adoption_stars=adoption_stars,
         adoption_forks=adoption_forks,
         releases=releases if releases else None,

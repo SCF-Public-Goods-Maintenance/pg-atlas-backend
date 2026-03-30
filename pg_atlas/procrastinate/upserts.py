@@ -18,6 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any
 
@@ -34,6 +35,8 @@ from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.db_models.vertex_ops import get_vertex
+from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_ext
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,7 @@ async def upsert_repo(
     latest_version: str,
     project_id: int | None = None,
     repo_url: str | None = None,
+    latest_commit_date: datetime.datetime | None = None,
     adoption_stars: int | None = None,
     adoption_forks: int | None = None,
     releases: list[dict[str, Any]] | None = None,
@@ -140,12 +144,16 @@ async def upsert_repo(
     If a ``RepoVertex`` with the same ``canonical_id`` already exists as an
     ``ExternalRepo``, it is promoted to ``Repo`` via
     ``promote_external_to_repo``.
+
+    ``latest_commit_date`` is written only when it is greater than the
+    currently stored value (or the stored value is ``None``).  This
+    ensures that the most recent date wins regardless of whether it was
+    set by the bootstrap crawler (``pushed_at``) or the gitlog parser.
     """
     session = await _session()
 
     try:
-        result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
-        vertex = result.scalar_one_or_none()
+        vertex = await get_vertex(session, canonical_id)
 
         if vertex is not None and isinstance(vertex, ExternalRepo):
             repo_id = await _promote_external_to_repo(
@@ -155,6 +163,7 @@ async def upsert_repo(
                 latest_version=latest_version,
                 project_id=project_id,
                 repo_url=repo_url,
+                latest_commit_date=latest_commit_date,
                 adoption_stars=adoption_stars,
                 adoption_forks=adoption_forks,
                 releases=releases,
@@ -175,6 +184,10 @@ async def upsert_repo(
                 vertex.repo_url = repo_url
             if adoption_stars is not None:
                 vertex.adoption_stars = adoption_stars
+            if latest_commit_date is not None and (
+                vertex.latest_commit_date is None or latest_commit_date > vertex.latest_commit_date
+            ):
+                vertex.latest_commit_date = latest_commit_date
             if adoption_forks is not None:
                 vertex.adoption_forks = adoption_forks
             if releases is not None:
@@ -196,6 +209,7 @@ async def upsert_repo(
             latest_version=latest_version,
             project_id=project_id,
             repo_url=repo_url,
+            latest_commit_date=latest_commit_date,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
             releases=releases,
@@ -241,37 +255,17 @@ async def upsert_external_repo(
     session = await _session()
 
     try:
-        result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id))
-        vertex = result.scalar_one_or_none()
-
-        if vertex is not None:
-            if isinstance(vertex, ExternalRepo):
-                vertex.display_name = display_name
-                if latest_version:
-                    vertex.latest_version = latest_version
-                if repo_url:
-                    vertex.repo_url = repo_url
-
-                await session.flush()
-
-            # Repo or ExternalRepo — return its id either way.
-            vertex_id: int = vertex.id
-            await session.commit()
-
-            return vertex_id
-
-        ext = ExternalRepo(
+        vertex = await _upsert_ext(
+            session,
             canonical_id=canonical_id,
             display_name=display_name,
             latest_version=latest_version,
             repo_url=repo_url,
         )
-        session.add(ext)
-        await session.flush()
-        ext_id: int = ext.id
+        vertex_id: int = vertex.id
         await session.commit()
 
-        return ext_id
+        return vertex_id
 
     except Exception:
         await session.rollback()
@@ -295,6 +289,7 @@ async def _promote_external_to_repo(
     latest_version: str,
     project_id: int | None,
     repo_url: str | None,
+    latest_commit_date: datetime.datetime | None,
     adoption_stars: int | None,
     adoption_forks: int | None,
     releases: list[dict[str, Any]] | None,
@@ -337,6 +332,7 @@ async def _promote_external_to_repo(
             latest_version=latest_version,
             project_id=project_id,
             repo_url=repo_url,
+            latest_commit_date=latest_commit_date,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
             releases=releases,

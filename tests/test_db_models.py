@@ -60,7 +60,6 @@ async def _cleanup_db_rows_for_model_tests(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("db_session")
 async def test_project_roundtrip(db_session: AsyncSession) -> None:
     """Insert a Project and read it back by canonical_id."""
     proj = Project(
@@ -79,7 +78,6 @@ async def test_project_roundtrip(db_session: AsyncSession) -> None:
     assert result.updated_at is not None
 
 
-@pytest.mark.usefixtures("db_session")
 async def test_repo_vertex_roundtrip(db_session: AsyncSession) -> None:
     """Insert a Repo (JTI subtype) and confirm polymorphic identity is set correctly."""
     repo = Repo(
@@ -98,7 +96,6 @@ async def test_repo_vertex_roundtrip(db_session: AsyncSession) -> None:
     assert result.vertex_type == RepoVertexType.repo
 
 
-@pytest.mark.usefixtures("db_session")
 async def test_external_repo_roundtrip(db_session: AsyncSession) -> None:
     """Insert an ExternalRepo and confirm the JTI discriminator is set correctly."""
     ext = ExternalRepo(
@@ -119,7 +116,6 @@ async def test_external_repo_roundtrip(db_session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("db_session")
 async def test_depends_on_edge_roundtrip(db_session: AsyncSession) -> None:
     """Insert Repo → ExternalRepo depends_on edge and read it back."""
     repo = Repo(
@@ -157,7 +153,6 @@ async def test_depends_on_edge_roundtrip(db_session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("db_session")
 async def test_sbom_submission_content_hash_roundtrip(db_session: AsyncSession) -> None:
     """Verify HexBinary stores and retrieves the SHA-256 digest correctly."""
     sha256_hex = "a" * 64  # 64-char hex string = 32 bytes
