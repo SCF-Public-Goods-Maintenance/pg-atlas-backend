@@ -1,14 +1,13 @@
 """
 A6: Active Subgraph Projection.
 
-Filters the full dependency graph to the ecologically active window — the
-sub-population of repositories that have had observable commit activity within
-the configured window. Dormant repos are excluded from metric computation but
-not from the database; this is a read-only in-memory projection.
+Projects the repo-level dependency graph onto the active ecosystem: repo nodes
+that are themselves active leaves, plus every dependency reachable upstream
+from those leaves.
 
-Ecological framing: like removing seasonally dormant organisms from a trophic
-web analysis — they may return, but their current influence on energy flow is
-negligible. Only the living, active part of the ecosystem is scored.
+Ecological framing: trace energy flow from living leaves into the supporting
+substrate beneath them. A dependency remains relevant if any active leaf still
+relies on it, even if that dependency's own project is no longer marked live.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -20,108 +19,67 @@ import logging
 
 import networkx as nx
 
-from pg_atlas.metrics.config import METRICS_CONFIG, MetricsConfig
-
 logger = logging.getLogger(__name__)
 
+ACTIVE_LEAF_STATUSES = {"live", "in-dev"}
+DEP_LAYER_VERTEX_TYPES = {"Repo", "ExternalRepo"}
 
-def project_active_subgraph(
-    G: nx.DiGraph,
-    config: MetricsConfig = METRICS_CONFIG,
-) -> nx.DiGraph:
+
+def project_active_subgraph(G: nx.DiGraph) -> nx.DiGraph:
     """
-    Return the induced subgraph of ecologically active nodes.
+    Return the dep-layer subgraph reachable from active repo leaves.
 
     Algorithm (O(V + E)):
-        1. Classify every node as active or dormant using retention rules below.
-        2. Build induced subgraph over the active node set (copy preserves edge attrs).
-        3. Annotate the returned graph with audit metadata.
-
-    # NOTE: step 1 is a workaround for the lack of `activity_status` source data.
-    # TODO: only use `project.activity_status` for active repo node selection; remove retention rules
-    # FIXME: implement the *exact* upstream propagation specified in:
-    # <https://scf-public-goods-maintenance.github.io/pg-atlas/metric-computation/#active-subgraph-projection>
-    # (the algorithm in English is the correct reference, not the example code in Python)
-
-    # FIXME: this must only take a *dependency graph* as input
-    Retention rules by vertex_type:
-        "Project":     Always retained — funding layer is not activity-filtered.
-        "Contributor": Always retained — contributor risk layer stays intact.
-        "ExternalRepo": Always retained — external dependencies are critical
-                        infrastructure not under direct monitoring; absence of
-                        commit data is expected and must not trigger dormancy.
-        "Repo" with days_since_commit <= activity_window_days AND NOT archived: active.
-        "Repo" with days_since_commit is None: dormant (conservative; no data =
-            cannot confirm activity).
-        "Repo" that is archived: dormant.
-        "Repo" with days_since_commit > activity_window_days: dormant.
-        Unknown vertex_type: retained conservatively with a warning.
+        1. Restrict to dep-layer nodes only: Repo + ExternalRepo.
+        2. Seed active leaves: Repo nodes whose provisional `activity_status`
+           is `live` or `in-dev`, and whose in-degree is zero in the
+           dependency graph.
+        3. Traverse upstream by following original outgoing `depends_on` edges
+           (dependent -> dependency). Do not reverse the graph.
+        4. Return the induced subgraph over all reached dep-layer nodes.
 
     Graph metadata on returned graph:
-        active_window_days (int): configured dormancy threshold
-        nodes_retained (int): count of active nodes in returned graph
-        nodes_removed (int): count of pruned dormant nodes
-        dormant_nodes (list[str]): canonical_ids of pruned nodes (audit trail)
+        active_leaf_nodes (list[str]): canonical_ids used as traversal seeds
+        nodes_retained (int): count of dep-layer nodes in the returned graph
+        nodes_removed (int): count of dep-layer nodes excluded from the result
 
     Returns:
-        nx.DiGraph: induced subgraph copy. Mutations do not affect the original G.
-        All nodes in the returned subgraph are active by virtue of graph membership.
-        Callers do not need to check a flag.
+        nx.DiGraph: induced dep-layer subgraph copy. Mutations do not affect
+        the original graph.
+
+    Notes:
+        - Input should be the repo dependency graph from `build_dependency_graph`.
+        - Repo-level `activity_status` is consumed as-is from the parent
+          project's current provisional status materialization.
     """
-    window: int = config.activity_window_days
+    dep_nodes = {node for node, data in G.nodes(data=True) if data.get("vertex_type") in DEP_LAYER_VERTEX_TYPES}
+    G_dep = G.subgraph(dep_nodes)
 
-    active_nodes: list[str] = []
-    dormant_nodes: list[str] = []
+    active_leaves = sorted(
+        node
+        for node, data in G_dep.nodes(data=True)
+        if data.get("vertex_type") == "Repo"
+        and data.get("activity_status") in ACTIVE_LEAF_STATUSES
+        and G_dep.in_degree(node) == 0
+    )
 
-    for node, data in G.nodes(data=True):
-        vertex_type: str = data.get("vertex_type", "")
+    active_nodes = set(active_leaves)
+    for leaf in active_leaves:
+        active_nodes.update(nx.descendants(G_dep, leaf))
 
-        if vertex_type in ("Project", "Contributor"):
-            active_nodes.append(node)
-            continue
-
-        if vertex_type == "ExternalRepo":
-            # Always retain: external deps are not subject to activity filtering.
-            active_nodes.append(node)
-            continue
-
-        if vertex_type == "Repo":
-            # Pragmatic reactivation heuristic — absence of commit data ≠ permanently dormant.
-            days: int | None = data.get("days_since_commit")
-            archived: bool = bool(data.get("archived", False))
-
-            if days is None:
-                # No commit data — conservative: treat as dormant.
-                dormant_nodes.append(node)
-            elif archived:
-                dormant_nodes.append(node)
-            elif days <= window:
-                active_nodes.append(node)
-            else:
-                dormant_nodes.append(node)
-            continue
-
-        # Unknown vertex_type — retain conservatively and warn.
-        logger.warning(
-            "project_active_subgraph: unknown vertex_type=%r on node %r — retaining",
-            vertex_type,
-            node,
-        )
-        active_nodes.append(node)
-
-    G_active: nx.DiGraph = G.subgraph(active_nodes).copy()
+    G_active: nx.DiGraph = G_dep.subgraph(active_nodes).copy()
 
     G_active.graph.update(
-        active_window_days=window,
+        active_leaf_nodes=active_leaves,
         nodes_retained=len(active_nodes),
-        nodes_removed=len(dormant_nodes),
-        dormant_nodes=dormant_nodes,
+        nodes_removed=G_dep.number_of_nodes() - len(active_nodes),
     )
 
     logger.info(
-        "project_active_subgraph: %d retained, %d dormant (window=%d days)",
+        "project_active_subgraph: %d active leaves, %d retained, %d removed",
+        len(active_leaves),
         len(active_nodes),
-        len(dormant_nodes),
-        window,
+        G_dep.number_of_nodes() - len(active_nodes),
     )
+
     return G_active
