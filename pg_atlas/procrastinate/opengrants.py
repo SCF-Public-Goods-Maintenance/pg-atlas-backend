@@ -68,6 +68,7 @@ class ScfProject:
     activity_status: ActivityStatus
     git_org_url: str | None
     git_repo_url: str | None
+    category: str | None = None
     project_metadata: dict[str, Any] = field(default_factory=lambda: {})
 
 

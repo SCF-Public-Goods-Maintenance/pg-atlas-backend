@@ -53,6 +53,7 @@ class Project(PgBase):
     activity_status: Mapped[ActivityStatus] = mapped_column(
         Enum(ActivityStatus, name="activity_status", values_callable=enum_values)
     )
+    category: Mapped[str | None] = mapped_column(String(128), default=None)
     git_org_url: Mapped[str | None] = mapped_column(String(512), default=None)
 
     # --- materialized metrics (computed by background pipeline, null until first run) ---
