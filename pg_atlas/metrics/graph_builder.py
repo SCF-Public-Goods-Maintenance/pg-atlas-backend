@@ -5,8 +5,9 @@ Two entry points:
 - build_dependency_graph: dep-layer only (Repo/ExternalRepo nodes + DependsOn edges).
 - build_full_graph: dep-layer + Project nodes linked to their repos.
 
-Use build_dependency_graph as input to compute_criticality — it contains only
-dependency edges, so no edge-type filtering is required in the criticality computation.
+Use build_dependency_graph as input to active-subgraph projection and
+criticality — it contains only dependency edges, so no edge-type filtering is
+required in downstream dep-layer computations.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -43,6 +44,8 @@ async def build_dependency_graph(
     Node attributes:
         vertex_type (str): "Repo" | "ExternalRepo"  (title-cased from DB enum)
         project_id (int | None): FK to projects (Repo only; None for ExternalRepo)
+        activity_status (str | None): parent project status for Repo nodes;
+            None when the Repo has no linked Project, or for ExternalRepo nodes
         latest_commit_date (datetime.date | None): last known commit date (Repo only)
         days_since_commit (int | None): (reference_date - latest_commit_date).days;
             None when latest_commit_date is None
@@ -71,10 +74,12 @@ async def build_dependency_graph(
             commit_date = commit_dt.date() if commit_dt is not None else None
             days_since: int | None = (ref - commit_date).days if commit_date is not None else None
             project_type: str | None = rv.project.project_type.value if rv.project else None
+            activity_status: str | None = rv.project.activity_status.value if rv.project else None
             attrs: dict[str, Any] = {
                 "vertex_type": "Repo",
                 "project_id": rv.project_id,
                 "project_type": project_type,
+                "activity_status": activity_status,
                 "latest_commit_date": commit_date,
                 "days_since_commit": days_since,
                 "adoption_stars": rv.adoption_stars or 0,
@@ -85,6 +90,7 @@ async def build_dependency_graph(
                 "vertex_type": "ExternalRepo",
                 "project_id": None,
                 "project_type": None,
+                "activity_status": None,
                 "latest_commit_date": None,
                 "days_since_commit": None,
                 "adoption_stars": 0,

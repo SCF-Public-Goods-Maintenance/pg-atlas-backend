@@ -14,9 +14,6 @@ from dataclasses import dataclass
 class MetricsConfig:
     """Immutable configuration for all ecosystem health metrics."""
 
-    activity_window_days: int = 90
-    """Days since last commit before a Repo is considered dormant (one SCF round)."""
-
     pony_factor_threshold: float = 0.50
     """Single-contributor share >= this value flags pony risk."""
 
