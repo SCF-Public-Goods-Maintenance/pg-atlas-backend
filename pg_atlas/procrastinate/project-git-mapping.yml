@@ -1,7 +1,7 @@
 # project-git-mapping.yml
 #
 # Manually curated mapping of OpenGrants projectId → GitHub URLs.
-# Used by sync_opengrants to enrich projects where io.scf.code is missing.
+# Used by sync_opengrants to enrich projects where org.stellar.communityfund.code is missing.
 #
 # Structure:
 #   <projectId>:

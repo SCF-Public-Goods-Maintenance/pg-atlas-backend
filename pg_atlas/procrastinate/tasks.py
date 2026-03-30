@@ -342,7 +342,7 @@ async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool
 
 
 @app.task(queue="opengrants", queueing_lock="sync_opengrants")
-async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -> None:
+async def sync_opengrants(extended_universe: bool = False) -> None:
     """
     Root bootstrap task: fetch all SCF projects and fan out.
 
@@ -359,7 +359,7 @@ async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 
     for proj in projects:
-        # Enrich from manual mapping when io.scf.code was missing.
+        # Enrich from manual mapping when org.stellar.communityfund.code was missing.
         if proj.git_org_url is None and proj.canonical_id in git_mapping:
             mapping = git_mapping[proj.canonical_id]
             proj.git_org_url = mapping.get("git_org_url")

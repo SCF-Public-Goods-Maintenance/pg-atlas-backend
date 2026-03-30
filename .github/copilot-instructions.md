@@ -115,7 +115,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   `sync_opengrants` → `process_project` → `crawl_github_repo` → `crawl_package_deps`).
   Procrastinate schema via Alembic migration (`procrastinate_001`). deps.dev tooling
   in `pg_atlas/deps_dev/`. GitHub Actions workflows: `bootstrap.yml` (weekly), `sync-depsdev-proto.yml`
-  (daily). Manual `project-git-mapping.yml` for early-round projects missing `io.scf.code`.
+  (daily). Manual `project-git-mapping.yml` for early-round projects missing `org.stellar.communityfund.code`.
 - Not complete: ingestion of SCF Impact Survey results for activity status (still blocked).
 - A6 partly complete: Registry Crawlers incorporated in the graph bootstrapper. Active Subgraph Projection in review.
 - A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.

@@ -266,25 +266,25 @@ async def fetch_grant_applications(
 
 def _get_ext(app: dict[str, Any], key: str) -> Any:
     """
-    Retrieve a value from the ``io.scf`` extension namespace of an application.
+    Retrieve a value from the ``org.stellar.communityfund`` extension namespace of an application.
 
     The OpenGrants API nests SCF-specific fields under
-    ``extensions["io.scf"]["io.scf.<field>"]``. This helper provides concise
-    access using the full dotted key (e.g. ``"io.scf.code"``).
+    ``extensions["org.stellar.communityfund"]["org.stellar.communityfund.<field>"]``. This helper provides concise
+    access using the full dotted key (e.g. ``"org.stellar.communityfund.code"``).
     """
 
-    return app.get("extensions", {}).get("io.scf", {}).get(key)
+    return app.get("extensions", {}).get("org.stellar.communityfund", {}).get(key)
 
 
 def _activity_status_from_tranche(app: dict[str, Any]) -> ActivityStatus:
     """
-    Derive ``ActivityStatus`` from ``io.scf.trancheCompletionPercent``.
+    Derive ``ActivityStatus`` from ``org.stellar.communityfund.trancheCompletionPercent``.
 
     - Below 100 → ``in_dev`` (still actively developing or delivering).
     - 100 or above → ``live`` (shipped on mainnet; project enters maintenance).
     - Missing or non-numeric → defaults to ``in_dev``.
     """
-    raw = _get_ext(app, "io.scf.trancheCompletionPercent")
+    raw = _get_ext(app, "org.stellar.communityfund.trancheCompletionPercent")
     if raw is None:
         return ActivityStatus.in_dev
 
@@ -311,27 +311,27 @@ def _build_project_metadata(
     """
     meta: dict[str, Any] = {}
 
-    description = _get_ext(app, "io.scf.oneSentenceDescription")
+    description = _get_ext(app, "org.stellar.communityfund.oneSentenceDescription")
     if description:
         meta["description"] = description
 
-    tech_arch = _get_ext(app, "io.scf.technicalArchitecture")
+    tech_arch = _get_ext(app, "org.stellar.communityfund.technicalArchitecture")
     if tech_arch:
         meta["technical_architecture"] = tech_arch
 
-    website = _get_ext(app, "io.scf.website")
+    website = _get_ext(app, "org.stellar.communityfund.website")
     if website:
         meta["website"] = website
 
-    x_profile = _get_ext(app, "io.scf.x")
+    x_profile = _get_ext(app, "org.stellar.communityfund.x")
     if x_profile:
         meta["x_profile"] = x_profile
 
-    category = _get_ext(app, "io.scf.category")
+    category = _get_ext(app, "org.stellar.communityfund.category")
     if category:
         meta["scf_category"] = category
 
-    tranche_completion = _get_ext(app, "io.scf.trancheCompletion")
+    tranche_completion = _get_ext(app, "org.stellar.communityfund.trancheCompletion")
     if tranche_completion:
         meta["scf_tranche_completion"] = tranche_completion
 
@@ -351,20 +351,22 @@ def _map_application(
     ``scf_submissions`` list (accumulated across all rounds) for history.
     """
     canonical_id = app.get("projectId") or app.get("id") or ""
-    display_name = _get_ext(app, "io.scf.project") or app.get("projectName") or ""
+    display_name = _get_ext(app, "org.stellar.communityfund.project") or app.get("projectName") or ""
     activity_status = _activity_status_from_tranche(app)
 
     # --- GitHub URL extraction ---
     git_org_url: str | None = None
     git_repo_url: str | None = None
 
-    raw_code_url = _get_ext(app, "io.scf.code")
+    raw_code_url = _get_ext(app, "org.stellar.communityfund.code")
 
     if raw_code_url and isinstance(raw_code_url, str):
         org_url, repo_url = parse_github_url(raw_code_url)
 
         if org_url is None:
-            logger.warning(f"Invalid GitHub URL in io.scf.code for project {canonical_id}: {raw_code_url!r}")
+            logger.warning(
+                f"Invalid GitHub URL in org.stellar.communityfund.code for project {canonical_id}: {raw_code_url!r}"
+            )
         else:
             git_org_url = org_url
             git_repo_url = repo_url
@@ -439,7 +441,7 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
         if not pid:
             continue
 
-        scf_round = _get_ext(app_data, "io.scf.round") or ""
+        scf_round = _get_ext(app_data, "org.stellar.communityfund.round") or ""
         project_name = app_data.get("projectName") or ""
         submission_entry = {"round": scf_round, "title": project_name}
 
