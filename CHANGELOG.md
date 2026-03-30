@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.2.0...v0.3.0) (2026-03-30)
+
+
+### Features
+
+* **metrics:** graph builder, active subgraph, transitive criticality ([#11](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/11)) ([bf4c866](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/bf4c866444d5bae02d198acf9e4b28c166c84035))
+
 ## [0.2.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.1.0...v0.2.0) (2026-03-17)
 
 
