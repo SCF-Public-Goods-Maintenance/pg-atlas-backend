@@ -66,6 +66,8 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 
 ## Code Style
 
+These rules MUST be enforced manually. No ruff rules are available to enforce them.
+
 - Breathing space:
   - Multi-line docstrings open with a blank line after `"""` — the summary sentence begins on the
     second line. Single-line docstrings stay on one line.
@@ -75,7 +77,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   - Insert a blank line before a final `return` or terminal `raise` statement at the end of a function
     or logical section.
   - Use blank lines between adjacent control structures (like an `if` block followed by a `for` loop).
-- Prefer `f"hey {agent}!"` format strings over older string interpolation.
+- Always use `f"hey {agent}!"` format strings instead of older string interpolation.
 - Style normalization scope: apply breathing-space and interpolation to authored app/test code;
   do not mass-normalize migration/revision scripts (`pg_atlas/migrations/versions/`,
   `pg_atlas/procrastinate/versions/`) unless specifically fixing a functional defect.
