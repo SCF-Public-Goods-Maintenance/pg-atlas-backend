@@ -129,9 +129,8 @@ def get_github_client() -> Github:
             if token:
                 auth = Auth.Token(token)
                 _gh_client = Github(auth=auth)
-                # Call get_user() ONCE here to verify and log
-                user = _gh_client.get_user()
-                logger.info(f"GitHub client authenticated as {user.login}")
+                rate_limit = _gh_client.get_rate_limit()
+                logger.info(f"GitHub client authenticated — rate limit: {rate_limit.rate.remaining}/{rate_limit.rate.limit}")
             else:
                 _gh_client = Github()
                 logger.info("GitHub client initialized (unauthenticated)")

@@ -19,6 +19,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -120,6 +121,30 @@ def _auth_headers() -> dict[str, str]:
     return {}
 
 
+def _retry_delay_from_headers(headers: httpx.Headers, fallback: float) -> float:
+    """
+    Compute the retry delay from rate-limit response headers.
+
+    Checks ``x-ratelimit-reset`` (ISO-8601 timestamp) first, then
+    ``Retry-After`` (seconds).  Returns *fallback* when neither is present.
+    """
+    reset_at = headers.get("x-ratelimit-reset")
+    if reset_at:
+        try:
+            reset_dt = datetime.fromisoformat(reset_at)
+            delay = (reset_dt - datetime.now(timezone.utc)).total_seconds()
+
+            return max(delay, 0.5)
+        except ValueError:
+            pass
+
+    retry_after = headers.get("Retry-After")
+    if retry_after and retry_after.isdigit():
+        return float(retry_after)
+
+    return fallback
+
+
 async def _get_with_retry(
     client: httpx.AsyncClient,
     url: str,
@@ -129,8 +154,9 @@ async def _get_with_retry(
     Perform a GET request with exponential back-off on transient errors.
 
     Retries on HTTP 429 (rate-limited) and 5xx (server error) up to
-    ``MAX_RETRIES`` times.  Uses the ``Retry-After`` header when present,
-    otherwise doubles the delay starting from ``INITIAL_BACKOFF_S``.
+    ``MAX_RETRIES`` times.  Computes the delay from ``x-ratelimit-reset``
+    or ``Retry-After`` headers when present, otherwise doubles the delay
+    starting from ``INITIAL_BACKOFF_S``.
 
     Raises:
         httpx.HTTPStatusError: After all retries are exhausted, or on any
@@ -149,9 +175,7 @@ async def _get_with_retry(
         if not retryable or attempt == MAX_RETRIES:
             response.raise_for_status()
 
-        # Honour Retry-After if the server provides it.
-        retry_after = response.headers.get("Retry-After")
-        delay = float(retry_after) if retry_after and retry_after.isdigit() else backoff
+        delay = _retry_delay_from_headers(response.headers, fallback=backoff)
 
         logger.warning(
             "HTTP %d from %s (attempt %d/%d) — retrying in %.1fs",

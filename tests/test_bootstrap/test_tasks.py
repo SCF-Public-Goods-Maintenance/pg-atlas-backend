@@ -78,6 +78,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             activity_status=ActivityStatus.live,
             git_org_url=None,
             git_repo_url=None,
+            category="Developer Tooling",
         ),
         ScfProject(
             canonical_id="proj:with-code",
@@ -85,6 +86,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             activity_status=ActivityStatus.in_dev,
             git_org_url="https://github.com/a",
             git_repo_url="https://github.com/a/b",
+            category="Smart Contracts",
         ),
     ]
 
@@ -98,13 +100,14 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             }
         },
     )
-    mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants()
 
-    assert process_project.defer_async.call_count == 2
-    first_call = process_project.defer_async.call_args_list[0].kwargs
+    assert defer_mock.call_count == 2
+    first_call: dict[str, Any] = defer_mock.call_args_list[0].kwargs
     assert first_call["git_org_url"] == "https://github.com/enriched"
+    assert first_call["category"] == "Developer Tooling"
 
 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:
@@ -153,7 +156,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         ),
     )
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
-    mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
 
     await process_project(
         project_canonical_id="proj:1",
@@ -162,10 +165,11 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         git_org_url="https://github.com/org",
         git_repo_url=None,
         project_metadata={"k": "v"},
+        category="Developer Tooling",
     )
 
     assert upsert_project_mock.call_args.kwargs["project_type"] == ProjectType.public_good
-    call_kwargs = crawl_github_repo.defer_async.call_args.kwargs
+    call_kwargs: dict[str, Any] = crawl_defer_mock.call_args.kwargs
     assert call_kwargs["packages"] == [
         {
             "system": "PYPI",
@@ -332,3 +336,24 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
     upsert_repo_mock.assert_not_called()
     edge_mock.assert_not_called()
     defer_mock.assert_not_called()
+
+
+async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
+    upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=42))
+    list_repos_mock = mocker.patch("pg_atlas.procrastinate.tasks._list_org_repos")
+    crawl_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        project_canonical_id="proj:edu",
+        display_name="Stellar Academy",
+        activity_status="live",
+        git_org_url="https://github.com/stellar-academy",
+        git_repo_url=None,
+        project_metadata={"k": "v"},
+        category="Education & Community",
+    )
+
+    upsert_mock.assert_called_once()
+    assert upsert_mock.call_args.kwargs["category"] == "Education & Community"
+    list_repos_mock.assert_not_called()
+    crawl_mock.assert_not_called()
