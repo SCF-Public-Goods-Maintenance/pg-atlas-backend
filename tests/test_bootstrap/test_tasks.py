@@ -76,7 +76,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             canonical_id="proj:no-code",
             display_name="No Code",
             activity_status=ActivityStatus.live,
-            git_org_url=None,
+            git_owner_url=None,
             git_repo_url=None,
             category="Developer Tooling",
         ),
@@ -84,7 +84,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             canonical_id="proj:with-code",
             display_name="With Code",
             activity_status=ActivityStatus.in_dev,
-            git_org_url="https://github.com/a",
+            git_owner_url="https://github.com/a",
             git_repo_url="https://github.com/a/b",
             category="Smart Contracts",
         ),
@@ -95,7 +95,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
         "pg_atlas.procrastinate.tasks._load_git_mapping",
         return_value={
             "proj:no-code": {
-                "git_org_url": "https://github.com/enriched",
+                "git_owner_url": "https://github.com/enriched",
                 "git_repo_url": "https://github.com/enriched/repo",
             }
         },
@@ -106,7 +106,7 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
 
     assert defer_mock.call_count == 2
     first_call: dict[str, Any] = defer_mock.call_args_list[0].kwargs
-    assert first_call["git_org_url"] == "https://github.com/enriched"
+    assert first_call["git_owner_url"] == "https://github.com/enriched"
     assert first_call["category"] == "Developer Tooling"
 
 
@@ -162,7 +162,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         project_canonical_id="proj:1",
         display_name="Project 1",
         activity_status="live",
-        git_org_url="https://github.com/org",
+        git_owner_url="https://github.com/org",
         git_repo_url=None,
         project_metadata={"k": "v"},
         category="Developer Tooling",
@@ -201,6 +201,7 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
         ),
     )
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
     mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
@@ -230,6 +231,7 @@ async def test_crawl_github_repo_deduplicates_same_package(mocker: Any) -> None:
         ),
     )
     upsert_repo_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
     mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
@@ -245,8 +247,9 @@ async def test_crawl_github_repo_deduplicates_same_package(mocker: Any) -> None:
         adoption_forks=44,
     )
 
-    # 1 upsert for github repo + 1 upsert for unique package repo.
-    assert upsert_repo_mock.call_count == 2
+    # 1 upsert for github repo; per-package loop calls absorb, not upsert_repo.
+    assert upsert_repo_mock.call_count == 1
+    assert absorb_mock.call_count == 1
     assert defer_mock.call_count == 1
 
 
@@ -267,7 +270,7 @@ async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> 
         "pg_atlas.procrastinate.tasks.get_requirements",
         new=mocker.AsyncMock(return_value=[DepsDevRequirement(system="PYPI", name="requests", version_constraint=">=2")]),
     )
-    mocker.patch("pg_atlas.procrastinate.tasks.is_project_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.find_repo_by_release_purl", new=mocker.AsyncMock(return_value=None))
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_external_repo", new=mocker.AsyncMock(return_value=200))
     edge_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_depends_on", new=mocker.AsyncMock())
 
@@ -276,7 +279,7 @@ async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> 
     execute_result.one_or_none.return_value = (111,)
     session.execute = mocker.AsyncMock(return_value=execute_result)
     session_factory = mocker.Mock(return_value=session)
-    mocker.patch("pg_atlas.db_models.session.get_session_factory", return_value=session_factory)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
 
     await crawl_package_deps(
         system="PYPI",
@@ -315,8 +318,11 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
         "pg_atlas.procrastinate.tasks.get_requirements",
         new=mocker.AsyncMock(return_value=[DepsDevRequirement(system="PYPI", name="py-evm", version_constraint=">=0")]),
     )
-    mocker.patch("pg_atlas.procrastinate.tasks.is_project_repo", new=mocker.AsyncMock(return_value=True))
-    upsert_repo_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=200))
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.find_repo_by_release_purl",
+        new=mocker.AsyncMock(return_value=(200, "pkg:github/ethereum/py-evm", 42)),
+    )
+    upsert_ext_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_external_repo", new=mocker.AsyncMock(return_value=200))
     edge_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_depends_on", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
@@ -325,7 +331,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
     execute_result.one_or_none.return_value = (111,)
     session.execute = mocker.AsyncMock(return_value=execute_result)
     session_factory = mocker.Mock(return_value=session)
-    mocker.patch("pg_atlas.db_models.session.get_session_factory", return_value=session_factory)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
 
     await crawl_package_deps(
         system="PYPI",
@@ -333,7 +339,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
         source_repo_canonical_id="pkg:pypi/py-evm",
     )
 
-    upsert_repo_mock.assert_not_called()
+    upsert_ext_mock.assert_not_called()
     edge_mock.assert_not_called()
     defer_mock.assert_not_called()
 
@@ -347,7 +353,7 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
         project_canonical_id="proj:edu",
         display_name="Stellar Academy",
         activity_status="live",
-        git_org_url="https://github.com/stellar-academy",
+        git_owner_url="https://github.com/stellar-academy",
         git_repo_url=None,
         project_metadata={"k": "v"},
         category="Education & Community",
