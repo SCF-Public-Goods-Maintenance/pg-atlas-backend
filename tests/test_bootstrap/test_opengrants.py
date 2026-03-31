@@ -201,7 +201,7 @@ async def test_fetch_grant_applications(mocker: pytest_mock.MockerFixture) -> No
 @pytest.mark.slow
 def test_map_application_extracts_urls(opengrants_round30_apps: list[dict[str, Any]]) -> None:
     project = _map_application(opengrants_round30_apps[0], [])
-    assert project.git_org_url is not None
+    assert project.git_owner_url is not None
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +270,7 @@ def test_merge_project_and_applications() -> None:
     assert result.canonical_id == "daoip-5:scf:project:test"
     assert result.display_name == "Test Project"
     assert result.activity_status == ActivityStatus.live
-    assert result.git_org_url == "https://github.com/test-org"
+    assert result.git_owner_url == "https://github.com/test-org"
     assert result.git_repo_url == "https://github.com/test-org/test-repo"
     assert result.category == "Developer Tooling"
     assert result.project_metadata["description"] == "A test project description"
@@ -289,7 +289,7 @@ def test_merge_project_no_app_uses_socials_for_github() -> None:
     }
     result = _merge_project_and_applications(project, None, [])
 
-    assert result.git_org_url == "https://github.com/stellar"
+    assert result.git_owner_url == "https://github.com/stellar"
     assert result.git_repo_url == "https://github.com/stellar/go"
     assert result.activity_status == ActivityStatus.in_dev
 

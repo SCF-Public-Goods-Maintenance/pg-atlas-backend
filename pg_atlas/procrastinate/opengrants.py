@@ -67,7 +67,7 @@ class ScfProject:
     canonical_id: str
     display_name: str
     activity_status: ActivityStatus
-    git_org_url: str | None
+    git_owner_url: str | None
     git_repo_url: str | None
     category: str | None = None
     project_metadata: dict[str, Any] = field(default_factory=lambda: {})
@@ -516,7 +516,7 @@ def _map_application(
     display_name = _get_ext(app, "org.stellar.communityfund.project") or app.get("projectName") or ""
     activity_status = _activity_status_from_tranche(app)
 
-    git_org_url: str | None = None
+    git_owner_url: str | None = None
     git_repo_url: str | None = None
 
     raw_code_url = _get_ext(app, "org.stellar.communityfund.code")
@@ -529,7 +529,7 @@ def _map_application(
                 f"Invalid GitHub URL in org.stellar.communityfund.code for project {canonical_id}: {raw_code_url!r}"
             )
         else:
-            git_org_url = org_url
+            git_owner_url = org_url
             git_repo_url = repo_url
 
     project_metadata = _build_project_metadata(project=None, latest_app=app, scf_submissions=scf_submissions)
@@ -538,7 +538,7 @@ def _map_application(
         canonical_id=canonical_id,
         display_name=display_name,
         activity_status=activity_status,
-        git_org_url=git_org_url,
+        git_owner_url=git_owner_url,
         git_repo_url=git_repo_url,
         project_metadata=project_metadata,
     )
@@ -573,7 +573,7 @@ def _merge_project_and_applications(
     category = scf.get("org.stellar.communityfund.category")
 
     # --- GitHub URL: latest application first, then project socials ---
-    git_org_url: str | None = None
+    git_owner_url: str | None = None
     git_repo_url: str | None = None
 
     if latest_app is not None:
@@ -585,12 +585,12 @@ def _merge_project_and_applications(
             if org_url is None:
                 logger.warning(f"Invalid GitHub URL in application code for project {canonical_id}: {raw_code_url!r}")
             else:
-                git_org_url = org_url
+                git_owner_url = org_url
                 git_repo_url = repo_url
 
-    if git_org_url is None:
+    if git_owner_url is None:
         socials = project.get("socials", [])
-        git_org_url, git_repo_url = _extract_github_from_socials(socials)
+        git_owner_url, git_repo_url = _extract_github_from_socials(socials)
 
     # --- Metadata ---
     project_metadata = _build_project_metadata(
@@ -603,7 +603,7 @@ def _merge_project_and_applications(
         canonical_id=canonical_id,
         display_name=display_name,
         activity_status=activity_status,
-        git_org_url=git_org_url,
+        git_owner_url=git_owner_url,
         git_repo_url=git_repo_url,
         category=category,
         project_metadata=project_metadata,
