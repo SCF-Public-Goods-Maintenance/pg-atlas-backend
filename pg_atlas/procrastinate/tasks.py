@@ -20,6 +20,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -31,13 +32,18 @@ import httpx
 import yaml
 from github import Auth, Github, GithubException
 from procrastinate.exceptions import AlreadyEnqueued
+from sqlalchemy import select
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
+from pg_atlas.db_models.repo_vertex import RepoVertex
+from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.ingestion.persist import strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
+    DepsDevProjectInfo,
     ProjectPackageVersion,
+    depsdev_session,
     get_package,
     get_project_batch,
     get_project_package_versions,
@@ -45,8 +51,9 @@ from pg_atlas.procrastinate.depsdev import (
 )
 from pg_atlas.procrastinate.opengrants import fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
+    absorb_external_repo,
     associate_repo_with_project,
-    is_project_repo,
+    find_repo_by_release_purl,
     upsert_depends_on,
     upsert_external_repo,
     upsert_project,
@@ -129,9 +136,8 @@ def get_github_client() -> Github:
             if token:
                 auth = Auth.Token(token)
                 _gh_client = Github(auth=auth)
-                # Call get_user() ONCE here to verify and log
-                user = _gh_client.get_user()
-                logger.info(f"GitHub client authenticated as {user.login}")
+                rate_limit = _gh_client.get_rate_limit()
+                logger.info(f"GitHub client authenticated — rate limit: {rate_limit.rate.remaining}/{rate_limit.rate.limit}")
             else:
                 _gh_client = Github()
                 logger.info("GitHub client initialized (unauthenticated)")
@@ -174,7 +180,12 @@ def _list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return repos
 
     except GithubException as exc:
-        logger.error(f"GitHub API error listing repos for {owner}: {exc}")
+        if exc.status == 404:
+            logger.warning(f"GitHub org/user not found (404): {owner}")
+        elif exc.status == 403:
+            logger.warning(f"GitHub org/user forbidden (403): {owner}")
+        else:
+            logger.error(f"GitHub API error listing repos for {owner}: {exc}")
 
         return []
 
@@ -202,7 +213,11 @@ def _get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
         ]
 
     except GithubException as exc:
-        logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
+        if exc.status in (404, 409):
+            msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
+            logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} — {msg}")
+        else:
+            logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
 
         return []
 
@@ -231,8 +246,6 @@ def _detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageRefere
         if "package.json" in filenames:
             # Try to read the actual package name from package.json.
             try:
-                import json
-
                 pj = repo.get_contents("package.json")
                 pkg_data = json.loads(pj.decoded_content)  # type: ignore[union-attr]
                 npm_name = pkg_data.get("name", repo_name)
@@ -289,8 +302,13 @@ def _latest_version_from_repo(owner: str, repo_name: str) -> str:
             for commit in commits:
                 return commit.sha
 
-        except GithubException:
-            logger.error(f"Error fetching latest commit for {repo_path}", exc_info=True)
+        except GithubException as exc:
+            # 409 = "Git Repository is empty." — expected for empty repos.
+            # 404 = commits endpoint missing — also benign.
+            if exc.status in (404, 409):
+                logger.warning(f"No commits in {repo_path}: HTTP {exc.status}")
+            else:
+                logger.error(f"Error fetching latest commit for {repo_path}", exc_info=True)
 
     except GithubException:
         # Handles cases like repository not found or permission denied
@@ -308,7 +326,7 @@ def _load_git_mapping() -> dict[str, dict[str, str]]:
     """
     Load the project → git URL mapping YAML file.
 
-    Returns a dict mapping ``projectId`` → ``{git_org_url, git_repo_url}``.
+    Returns a dict mapping ``projectId`` → ``{git_owner_url, git_repo_url}``.
     """
     if not _MAPPING_PATH.exists():
         return {}
@@ -342,7 +360,7 @@ async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool
 
 
 @app.task(queue="opengrants", queueing_lock="sync_opengrants")
-async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -> None:
+async def sync_opengrants(extended_universe: bool = False) -> None:
     """
     Root bootstrap task: fetch all SCF projects and fan out.
 
@@ -359,18 +377,19 @@ async def sync_opengrants(timestamp: int = 0, extended_universe: bool = False) -
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 
     for proj in projects:
-        # Enrich from manual mapping when io.scf.code was missing.
-        if proj.git_org_url is None and proj.canonical_id in git_mapping:
+        # Enrich from manual mapping when org.stellar.communityfund.code was missing.
+        if proj.git_owner_url is None and proj.canonical_id in git_mapping:
             mapping = git_mapping[proj.canonical_id]
-            proj.git_org_url = mapping.get("git_org_url")
+            proj.git_owner_url = mapping.get("git_owner_url")
             proj.git_repo_url = mapping.get("git_repo_url")
 
         await process_project.defer_async(
             project_canonical_id=proj.canonical_id,
             display_name=proj.display_name,
             activity_status=proj.activity_status.value,
-            git_org_url=proj.git_org_url,
+            git_owner_url=proj.git_owner_url,
             git_repo_url=proj.git_repo_url,
+            category=proj.category,
             project_metadata=proj.project_metadata,
             extended_universe=extended_universe,
         )
@@ -388,28 +407,46 @@ async def process_project(
     project_canonical_id: str,
     display_name: str,
     activity_status: str,
-    git_org_url: str | None,
+    git_owner_url: str | None,
     git_repo_url: str | None,
     project_metadata: dict[str, Any] | None,
+    category: str | None = None,
     extended_universe: bool = False,
 ) -> None:
     """
     Process a single SCF project.
 
-    1. List GitHub repos in the org (cached), or single repo if specified and not extended.
-    2. Call deps.dev ``GetProjectBatch`` to discover repo → package linkages.
-    3. Upsert a ``Project`` row.
-    4. Defer ``crawl_github_repo`` for each repo to crawl.
+    1. Upsert a ``Project`` row.
+    2. If category is "Education & Community", skip GitHub/deps.dev crawling.
+    3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
     """
     logger.info(f"process_project: {display_name} ({project_canonical_id})")
 
     status = ActivityStatus(activity_status)
 
+    # ----- Determine project type (preliminary; may be refined after deps.dev) -----
+    project_type = ProjectType.scf_project
+
+    # ----- Education & Community: upsert project row only, skip crawling -----
+    if category == "Education & Community":
+        await upsert_project(
+            canonical_id=project_canonical_id,
+            display_name=display_name,
+            project_type=project_type,
+            activity_status=status,
+            git_owner_url=git_owner_url,
+            category=category,
+            project_metadata=project_metadata,
+        )
+        logger.info(f"process_project: skipping crawl for Education & Community project {project_canonical_id}")
+
+        return
+
     # ----- Resolve GitHub org + repos -----
     owner: str | None = None
-    if git_org_url:
+    if git_owner_url:
         # "https://github.com/<owner>" → "<owner>"
-        owner = git_org_url.rstrip("/").rsplit("/", 1)[-1]
+        owner = git_owner_url.rstrip("/").rsplit("/", 1)[-1]
 
     repos_to_crawl: list[GitHubRepoMetadata] = []
     if owner:
@@ -418,26 +455,29 @@ async def process_project(
         else:
             repo_name = git_repo_url.rstrip("/").rsplit("/", 1)[-1]
             repos_to_crawl = _get_single_repo(owner, repo_name)
-            logger.info(f"Restricting {git_org_url} crawl to {repo_name} only.")
+            logger.info(f"Restricting {git_owner_url} crawl to {repo_name} only.")
 
     # ----- deps.dev GetProjectBatch -----
     # Build project IDs of the form "github.com/owner/repo".
     repo_project_ids = [f"github.com/{repo.full_name}" for repo in repos_to_crawl]
 
-    depsdev_projects: dict[str, Any] = {}
+    depsdev_projects: dict[str, DepsDevProjectInfo] = {}
     if repo_project_ids:
         try:
-            depsdev_projects = await get_project_batch(
-                [pid.lower() for pid in repo_project_ids],
-            )
+            async with depsdev_session() as stub:
+                depsdev_projects = await get_project_batch(
+                    [pid.lower() for pid in repo_project_ids],
+                    stub=stub,
+                )
+
+                for project_key, proj_info in depsdev_projects.items():
+                    try:
+                        proj_info.package_versions = await get_project_package_versions(project_key, stub=stub)
+                    except DepsDevError as exc:
+                        logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
+
         except DepsDevError as exc:
             logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
-
-    for project_key, depsdev_info in depsdev_projects.items():
-        try:
-            depsdev_info.package_versions = await get_project_package_versions(project_key)
-        except DepsDevError as exc:
-            logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
 
     # ----- Determine project type -----
     has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
@@ -449,7 +489,8 @@ async def process_project(
         display_name=display_name,
         project_type=project_type,
         activity_status=status,
-        git_org_url=git_org_url,
+        git_owner_url=git_owner_url,
+        category=category,
         project_metadata=project_metadata,
     )
 
@@ -543,23 +584,24 @@ async def crawl_github_repo(
 
     # ----- Build releases from package info -----
     releases: list[dict[str, Any]] = []
-    for pkg in packages_to_process:
-        system = pkg.system
-        name = pkg.name
+    async with depsdev_session() as stub:
+        for pkg in packages_to_process:
+            system = pkg.system
+            name = pkg.name
 
-        try:
-            pkg_info = await get_package(system, name)
-            for v in pkg_info.versions:
-                releases.append(
-                    {
-                        "version": v.version,
-                        "release_date": v.published_at,
-                        "purl": strip_purl_version(v.purl),
-                    }
-                )
+            try:
+                pkg_info = await get_package(system, name, stub=stub)
+                for v in pkg_info.versions:
+                    releases.append(
+                        {
+                            "version": v.version,
+                            "release_date": v.published_at,
+                            "purl": strip_purl_version(v.purl),
+                        }
+                    )
 
-        except DepsDevError:
-            logger.debug(f"Package not found on deps.dev: {system}/{name}")
+            except DepsDevError:
+                logger.debug(f"Package not found on deps.dev: {system}/{name}")
 
     if len(releases) > _MAX_RELEASE_ENTRIES:
         logger.warning(
@@ -589,7 +631,7 @@ async def crawl_github_repo(
         except ValueError:
             logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt:r}")
 
-    await upsert_repo(
+    repo_vertex_id = await upsert_repo(
         canonical_id=repo_canonical_id,
         display_name=repo,
         latest_version=latest_version,
@@ -601,7 +643,7 @@ async def crawl_github_repo(
         releases=releases if releases else None,
     )
 
-    # ----- For each package: promote ExternalRepo → Repo if needed -----
+    # ----- For each package: absorb ExternalRepo if one exists -----
     for pkg in packages_to_process:
         system = pkg.system
         name = pkg.name
@@ -613,14 +655,13 @@ async def crawl_github_repo(
         else:
             pkg_canonical_id = name.lower()
 
-        # Upsert a Repo for this package, merging it with the github repo vertex's project.
-        await upsert_repo(
-            canonical_id=pkg_canonical_id,
-            display_name=name,
-            latest_version=latest_version,
-            project_id=project_id,
-            repo_url=repo_url,
-        )
+        # If an ExternalRepo exists for this package, absorb it into the
+        # Repo vertex — re-pointing all DependsOn edges to preserve SBOM
+        # and crawler edges.
+        absorbed = await absorb_external_repo(pkg_canonical_id, repo_vertex_id)
+
+        if absorbed:
+            logger.info(f"Absorbed ExternalRepo {pkg_canonical_id} into Repo {repo_canonical_id}")
 
     # ----- Associate the github repo vertex with the project -----
     await associate_repo_with_project(repo_canonical_id, project_id)
@@ -661,35 +702,35 @@ async def crawl_package_deps(
     1. Call deps.dev ``GetPackage`` to find the default version.
     2. Call deps.dev ``GetRequirements`` for that version.
     3. For each requirement:
-       - Check if the dep is linked to a known Project (→ ``Repo``).
-       - Else upsert ``ExternalRepo``.
+       - Look up the dep's package PURL in existing Repos' ``releases``.
+       - If found → edge to that Repo; recurse only if it has a ``project_id``.
+       - If not found → upsert ``ExternalRepo``; no recursion.
        - Upsert ``DependsOn`` edge with ``confidence=inferred_shadow``.
-    4. If the dep is a ``Repo``, recurse by deferring another
-       ``crawl_package_deps`` task.
     """
     logger.info(f"crawl_package_deps: {system}/{package_name}")
 
     # ----- Get package info to find default version -----
-    try:
-        pkg_info = await get_package(system, package_name)
-    except DepsDevError as exc:
-        logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
+    async with depsdev_session() as stub:
+        try:
+            pkg_info = await get_package(system, package_name, stub=stub)
+        except DepsDevError as exc:
+            logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
 
-        return
+            return
 
-    version = pkg_info.default_version
-    if not version:
-        logger.warning(f"No default version for {system}/{package_name} - skipping")
+        version = pkg_info.default_version
+        if not version:
+            logger.warning(f"No default version for {system}/{package_name} - skipping")
 
-        return
+            return
 
-    # ----- Get requirements -----
-    try:
-        reqs = await get_requirements(system, package_name, version)
-    except DepsDevError as exc:
-        logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
+        # ----- Get requirements -----
+        try:
+            reqs = await get_requirements(system, package_name, version, stub=stub)
+        except DepsDevError as exc:
+            logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
 
-        return
+            return
 
     if not reqs:
         logger.info(f"No requirements for {system}/{package_name}@{version}")
@@ -697,15 +738,10 @@ async def crawl_package_deps(
         return
 
     # ----- Resolve source vertex ID from explicit caller argument -----
-    from pg_atlas.db_models.repo_vertex import RepoVertex
-    from pg_atlas.db_models.session import get_session_factory
-
     factory = get_session_factory()
     session = factory()
 
     try:
-        from sqlalchemy import select
-
         result = await session.execute(select(RepoVertex.id).where(RepoVertex.canonical_id == source_repo_canonical_id))
         row = result.one_or_none()
 
@@ -729,16 +765,11 @@ async def crawl_package_deps(
 
             continue
 
-        # Check if this dependency belongs to a known Project (already a Repo).
-        dep_is_project_repo = await is_project_repo(dep_canonical_id)
+        # Look up the dependency's package PURL in existing Repos' releases.
+        repo_match = await find_repo_by_release_purl(dep_canonical_id)
 
-        if dep_is_project_repo:
-            # It's a known Repo — upsert it (no change, but get ID) and recurse.
-            dep_vertex_id = await upsert_repo(
-                canonical_id=dep_canonical_id,
-                display_name=req.name,
-                latest_version=req.version_constraint,
-            )
+        if repo_match is not None:
+            dep_vertex_id, repo_canonical_id, project_id = repo_match
 
             await upsert_depends_on(
                 in_vertex_id=source_vertex_id,
@@ -746,14 +777,15 @@ async def crawl_package_deps(
                 version_range=req.version_constraint,
             )
 
-            # Recurse into Repo's own dependencies.
-            await _defer_with_lock(
-                crawl_package_deps,
-                queueing_lock=f"{req.system}:{req.name}",
-                system=req.system,
-                package_name=req.name,
-                source_repo_canonical_id=dep_canonical_id,
-            )
+            # Recurse only if the Repo belongs to a tracked Project.
+            if project_id is not None:
+                await _defer_with_lock(
+                    crawl_package_deps,
+                    queueing_lock=f"{req.system}:{req.name}",
+                    system=req.system,
+                    package_name=req.name,
+                    source_repo_canonical_id=repo_canonical_id,
+                )
 
         else:
             # External dependency — upsert ExternalRepo, no recursion.

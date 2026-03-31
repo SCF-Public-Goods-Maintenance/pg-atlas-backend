@@ -180,8 +180,17 @@ T = TypeVar("T")
 
 
 @asynccontextmanager
-async def _depsdev_stub() -> AsyncIterator[InsightsStub]:
-    """Yield a short-lived async ``InsightsStub`` backed by a TLS channel."""
+async def depsdev_session() -> AsyncIterator[InsightsStub]:
+    """
+    Yield a reusable ``InsightsStub`` backed by a single TLS channel.
+
+    Use this when making multiple deps.dev calls in the same task to
+    avoid per-call channel creation overhead::
+
+        async with depsdev_session() as stub:
+            info = await get_package("PYPI", "stellar-sdk", stub=stub)
+            reqs = await get_requirements("PYPI", "stellar-sdk", "1.0", stub=stub)
+    """
     channel = Channel(host=_DEPSDEV_HOST, port=_DEPSDEV_PORT, ssl=True)
     try:
         yield InsightsStub(channel)
@@ -189,10 +198,13 @@ async def _depsdev_stub() -> AsyncIterator[InsightsStub]:
         channel.close()
 
 
-async def _run_with_stub(call: Callable[[InsightsStub], Awaitable[T]]) -> T:
-    """Run one RPC call with a temporary stub and return its response."""
-    async with _depsdev_stub() as stub:
+async def _run_with_stub(call: Callable[[InsightsStub], Awaitable[T]], stub: InsightsStub | None = None) -> T:
+    """Run one RPC call, reusing *stub* if given or creating an ephemeral one."""
+    if stub is not None:
         return await call(stub)
+
+    async with depsdev_session() as ephemeral:
+        return await call(ephemeral)
 
 
 def _is_not_found_error(exc: Exception) -> bool:
@@ -219,21 +231,22 @@ def _system_enum_to_name(system: System | int) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _get_package_message(system: str, name: str) -> Package:
+async def _get_package_message(system: str, name: str, *, stub: InsightsStub | None = None) -> Package:
     """Fetch the raw ``Package`` protobuf message from deps.dev."""
     sys_enum = _system_name_to_enum(system)
     request = GetPackageRequest(package_key=PackageKey(system=sys_enum, name=name))
 
-    return await _run_with_stub(lambda stub: stub.get_package(request))
+    return await _run_with_stub(lambda s: s.get_package(request), stub)
 
 
-async def get_package(system: str, name: str) -> DepsDevPackageInfo:
+async def get_package(system: str, name: str, *, stub: InsightsStub | None = None) -> DepsDevPackageInfo:
     """
     Fetch package metadata from deps.dev.
 
     Args:
         system: Upper-case system name (``"PYPI"``, ``"NPM"``, …).
         name: Package name as known to the registry.
+        stub: Optional reusable ``InsightsStub`` from ``depsdev_session()``.
 
     Returns:
         A ``DepsDevPackageInfo`` with version list and default version.
@@ -242,7 +255,7 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
         DepsDevError: On gRPC errors other than NOT_FOUND.
     """
     try:
-        pkg = await _get_package_message(system, name)
+        pkg = await _get_package_message(system, name, stub=stub)
     except (GRPCError, grpc.RpcError) as exc:
         if _is_not_found_error(exc):
             raise DepsDevError(f"Package not found: {system}/{name}") from exc
@@ -283,12 +296,12 @@ async def get_package(system: str, name: str) -> DepsDevPackageInfo:
 # ---------------------------------------------------------------------------
 
 
-async def _get_requirements_message(system: str, name: str, version: str) -> Requirements:
+async def _get_requirements_message(system: str, name: str, version: str, *, stub: InsightsStub | None = None) -> Requirements:
     """Fetch the raw ``Requirements`` protobuf message from deps.dev."""
     sys_enum = _system_name_to_enum(system)
     request = GetRequirementsRequest(version_key=VersionKey(system=sys_enum, name=name, version=version))
 
-    return await _run_with_stub(lambda stub: stub.get_requirements(request))
+    return await _run_with_stub(lambda s: s.get_requirements(request), stub)
 
 
 def _extract_requirements(system: str, reqs: Requirements) -> list[DepsDevRequirement]:
@@ -344,7 +357,13 @@ def _extract_requirements(system: str, reqs: Requirements) -> list[DepsDevRequir
     return out
 
 
-async def get_requirements(system: str, name: str, version: str) -> list[DepsDevRequirement]:
+async def get_requirements(
+    system: str,
+    name: str,
+    version: str,
+    *,
+    stub: InsightsStub | None = None,
+) -> list[DepsDevRequirement]:
     """
     Fetch unresolved (declared) requirements for a specific package version.
 
@@ -352,6 +371,7 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
         system: Upper-case system name.
         name: Package name.
         version: Exact version string.
+        stub: Optional reusable ``InsightsStub`` from ``depsdev_session()``.
 
     Returns:
         A list of ``DepsDevRequirement`` (runtime deps only).
@@ -360,7 +380,7 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
         DepsDevError: On gRPC errors other than NOT_FOUND (which returns ``[]``).
     """
     try:
-        reqs = await _get_requirements_message(system, name, version)
+        reqs = await _get_requirements_message(system, name, version, stub=stub)
     except (GRPCError, grpc.RpcError) as exc:
         if _is_not_found_error(exc):
             logger.info(f"No requirements found for {system}/{name}@{version} (NOT_FOUND)")
@@ -379,18 +399,20 @@ async def get_requirements(system: str, name: str, version: str) -> list[DepsDev
 # ---------------------------------------------------------------------------
 
 
-async def _get_project_batch_page(project_ids: list[str], page_token: str = "") -> tuple[list[Any], str]:
+async def _get_project_batch_page(
+    project_ids: list[str], page_token: str = "", *, stub: InsightsStub | None = None
+) -> tuple[list[Any], str]:
     """Fetch one GetProjectBatch page and return ``(responses, next_page_token)``."""
     req = GetProjectBatchRequest(
         requests=[GetProjectRequest(project_key=ProjectKey(id=pid)) for pid in project_ids],
         page_token=page_token,
     )
-    batch = await _run_with_stub(lambda stub: stub.get_project_batch(req))
+    batch = await _run_with_stub(lambda s: s.get_project_batch(req), stub)
 
     return list(batch.responses), batch.next_page_token
 
 
-async def get_project_package_versions(project_id: str) -> list[ProjectPackageVersion]:
+async def get_project_package_versions(project_id: str, *, stub: InsightsStub | None = None) -> list[ProjectPackageVersion]:
     """
     Fetch package-version mappings for one project.
 
@@ -398,7 +420,7 @@ async def get_project_package_versions(project_id: str) -> list[ProjectPackageVe
     """
     req = GetProjectPackageVersionsRequest(project_key=ProjectKey(id=project_id))
     try:
-        response = await _run_with_stub(lambda stub: stub.get_project_package_versions(req))
+        response = await _run_with_stub(lambda s: s.get_project_package_versions(req), stub)
     except (GRPCError, grpc.RpcError) as exc:
         if _is_not_found_error(exc):
             return []
@@ -430,7 +452,7 @@ async def get_project_package_versions(project_id: str) -> list[ProjectPackageVe
     return package_versions
 
 
-async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectInfo]:
+async def get_project_batch(project_ids: list[str], *, stub: InsightsStub | None = None) -> dict[str, DepsDevProjectInfo]:
     """
     Fetch project metadata for a batch of project identifiers.
 
@@ -439,6 +461,7 @@ async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectI
 
     Args:
         project_ids: List of project identifiers.
+        stub: Optional reusable ``InsightsStub`` from ``depsdev_session()``.
 
     Returns:
         A dict mapping each found project ID to its ``DepsDevProjectInfo``.
@@ -454,7 +477,7 @@ async def get_project_batch(project_ids: list[str]) -> dict[str, DepsDevProjectI
 
     while True:
         try:
-            responses, next_token = await _get_project_batch_page(project_ids, page_token)
+            responses, next_token = await _get_project_batch_page(project_ids, page_token, stub=stub)
         except (GRPCError, grpc.RpcError) as exc:
             if _is_not_found_error(exc):
                 logger.info("No projects found in batch (NOT_FOUND)")

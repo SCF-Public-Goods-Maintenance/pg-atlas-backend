@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -111,7 +111,7 @@ class Repo(RepoVertex):
     # --- project membership (optional: we may ingest SBOMs before the project exists) ---
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), default=None)
     latest_commit_date: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    repo_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    repo_url: Mapped[str | None] = mapped_column(String(512), default=None, unique=True)
 
     # --- materialised metrics ---
     pony_factor: Mapped[int | None] = mapped_column(default=None)
@@ -160,6 +160,13 @@ class Repo(RepoVertex):
         repr=False,
     )
 
+
+idx_releases = Index(
+    "ix_repos_releases_gin",
+    Repo.releases,
+    postgresql_using="gin",
+    postgresql_ops={"releases": "jsonb_path_ops"},
+)
 
 # ---------------------------------------------------------------------------
 # Concrete subtype: ExternalRepo

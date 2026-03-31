@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
@@ -16,10 +17,15 @@ import pytest
 FIXTURES = Path(__file__).resolve().parent / "data_fixtures"
 
 
-def _load_fixture(name: str) -> Any:
-    """Load a JSON fixture file by name."""
+def _load_fixture(name: str, gunzip: bool = False) -> Any:
+    """Load a JSON fixture file by name, optionally decompressing gzip."""
 
-    return json.loads((FIXTURES / name).read_text())
+    path = FIXTURES / name
+    if gunzip:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return json.load(f)
+
+    return json.loads(path.read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -29,30 +35,44 @@ def _load_fixture(name: str) -> Any:
 
 @pytest.fixture
 def opengrants_pools() -> list[dict[str, Any]]:
-    """3 SCF grant pools."""
+    """All SCF grant pools (48 rounds)."""
 
-    return _load_fixture("opengrants_pools.json")["data"]
+    return _load_fixture("opengrants_pools.json.gz", gunzip=True)["data"]
 
 
 @pytest.fixture
 def opengrants_round1_apps() -> list[dict[str, Any]]:
-    """Round 1 applications (no io.scf.code)."""
+    """Round 1 applications (8 apps, org.stellar.communityfund keys)."""
 
     return _load_fixture("opengrants_applications_round1.json")["data"]
 
 
 @pytest.fixture
 def opengrants_round30_apps() -> list[dict[str, Any]]:
-    """Round 30 applications (with io.scf.code)."""
+    """Round 30 applications (org.stellar.communityfund keys)."""
 
-    return _load_fixture("opengrants_applications_round30.json")["data"]
+    return _load_fixture("opengrants_applications_round30.json.gz", gunzip=True)["data"]
+
+
+@pytest.fixture
+def opengrants_round39_apps() -> list[dict[str, Any]]:
+    """Round 39 applications (12 apps, org.stellar.communityfund keys)."""
+
+    return _load_fixture("opengrants_applications_round39.json.gz", gunzip=True)["data"]
 
 
 @pytest.fixture
 def opengrants_empty_apps() -> list[dict[str, Any]]:
-    """Empty round with no applications."""
+    """Empty round with no applications (round 48)."""
 
-    return _load_fixture("opengrants_applications_round39.json")["data"]
+    return _load_fixture("opengrants_applications_round48.json")["data"]
+
+
+@pytest.fixture
+def opengrants_projects() -> list[dict[str, Any]]:
+    """All SCF projects (602 projects, org.stellar.communityfund extensions)."""
+
+    return _load_fixture("opengrants_projects.json.gz", gunzip=True)["data"]
 
 
 # ---------------------------------------------------------------------------

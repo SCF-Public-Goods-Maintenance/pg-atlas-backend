@@ -19,6 +19,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 from typing import Any
 
@@ -69,7 +70,8 @@ async def upsert_project(
     display_name: str,
     project_type: ProjectType,
     activity_status: ActivityStatus,
-    git_org_url: str | None = None,
+    git_owner_url: str | None = None,
+    category: str | None = None,
     project_metadata: dict[str, Any] | None = None,
 ) -> int:
     """
@@ -90,7 +92,8 @@ async def upsert_project(
                 display_name=display_name,
                 project_type=project_type,
                 activity_status=activity_status,
-                git_org_url=git_org_url,
+                git_owner_url=git_owner_url,
+                category=category,
                 project_metadata=project_metadata,
             )
             session.add(project)
@@ -98,8 +101,10 @@ async def upsert_project(
             project.display_name = display_name
             project.project_type = project_type
             project.activity_status = activity_status
-            if git_org_url is not None:
-                project.git_org_url = git_org_url
+            if git_owner_url is not None:
+                project.git_owner_url = git_owner_url
+            if category is not None:
+                project.category = category
             if project_metadata is not None:
                 project.project_metadata = project_metadata
 
@@ -347,22 +352,161 @@ async def _promote_external_to_repo(
 
 
 # ---------------------------------------------------------------------------
-# Check project association
+# Absorb ExternalRepo into existing Repo
 # ---------------------------------------------------------------------------
 
 
-async def is_project_repo(canonical_id: str) -> bool:
+async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int) -> bool:
     """
-    Return ``True`` if a vertex with *canonical_id* exists and is a ``Repo``
-    linked to a ``Project``.
+    Merge an ``ExternalRepo`` into an existing ``Repo`` by re-pointing edges.
+
+    When a package PURL (e.g. ``pkg:cargo/soroban-wasmi``) was previously
+    crawled as an ``ExternalRepo`` and we later discover it belongs to a
+    GitHub repo already tracked as a ``Repo``, this function:
+
+    1. Looks up the ``ExternalRepo`` by *external_canonical_id*.
+    2. Deletes self-loop edges that would result from the merge.
+    3. Deletes conflicting edges where the target pair already exists
+       (composite PK ``(in_vertex_id, out_vertex_id)`` enforces uniqueness).
+    4. Re-points all remaining ``depends_on`` edges from the old vertex to
+       *target_vertex_id*.
+    5. Deletes the ``ExternalRepo`` child row and ``RepoVertex`` base row.
+
+    Returns ``True`` if an ``ExternalRepo`` was found and absorbed,
+    ``False`` if no vertex with *external_canonical_id* exists.
+
+    All operations happen within a single transaction via SQLAlchemy Core.
     """
+    session = await _session()
+    dep = DependsOn.__table__
+    ext_table = ExternalRepo.__table__
+    base_table = RepoVertex.__table__
+
+    try:
+        # 1. Look up ExternalRepo.
+        vertex = await get_vertex(session, external_canonical_id)
+
+        if vertex is None:
+            return False
+
+        if not isinstance(vertex, ExternalRepo):
+            logger.debug(
+                f"absorb_external_repo: {external_canonical_id} is a {type(vertex).__name__}, not ExternalRepo — skip"
+            )
+
+            return False
+
+        ext_id = vertex.id
+
+        if ext_id == target_vertex_id:
+            logger.warning(f"absorb_external_repo: ext_id == target_vertex_id ({ext_id}) — skip")
+
+            return False
+
+        # 2. Delete self-loops that would result from the merge.
+        await session.execute(
+            delete(dep).where(  # type: ignore[arg-type]
+                dep.c.in_vertex_id == target_vertex_id,
+                dep.c.out_vertex_id == ext_id,
+            )
+        )
+        await session.execute(
+            delete(dep).where(  # type: ignore[arg-type]
+                dep.c.in_vertex_id == ext_id,
+                dep.c.out_vertex_id == target_vertex_id,
+            )
+        )
+
+        # 3. Delete conflicting edges (out_vertex_id direction):
+        #    edges where something depends on ext_id, but already depends on target.
+        conflict_out = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
+            dep.c.out_vertex_id == ext_id,
+            dep.c.in_vertex_id.in_(select(dep.c.in_vertex_id).where(dep.c.out_vertex_id == target_vertex_id)),
+        )
+        await session.execute(
+            delete(dep).where(  # type: ignore[arg-type]
+                dep.c.out_vertex_id == ext_id,
+                dep.c.in_vertex_id.in_(select(conflict_out.subquery().c.in_vertex_id)),
+            )
+        )
+
+        # 4a. Re-point remaining out_vertex_id edges.
+        await session.execute(
+            dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
+        )
+
+        # 3b. Delete conflicting edges (in_vertex_id direction):
+        #     edges where ext_id depends on something, but target already depends on it.
+        conflict_in = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
+            dep.c.in_vertex_id == ext_id,
+            dep.c.out_vertex_id.in_(select(dep.c.out_vertex_id).where(dep.c.in_vertex_id == target_vertex_id)),
+        )
+        await session.execute(
+            delete(dep).where(  # type: ignore[arg-type]
+                dep.c.in_vertex_id == ext_id,
+                dep.c.out_vertex_id.in_(select(conflict_in.subquery().c.out_vertex_id)),
+            )
+        )
+
+        # 4b. Re-point remaining in_vertex_id edges.
+        await session.execute(
+            dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
+        )
+
+        # 5. Delete ExternalRepo child row, then RepoVertex base row.
+        await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))  # type: ignore[arg-type]
+        await session.execute(delete(base_table).where(base_table.c.id == ext_id))  # type: ignore[arg-type]
+
+        await session.commit()
+
+        logger.info(f"Absorbed ExternalRepo {external_canonical_id} (id={ext_id}) into Repo (id={target_vertex_id})")
+
+        return True
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Release-PURL lookup
+# ---------------------------------------------------------------------------
+
+
+async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | None:
+    """
+    Find a ``Repo`` whose ``releases`` JSONB contains a matching PURL.
+
+    Returns ``(vertex_id, canonical_id, project_id)`` or ``None``.
+
+    Uses PostgreSQL JSONB containment (``@>``) which is GIN-indexable with
+    ``jsonb_path_ops``.
+    """
+    from sqlalchemy import cast, literal
+    from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
     session = await _session()
 
     try:
-        result = await session.execute(select(Repo.project_id).where(Repo.canonical_id == canonical_id))
-        row = result.one_or_none()
+        pattern = cast(literal(json.dumps([{"purl": purl}])), PG_JSONB)
+        result = await session.execute(
+            select(Repo.id, Repo.canonical_id, Repo.project_id).where(Repo.releases.op("@>")(pattern))
+        )
+        rows = result.all()
 
-        return row is not None and row[0] is not None
+        if not rows:
+            return None
+
+        if len(rows) > 1:
+            logger.warning(f"find_repo_by_release_purl: multiple Repos match purl={purl}, using first")
+
+        row = rows[0]
+
+        return (row[0], row[1], row[2])
 
     finally:
         await session.close()

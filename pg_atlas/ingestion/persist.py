@@ -41,6 +41,7 @@ from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
+from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import store_artifact
@@ -395,13 +396,24 @@ async def handle_sbom_submission(
 
             version = _version_for_spdx_package(pkg)
             repo_url = _repo_url_for_spdx_package(pkg)
-            dep_vertex = await _upsert_external_repo(
-                session,
-                canonical_id=pkg_canonical_id,
-                display_name=str(pkg.name),
-                latest_version=version,
-                repo_url=repo_url,
-            )
+
+            try:
+                dep_vertex = await _upsert_external_repo(
+                    session,
+                    canonical_id=pkg_canonical_id,
+                    display_name=str(pkg.name),
+                    latest_version=version,
+                    repo_url=repo_url,
+                )
+
+            except ValueError:
+                # canonical_id already tracked as a Repo — reuse it for the edge.
+                existing = await get_vertex(session, pkg_canonical_id)
+                if existing is None:
+                    continue
+
+                dep_vertex = existing
+
             dep_vertex_ids[dep_vertex.id] = version
 
         # Bulk-replace outgoing DependsOn edges for this repo

@@ -1,11 +1,11 @@
 # project-git-mapping.yml
 #
 # Manually curated mapping of OpenGrants projectId → GitHub URLs.
-# Used by sync_opengrants to enrich projects where io.scf.code is missing.
+# Used by sync_opengrants to enrich projects where org.stellar.communityfund.code is missing.
 #
 # Structure:
 #   <projectId>:
-#     git_org_url: "https://github.com/<org>"
+#     git_owner_url: "https://github.com/<org>"
 #     repo_name: "<repo>"  # optional
 #
 # Run the guess script to auto-populate candidates:
@@ -17,7 +17,7 @@
 # --- Projects with known GitHub URLs (manually verified) ---
 
 daoip-5:scf:project:python_stellar_sdk:
-  git_org_url: "https://github.com/StellarCN"
+  git_owner_url: "https://github.com/StellarCN"
   repo_name: "py-stellar-base"
 
 # --- Placeholder entries (need manual review) ---

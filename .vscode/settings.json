@@ -10,4 +10,5 @@
     "chat.tools.terminal.autoApprove": {
         "uv run python": true
     },
+    "chat.autopilot.enabled": false,
 }
