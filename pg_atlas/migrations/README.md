@@ -9,17 +9,29 @@ Migrations live in `pg_atlas/migrations/versions`.  Importing
 `pg_atlas.db_models` (see the top of `env.py`) registers all ORM models on
 `PgBase.metadata`, which is what autogenerate inspects.
 
+This codebase uses [Multiple Bases](https://alembic.sqlalchemy.org/en/latest/branches.html#working-with-multiple-bases),
+with a main branch named "atlas" and a secondary independent "procrastinate"
+branch that only deals with [Procrastinate revisions](https://github.com/procrastinate-org/procrastinate/issues/1040#issuecomment-4000763991).
+The Procrastinate revision files are located in `pg_atlas/procrastinate/versions/`.
+
 ## Upgrade schema
 
 To apply all pending migrations and bring your database to the latest
 revision:
 
 ```sh
-uv run alembic upgrade head
+uv run alembic upgrade heads
 ```
 
 This command will create the database and the `alembic_version` table if
 they do not already exist, so it is safe to run against an empty environment.
+
+To apply only the migrations for the DB schema defined in this repository,
+instead run:
+
+```sh
+uv run alembic upgrade atlas@head
+```
 
 ## Generate a new revision
 
@@ -27,7 +39,7 @@ When you change the SQLAlchemy models, produce a corresponding migration by
 running:
 
 ```sh
-uv run alembic revision --autogenerate -m "describe change"
+uv run alembic revision --autogenerate --head=atlas@head -m "describe change"
 ```
 
 Inspect the generated file in `pg_atlas/migrations/versions`: the
@@ -36,14 +48,23 @@ _edit the upgrade and downgrade functions manually_
 to handle enum types, data backfills, or any other complex operations
 that Alembic cannot infer automatically.
 
+NOTE: since `target_metadata = PgBase.metadata` is all Alembic knows about,
+autogenerate migrations currently attempt to drop all Procrastinate tables
+and other items. Either remove all Procrastinate-related items from the
+generated revision, or copy only the desired changes over to a migration
+file that you generate without autogenerate. This is error-prone work,
+and both the author and reviewers need to be cautious. It is not an acceptable
+end state, but we are patiently awaiting a decision from Procrastinate's
+maintainer on how to deal with DB migrations.
+
 ## Stamp the database
 
 In tests or when you want to pretend that a migration has been applied
 without executing it, use `stamp`:
 
 ```sh
-uv run alembic stamp head   # mark the database as being at latest revision
-uv run alembic stamp base   # mark it as empty (no migrations applied)
+uv run alembic stamp atlas@head   # mark the database as being at latest revision
+uv run alembic stamp atlas@base   # mark it as empty (no migrations applied)
 ```
 
 This is useful when interacting with a freshly‑created instance during
