@@ -41,7 +41,9 @@ from pg_atlas.ingestion.persist import strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
+    DepsDevProjectInfo,
     ProjectPackageVersion,
+    depsdev_session,
     get_package,
     get_project_batch,
     get_project_package_versions,
@@ -178,7 +180,12 @@ def _list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return repos
 
     except GithubException as exc:
-        logger.error(f"GitHub API error listing repos for {owner}: {exc}")
+        if exc.status == 404:
+            logger.warning(f"GitHub org/user not found (404): {owner}")
+        elif exc.status == 403:
+            logger.warning(f"GitHub org/user forbidden (403): {owner}")
+        else:
+            logger.error(f"GitHub API error listing repos for {owner}: {exc}")
 
         return []
 
@@ -206,7 +213,11 @@ def _get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
         ]
 
     except GithubException as exc:
-        logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
+        if exc.status in (404, 409):
+            msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
+            logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} — {msg}")
+        else:
+            logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
 
         return []
 
@@ -291,8 +302,13 @@ def _latest_version_from_repo(owner: str, repo_name: str) -> str:
             for commit in commits:
                 return commit.sha
 
-        except GithubException:
-            logger.error(f"Error fetching latest commit for {repo_path}", exc_info=True)
+        except GithubException as exc:
+            # 409 = "Git Repository is empty." — expected for empty repos.
+            # 404 = commits endpoint missing — also benign.
+            if exc.status in (404, 409):
+                logger.warning(f"No commits in {repo_path}: HTTP {exc.status}")
+            else:
+                logger.error(f"Error fetching latest commit for {repo_path}", exc_info=True)
 
     except GithubException:
         # Handles cases like repository not found or permission denied
@@ -445,20 +461,23 @@ async def process_project(
     # Build project IDs of the form "github.com/owner/repo".
     repo_project_ids = [f"github.com/{repo.full_name}" for repo in repos_to_crawl]
 
-    depsdev_projects: dict[str, Any] = {}
+    depsdev_projects: dict[str, DepsDevProjectInfo] = {}
     if repo_project_ids:
         try:
-            depsdev_projects = await get_project_batch(
-                [pid.lower() for pid in repo_project_ids],
-            )
+            async with depsdev_session() as stub:
+                depsdev_projects = await get_project_batch(
+                    [pid.lower() for pid in repo_project_ids],
+                    stub=stub,
+                )
+
+                for project_key, proj_info in depsdev_projects.items():
+                    try:
+                        proj_info.package_versions = await get_project_package_versions(project_key, stub=stub)
+                    except DepsDevError as exc:
+                        logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
+
         except DepsDevError as exc:
             logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
-
-    for project_key, depsdev_info in depsdev_projects.items():
-        try:
-            depsdev_info.package_versions = await get_project_package_versions(project_key)
-        except DepsDevError as exc:
-            logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
 
     # ----- Determine project type -----
     has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
@@ -565,23 +584,24 @@ async def crawl_github_repo(
 
     # ----- Build releases from package info -----
     releases: list[dict[str, Any]] = []
-    for pkg in packages_to_process:
-        system = pkg.system
-        name = pkg.name
+    async with depsdev_session() as stub:
+        for pkg in packages_to_process:
+            system = pkg.system
+            name = pkg.name
 
-        try:
-            pkg_info = await get_package(system, name)
-            for v in pkg_info.versions:
-                releases.append(
-                    {
-                        "version": v.version,
-                        "release_date": v.published_at,
-                        "purl": strip_purl_version(v.purl),
-                    }
-                )
+            try:
+                pkg_info = await get_package(system, name, stub=stub)
+                for v in pkg_info.versions:
+                    releases.append(
+                        {
+                            "version": v.version,
+                            "release_date": v.published_at,
+                            "purl": strip_purl_version(v.purl),
+                        }
+                    )
 
-        except DepsDevError:
-            logger.debug(f"Package not found on deps.dev: {system}/{name}")
+            except DepsDevError:
+                logger.debug(f"Package not found on deps.dev: {system}/{name}")
 
     if len(releases) > _MAX_RELEASE_ENTRIES:
         logger.warning(
@@ -690,26 +710,27 @@ async def crawl_package_deps(
     logger.info(f"crawl_package_deps: {system}/{package_name}")
 
     # ----- Get package info to find default version -----
-    try:
-        pkg_info = await get_package(system, package_name)
-    except DepsDevError as exc:
-        logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
+    async with depsdev_session() as stub:
+        try:
+            pkg_info = await get_package(system, package_name, stub=stub)
+        except DepsDevError as exc:
+            logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
 
-        return
+            return
 
-    version = pkg_info.default_version
-    if not version:
-        logger.warning(f"No default version for {system}/{package_name} - skipping")
+        version = pkg_info.default_version
+        if not version:
+            logger.warning(f"No default version for {system}/{package_name} - skipping")
 
-        return
+            return
 
-    # ----- Get requirements -----
-    try:
-        reqs = await get_requirements(system, package_name, version)
-    except DepsDevError as exc:
-        logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
+        # ----- Get requirements -----
+        try:
+            reqs = await get_requirements(system, package_name, version, stub=stub)
+        except DepsDevError as exc:
+            logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
 
-        return
+            return
 
     if not reqs:
         logger.info(f"No requirements for {system}/{package_name}@{version}")

@@ -432,7 +432,7 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
         # 4a. Re-point remaining out_vertex_id edges.
         await session.execute(
-            dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id)  # type: ignore[arg-type]
+            dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
         )
 
         # 3b. Delete conflicting edges (in_vertex_id direction):
@@ -450,7 +450,7 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
         # 4b. Re-point remaining in_vertex_id edges.
         await session.execute(
-            dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id)  # type: ignore[arg-type]
+            dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
         )
 
         # 5. Delete ExternalRepo child row, then RepoVertex base row.
@@ -494,9 +494,7 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
     try:
         pattern = cast(literal(json.dumps([{"purl": purl}])), PG_JSONB)
         result = await session.execute(
-            select(Repo.id, Repo.canonical_id, Repo.project_id).where(
-                Repo.releases.op("@>")(pattern)  # type: ignore[union-attr]
-            )
+            select(Repo.id, Repo.canonical_id, Repo.project_id).where(Repo.releases.op("@>")(pattern))
         )
         rows = result.all()
 
