@@ -9,6 +9,9 @@ Use build_dependency_graph as input to active-subgraph projection and
 criticality — it contains only dependency edges, so no edge-type filtering is
 required in downstream dep-layer computations.
 
+NetworkX typing: use `nx.DiGraph[str]` (not bare `nx.DiGraph`) everywhere — nodes are
+always canonical_id strings.
+
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
 """
@@ -35,7 +38,7 @@ logger = logging.getLogger(__name__)
 async def build_dependency_graph(
     session: AsyncSession,
     reference_date: datetime.date | None = None,
-) -> nx.DiGraph:
+) -> nx.DiGraph[str]:
     """
     Load all RepoVertex nodes and DependsOn edges from PostgreSQL into a NetworkX DiGraph.
 
@@ -63,7 +66,7 @@ async def build_dependency_graph(
     """
     ref = reference_date or datetime.date.today()
 
-    G: nx.DiGraph = nx.DiGraph()
+    G: nx.DiGraph[str] = nx.DiGraph()
     G.graph["source"] = "postgresql"
     G.graph["reference_date"] = ref.isoformat()
 
@@ -110,10 +113,7 @@ async def build_dependency_graph(
         )
 
     logger.info(
-        "build_dependency_graph: %d nodes, %d edges (reference_date=%s)",
-        G.number_of_nodes(),
-        G.number_of_edges(),
-        ref.isoformat(),
+        f"build_dependency_graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges (reference_date={ref.isoformat()})"
     )
     return G
 
@@ -125,7 +125,7 @@ async def build_dependency_graph(
 async def build_full_graph(
     session: AsyncSession,
     reference_date: datetime.date | None = None,
-) -> nx.DiGraph:
+) -> nx.DiGraph[str]:
     """
     Build combined graph: dependency layer + Project nodes.
 
@@ -166,9 +166,6 @@ async def build_full_graph(
                 G.add_edge(proj_id_to_canonical[pid], node, edge_type="owns")
 
     logger.info(
-        "build_full_graph: %d nodes, %d edges (%d projects)",
-        G.number_of_nodes(),
-        G.number_of_edges(),
-        len(proj_id_to_canonical),
+        f"build_full_graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges ({len(proj_id_to_canonical)} projects)"
     )
     return G
