@@ -34,7 +34,8 @@ def project_active_subgraph(G: nx.DiGraph) -> nx.DiGraph:
         2. Seed active leaves: Repo nodes whose provisional `activity_status`
            is `live` or `in-dev`, and whose in-degree is zero in the
            dependency graph.
-        3. Traverse upstream by following original outgoing `depends_on` edges
+        3. Traverse upstream once via a multi-source DFS seeded by all active
+           leaves, following original outgoing `depends_on` edges
            (dependent -> dependency). Do not reverse the graph.
         4. Return the induced subgraph over all reached dep-layer nodes.
 
@@ -63,9 +64,18 @@ def project_active_subgraph(G: nx.DiGraph) -> nx.DiGraph:
         and G_dep.in_degree(node) == 0
     )
 
-    active_nodes = set(active_leaves)
-    for leaf in active_leaves:
-        active_nodes.update(nx.descendants(G_dep, leaf))
+    active_nodes: set[str] = set()
+    stack = list(active_leaves)
+    while stack:
+        node = stack.pop()
+        if node in active_nodes:
+            continue
+
+        active_nodes.add(node)
+
+        for successor in G_dep.successors(node):
+            if successor not in active_nodes:
+                stack.append(successor)
 
     G_active: nx.DiGraph = G_dep.subgraph(active_nodes).copy()
 
