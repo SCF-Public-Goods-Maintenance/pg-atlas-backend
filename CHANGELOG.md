@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.2.0...v0.3.0) (2026-04-02)
+
+
+### Features
+
+* **metrics:** graph builder, active subgraph, transitive criticality ([#11](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/11)) ([bf4c866](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/bf4c866444d5bae02d198acf9e4b28c166c84035))
+* **metrics:** implement exact A6 active subgraph projection ([a46d953](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/a46d953be293de24bdf7829a0c8a55d270417895))
+* **metrics:** implement exact A6 active subgraph projection ([ca9c6e8](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/ca9c6e8ea914b1591a0bb5fb8771ae41a70c143f))
+
+
+### Bug Fixes
+
+* **QA:** migrate to OpenGrants schema v1.0.11 and harden the bootstrap pipeline ([#20](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/20)) ([056a55e](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/056a55e1f9ff5dcfe181d10778b319d479ad4559))
+
+
+### Performance Improvements
+
+* **metrics:** use single-pass traversal for A6 projection ([8879b39](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/8879b390a4b443dff16366999d85470c5197f87a))
+
 ## [0.2.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.1.0...v0.2.0) (2026-03-17)
 
 
