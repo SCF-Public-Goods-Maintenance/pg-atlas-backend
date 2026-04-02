@@ -7,12 +7,31 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from uuid import uuid4
+
 import networkx as nx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pg_atlas.db_models import ExternalRepo, Project, Repo
+from pg_atlas.db_models.base import ActivityStatus, ProjectType, Visibility
 from pg_atlas.metrics.graph_builder import build_dependency_graph, build_full_graph
+from tests.db_cleanup import DB_MODELS_TABLE_SPECS, capture_snapshot, cleanup_created_rows
+
+
+@pytest.fixture
+async def cleanup_db_rows_for_metrics_builder_tests(
+    db_session: AsyncSession,
+) -> AsyncGenerator[None, None]:
+    """
+    Remove only rows created by metrics graph-builder integration tests in this module.
+    """
+
+    snapshot = await capture_snapshot(db_session, DB_MODELS_TABLE_SPECS)
+    yield
+    await cleanup_created_rows(db_session, DB_MODELS_TABLE_SPECS, snapshot)
 
 
 async def test_build_dependency_graph_returns_digraph(db_session: AsyncSession):
@@ -56,6 +75,41 @@ async def test_build_dependency_graph_days_since_commit_type(db_session: AsyncSe
     for node, data in G.nodes(data=True):
         dsc = data.get("days_since_commit")
         assert dsc is None or isinstance(dsc, int), f"days_since_commit must be int or None, got {type(dsc)} on {node!r}"
+
+
+async def test_build_dependency_graph_surfaces_repo_activity_status(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_metrics_builder_tests: None,
+) -> None:
+    suffix = uuid4().hex[:8]
+    project = Project(
+        canonical_id=f"daoip-5:stellar:project:builder-{suffix}",
+        display_name=f"Builder Project {suffix}",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.in_dev,
+    )
+    db_session.add(project)
+    await db_session.flush()
+
+    repo = Repo(
+        canonical_id=f"pkg:github/test/builder-repo-{suffix}",
+        display_name=f"builder-repo-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+    )
+    external = ExternalRepo(
+        canonical_id=f"pkg:npm/builder-ext-{suffix}",
+        display_name=f"builder-ext-{suffix}",
+        latest_version="1.0.0",
+    )
+    db_session.add_all([repo, external])
+    await db_session.flush()
+
+    G = await build_dependency_graph(db_session)
+
+    assert G.nodes[repo.canonical_id]["activity_status"] == ActivityStatus.in_dev.value
+    assert G.nodes[external.canonical_id]["activity_status"] is None
 
 
 async def test_build_full_graph_has_project_nodes(db_session: AsyncSession):

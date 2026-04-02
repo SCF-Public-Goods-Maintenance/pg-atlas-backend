@@ -123,12 +123,15 @@ When you have validated that a deliverable has been completed, update `implement
   OpenGrants, GitHub, and deps.dev. `pg_atlas/procrastinate/` sub-package. deps.dev gRPC wrapper
   via grpclib (generated code in `pg_atlas/deps_dev/lib/`). GitHub Actions workflows:
   `bootstrap.yml` (weekly, log-based summary), `sync-depsdev-proto.yml` (daily).
-- A6 partly complete: Registry Crawlers incorporated in the graph bootstrapper. Active Subgraph
-  Projection in review-and-improve cycle.
+- **A6 complete**: Active Subgraph Projection (`pg_atlas/metrics/active_subgraph.py`) fully
+  implemented and validated. Registry Crawlers incorporated in graph bootstrapper.
 - A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.
 - A8: the SBOM post-validation processing needs to be moved to a new Procrastinate queue.
 
 ## Keeping These Instructions Current
 
-After completing a todo list for a session, append any new conventions, decisions, or patterns that
-would help future sessions collaborate smoothly. Remove anything that was superseded.
+After completing a todo list for a session, update the sections above with any new conventions
+decisions, or patterns that would help future sessions collaborate smoothly. Clarify what you can.
+Remove anything that was superseded.
+
+NO ADDITIONS AFTER THIS SECTION

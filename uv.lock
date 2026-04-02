@@ -811,6 +811,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff", version = "0.15.5", source = { registry = "https://pypi.org/simple" } },
     { name = "types-cachetools" },
+    { name = "types-networkx" },
     { name = "types-pyyaml" },
 ]
 proto-build = [
@@ -848,6 +849,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff", specifier = ">=0.15.2" },
     { name = "types-cachetools" },
+    { name = "types-networkx", specifier = ">=3.6.1.20260402" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
 ]
 proto-build = [
@@ -1400,6 +1402,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/3b/a8/f9bcc7f1be63af43ef0170a773e2d88817bcc7c9d8769f2228c802826efe/types_cachetools-6.2.0.20251022.tar.gz", hash = "sha256:f1d3c736f0f741e89ec10f0e1b0138625023e21eb33603a930c149e0318c0cef", size = 9608, upload-time = "2025-10-22T03:03:58.16Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/2d/8d821ed80f6c2c5b427f650bf4dc25b80676ed63d03388e4b637d2557107/types_cachetools-6.2.0.20251022-py3-none-any.whl", hash = "sha256:698eb17b8f16b661b90624708b6915f33dbac2d185db499ed57e4997e7962cad", size = 9341, upload-time = "2025-10-22T03:03:57.036Z" },
+]
+
+[[package]]
+name = "types-networkx"
+version = "3.6.1.20260402"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/0f/5520afe8510f497a2149a0bd66400796de09e503b30d6a47a055cbae918c/types_networkx-3.6.1.20260402.tar.gz", hash = "sha256:0134981a60c6725949ddaa9fc0d3b0bbaa553f0f81e43f15e282be1b75d2db00", size = 73790, upload-time = "2026-04-02T04:20:07.538Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/60/57fe0ebec42315a70f34920c325a803f4c069f33025043f45ac4a4266faf/types_networkx-3.6.1.20260402-py3-none-any.whl", hash = "sha256:2ea0075288632bf777e877b3c2a0d1d6991844a08a0b4a72d23c513436d64038", size = 162536, upload-time = "2026-04-02T04:20:06.375Z" },
 ]
 
 [[package]]

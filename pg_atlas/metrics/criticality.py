@@ -33,7 +33,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def compute_criticality(G_active: nx.DiGraph) -> dict[str, int]:
+def compute_criticality(G_active: nx.DiGraph[str]) -> dict[str, int]:
     """
     Count transitive active dependents for every dep-layer node via BFS.
 
@@ -78,10 +78,7 @@ def compute_criticality(G_active: nx.DiGraph) -> dict[str, int]:
 
     nonzero = sum(1 for v in criticality.values() if v > 0)
     logger.info(
-        "compute_criticality: scored %d nodes; max=%d, nonzero=%d",
-        len(criticality),
-        max(criticality.values(), default=0),
-        nonzero,
+        f"compute_criticality: scored {len(criticality)} nodes; max={max(criticality.values(), default=0)}, nonzero={nonzero}"
     )
     return criticality
 
