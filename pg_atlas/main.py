@@ -20,67 +20,10 @@ from fastapi import FastAPI
 
 from pg_atlas.config import settings
 from pg_atlas.routers import contributors, health, ingestion, metadata, projects, repos
-from pg_atlas.routers.tags import Graph, Source
+from pg_atlas.routers.tags import TAGS_METADATA
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# OpenAPI tag metadata
-# ---------------------------------------------------------------------------
-
-
-tags_metadata: list[dict[str, str]] = [
-    {
-        "name": Graph.metadata,
-        "description": "Ecosystem-wide summary statistics and health indicators.",
-    },
-    {
-        "name": Graph.projects,
-        "description": "SCF-funded projects — list, detail, and associated repos.",
-    },
-    {
-        "name": Graph.repos,
-        "description": "Git repositories (in-ecosystem and external dependencies).",
-    },
-    {
-        "name": Graph.contributors,
-        "description": "Individual contributors and their commit activity.",
-    },
-    {
-        "name": Graph.dependency_graph,
-        "description": "Dependency and reverse-dependency edges between vertices.",
-    },
-    {
-        "name": Graph.contributor_graph,
-        "description": "Contributor-to-repository contribution edges.",
-    },
-    {
-        "name": Source.opengrants,
-        "description": "Data sourced from the SCF OpenGrants registry.",
-    },
-    {
-        "name": Source.deps_dev,
-        "description": "Data sourced from the deps.dev dependency graph.",
-    },
-    {
-        "name": Source.github,
-        "description": "Data sourced from the GitHub API (repos, contributors, git logs).",
-    },
-    {
-        "name": Source.pg_atlas,
-        "description": "Data computed or curated by PG Atlas itself (metrics, scores).",
-    },
-    {
-        "name": "ingestion",
-        "description": "Write endpoints for data submissions (OIDC-authenticated).",
-    },
-    {
-        "name": "health",
-        "description": "Operational health checks.",
-    },
-]
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Application lifespan manager.
 
     Startup and shutdown hooks live here. Database connection pool setup (A2)
-    and NetworkX graph loading (A6/A8) will be added in later deliverables.
+    and NetworkX graph loading (A6/A8) may be added in later deliverables.
     """
     logger.info(f"PG Atlas starting up (API_URL={settings.API_URL})")
     yield
@@ -145,9 +88,9 @@ app = FastAPI(
     title="PG Atlas API",
     description=_description,
     version=_version,
-    license_info={"name": "MPL-2.0", "identifier": "MPL-2.0"},
+    license_info={"name": "Mozilla Public License v2.0", "identifier": "MPL-2.0"},
     lifespan=lifespan,
-    openapi_tags=tags_metadata,
+    openapi_tags=TAGS_METADATA,
     docs_url="/docs",
     redoc_url="/redoc",
 )
