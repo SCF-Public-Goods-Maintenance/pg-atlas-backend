@@ -65,6 +65,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   uv run ruff check .
   uv run ruff format --check .
   uv run mypy pg_atlas/
+  # run pylance diagnostics last; it is the strictest QA in the check suite.
   ```
   Prepend `PG_ATLAS_API_URL=https://test.pg-atlas.example` if a test errors because the env var is
   not set. This is rare.
@@ -80,7 +81,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 These rules MUST be enforced manually. No ruff rules are available to enforce them.
 
 - Breathing space:
-  - Multi-line docstrings open with a blank line after `"""` — the summary sentence begins on the
+  - Multi-line docstrings leave the first line blank after `"""` — the summary sentence begins on the
     second line. Single-line docstrings stay on one line.
   - Always include a blank line (may contain only a comment or closing brackets) when exiting a
     nested block (e.g. `try`/`except`, `for`, `if`) to separate the block's internal logic from the

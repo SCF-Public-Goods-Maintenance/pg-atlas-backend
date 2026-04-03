@@ -23,12 +23,12 @@ from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 
 # Reusable loader option — tells SQLAlchemy to eagerly batch-load JTI child
 # tables so that Repo/ExternalRepo attributes are available without lazy loads.
-_POLY_LOAD = selectin_polymorphic(RepoVertex, [Repo, ExternalRepo])
+POLY_LOAD = selectin_polymorphic(RepoVertex, [Repo, ExternalRepo])
 
 
 async def get_vertex(session: AsyncSession, canonical_id: str) -> RepoVertex | None:
     """Look up a single ``RepoVertex`` by ``canonical_id`` with eager subtype loading."""
-    result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(_POLY_LOAD))
+    result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(POLY_LOAD))
 
     return result.scalar_one_or_none()
 
@@ -36,7 +36,7 @@ async def get_vertex(session: AsyncSession, canonical_id: str) -> RepoVertex | N
 async def get_all_vertices(session: AsyncSession) -> Sequence[RepoVertex]:
     """Load all ``RepoVertex`` rows with eager subtype loading."""
 
-    return (await session.execute(select(RepoVertex).options(_POLY_LOAD))).scalars().all()
+    return (await session.execute(select(RepoVertex).options(POLY_LOAD))).scalars().all()
 
 
 async def upsert_external_repo(
