@@ -9,6 +9,14 @@ Migrations live in `pg_atlas/migrations/versions`.  Importing
 `pg_atlas.db_models` (see the top of `env.py`) registers all ORM models on
 `PgBase.metadata`, which is what autogenerate inspects.
 
+All Alembic commands in this repository require `PG_ATLAS_DATABASE_URL` to
+point at a real PostgreSQL database. For local development, the default
+working database is:
+
+```sh
+export PG_ATLAS_DATABASE_URL=postgresql://atlas:changeme@localhost:5432/pg_atlas
+```
+
 This codebase uses [Multiple Bases](https://alembic.sqlalchemy.org/en/latest/branches.html#working-with-multiple-bases),
 with a main branch named "atlas" and a secondary independent "procrastinate"
 branch that only deals with [Procrastinate revisions](https://github.com/procrastinate-org/procrastinate/issues/1040#issuecomment-4000763991).
@@ -32,6 +40,43 @@ instead run:
 ```sh
 uv run alembic upgrade atlas@head
 ```
+
+## Reset the local database
+
+For local development, use a single database (`pg_atlas`) and reset it in
+place instead of creating task-specific throwaway databases.
+
+To completely reset the local schema **and data** to the current state of all
+Alembic branches:
+
+```sh
+uv run alembic downgrade base
+uv run alembic upgrade heads
+```
+
+This is the standard local reset workflow for the project.
+
+## Restore a `pg_dump` that has been provided to you
+
+For real-data validation, restore the (hosted) snapshot dump onto the same
+local `pg_atlas` database after resetting the schema:
+
+```sh
+pg_restore -v -d $PG_ATLAS_DATABASE_URL \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --no-privileges \
+  --exit-on-error
+  /path/to/snapshot.dump
+```
+
+If you try to restore this dump into a blank database, that will fail. The
+hosted dump does not include everything needed to bootstrap the schema from
+scratch (notably PostgreSQL enum types), so the correct sequence is always:
+
+1. migrate the local database to `heads` (or the specified `alembic heads`)
+1. restore the dump onto that migrated schema
 
 ## Generate a new revision
 
