@@ -9,35 +9,15 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.contributor import Contributor
-from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.routers.common import DbSession
 from pg_atlas.routers.models import ContributionEntry, ContributorDetailResponse
 from pg_atlas.routers.tags import Graph, Source
 
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _require_session(session: AsyncSession | None) -> AsyncSession:
-    """Raise HTTP 503 if the database session is unavailable."""
-
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database is not configured.",
-        )
-
-    return session
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +33,7 @@ def _require_session(session: AsyncSession | None) -> AsyncSession:
 )
 async def get_contributor(
     contributor_id: int,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> ContributorDetailResponse:
     """
     Full detail for a single contributor with aggregated statistics and
@@ -63,8 +43,6 @@ async def get_contributor(
     ``first_contribution`` / ``last_contribution`` are the earliest and latest
     commit dates across all repos.
     """
-    db = _require_session(session)
-
     result = await db.execute(select(Contributor).where(Contributor.id == contributor_id))
     contributor = result.scalar_one_or_none()
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 
 
@@ -20,10 +19,6 @@ async def test_metadata_db_unavailable_returns_503(no_db_client: AsyncClient) ->
     assert resp.status_code == 503
 
 
-@pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="DB driver"),
-    reason="requires asyncpg",
-)
 async def test_metadata_returns_counts(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:

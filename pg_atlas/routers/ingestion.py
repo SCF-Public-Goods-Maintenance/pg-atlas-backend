@@ -38,6 +38,7 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.ingestion.persist import handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
+from pg_atlas.routers.common import DbSession, PaginationParams
 
 logger = logging.getLogger(__name__)
 
@@ -107,21 +108,6 @@ class SbomSubmissionListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _require_session(session: AsyncSession | None) -> AsyncSession:
-    """
-    Raise HTTP 503 if the database session is unavailable.
-
-    Centralises the guard so individual endpoints stay concise.
-    """
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database is not configured.",
-        )
-
-    return session
 
 
 def _read_file_sync(path: Path) -> str:
@@ -199,13 +185,12 @@ async def ingest_sbom(
     ),
 )
 async def list_sbom_submissions(
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
     repository: Annotated[
         str | None,
         Query(description="Filter by repository_claim (exact match)"),
     ] = None,
-    limit: Annotated[int, Query(ge=1, le=200, description="Maximum number of items to return")] = 50,
-    offset: Annotated[int, Query(ge=0, description="Number of items to skip")] = 0,
 ) -> SbomSubmissionListResponse:
     """
     Return a paginated list of all SBOM submissions.
@@ -215,8 +200,6 @@ async def list_sbom_submissions(
     matches the supplied value are included — both in the items list and in the
     ``total`` count.
     """
-    db = _require_session(session)
-
     base = select(SbomSubmission)
     count_q = select(func.count()).select_from(SbomSubmission)
 
@@ -226,13 +209,17 @@ async def list_sbom_submissions(
 
     total = (await db.execute(count_q)).scalar_one()
 
-    rows = (await db.execute(base.order_by(SbomSubmission.submitted_at.desc()).limit(limit).offset(offset))).scalars().all()
+    rows = (
+        (await db.execute(base.order_by(SbomSubmission.submitted_at.desc()).limit(pagination.limit).offset(pagination.offset)))
+        .scalars()
+        .all()
+    )
 
     return SbomSubmissionListResponse(
         items=[SbomSubmissionResponse.model_validate(row) for row in rows],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -248,7 +235,7 @@ async def list_sbom_submissions(
 )
 async def get_sbom_submission(
     submission_id: int,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> SbomSubmissionDetailResponse:
     """
     Return a single SBOM submission with its raw artifact content.
@@ -258,7 +245,6 @@ async def get_sbom_submission(
     file has been removed from the store the ``raw_artifact`` field is ``null``
     rather than raising an error.
     """
-    db = _require_session(session)
 
     row = await db.get(SbomSubmission, submission_id)
     if row is None:

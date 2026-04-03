@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
-
-_SKIP_NO_DB = pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="DB driver"),
-    reason="requires asyncpg",
-)
-
 
 # ---------------------------------------------------------------------------
 # No-DB tests
@@ -35,7 +28,6 @@ async def test_contributors_db_unavailable_returns_503(no_db_client: AsyncClient
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_NO_DB
 async def test_get_contributor_detail(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -52,7 +44,6 @@ async def test_get_contributor_detail(
     assert len(data["email_hash"]) == 64
 
 
-@_SKIP_NO_DB
 async def test_get_contributor_includes_repo_activity(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -75,7 +66,6 @@ async def test_get_contributor_includes_repo_activity(
     assert repo_entry["number_of_commits"] == 15
 
 
-@_SKIP_NO_DB
 async def test_get_contributor_not_found_returns_404(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:

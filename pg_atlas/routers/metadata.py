@@ -12,9 +12,8 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,23 +22,11 @@ from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
-from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.routers.common import DbSession
 from pg_atlas.routers.models import MetadataResponse
 from pg_atlas.routers.tags import Graph, Source
 
 router = APIRouter()
-
-
-def _require_session(session: AsyncSession | None) -> AsyncSession:
-    """Raise HTTP 503 if the database session is unavailable."""
-
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database is not configured.",
-        )
-
-    return session
 
 
 @router.get(
@@ -49,7 +36,7 @@ def _require_session(session: AsyncSession | None) -> AsyncSession:
     tags=[Graph.metadata, Source.opengrants, Source.deps_dev, Source.github, Source.pg_atlas],
 )
 async def get_metadata(
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> MetadataResponse:
     """
     Return aggregate counts across all graph entities.
@@ -57,8 +44,6 @@ async def get_metadata(
     Counts are computed on-the-fly via simple ``COUNT(*)`` queries.  No
     caching is applied in this dev version — queries hit the DB directly.
     """
-    db = _require_session(session)
-
     (
         total_projects,
         active_projects,

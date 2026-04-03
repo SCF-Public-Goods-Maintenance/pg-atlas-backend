@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
-
-_SKIP_NO_DB = pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="DB driver"),
-    reason="requires asyncpg",
-)
-
 
 # ---------------------------------------------------------------------------
 # No-DB tests (always run)
@@ -36,7 +29,6 @@ async def test_projects_db_unavailable_returns_503(no_db_client: AsyncClient) ->
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_NO_DB
 async def test_list_projects_pagination(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -53,7 +45,6 @@ async def test_list_projects_pagination(
     assert data["offset"] == 0
 
 
-@_SKIP_NO_DB
 async def test_list_projects_filter_by_type(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -68,7 +59,6 @@ async def test_list_projects_filter_by_type(
         assert item["project_type"] == "scf-project"
 
 
-@_SKIP_NO_DB
 async def test_list_projects_filter_by_activity_status(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -83,7 +73,6 @@ async def test_list_projects_filter_by_activity_status(
         assert item["activity_status"] == "live"
 
 
-@_SKIP_NO_DB
 async def test_list_projects_search(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -99,7 +88,6 @@ async def test_list_projects_search(
     assert any("Alpha" in n for n in names)
 
 
-@_SKIP_NO_DB
 async def test_list_projects_ordered_by_canonical_id(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -122,7 +110,6 @@ async def test_list_projects_ordered_by_canonical_id(
     assert len(ids) == len(set(ids))
 
 
-@_SKIP_NO_DB
 async def test_get_project_detail_includes_metadata(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -143,7 +130,6 @@ async def test_get_project_detail_includes_metadata(
     assert meta["description"] == "Test alpha project"
 
 
-@_SKIP_NO_DB
 async def test_get_project_detail_normalizes_metadata(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -159,18 +145,6 @@ async def test_get_project_detail_normalizes_metadata(
     assert meta["description"] is None
 
 
-async def test_get_project_not_found_returns_404(no_db_client: AsyncClient) -> None:
-    """
-    We can only test 503 here since no_db_client has no DB.
-
-    The 404 test is covered in the DB integration tests below.
-    """
-
-    # With DB, 404 is returned — tested in the seeded variant.
-    pass
-
-
-@_SKIP_NO_DB
 async def test_get_project_not_found_with_db(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -181,7 +155,6 @@ async def test_get_project_not_found_with_db(
     assert resp.status_code == 404
 
 
-@_SKIP_NO_DB
 async def test_get_project_repos(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -199,7 +172,6 @@ async def test_get_project_repos(
     assert seed["repo_a2"].canonical_id in repo_ids
 
 
-@_SKIP_NO_DB
 async def test_get_project_depends_on(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -219,7 +191,6 @@ async def test_get_project_depends_on(
     assert seed["project_b"].canonical_id in target_ids
 
 
-@_SKIP_NO_DB
 async def test_get_project_has_dependents(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -239,7 +210,6 @@ async def test_get_project_has_dependents(
     assert seed["project_b"].canonical_id in source_ids
 
 
-@_SKIP_NO_DB
 async def test_project_depends_on_excludes_self_refs(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:

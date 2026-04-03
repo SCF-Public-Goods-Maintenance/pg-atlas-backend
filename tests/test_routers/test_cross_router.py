@@ -13,16 +13,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 
-_SKIP_NO_DB: pytest.MarkDecorator = pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="DB driver"),
-    reason="requires asyncpg",
-)
 
-
-@_SKIP_NO_DB
 async def test_project_repos_match_repo_list_filter(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -45,7 +38,6 @@ async def test_project_repos_match_repo_list_filter(
     assert project_repo_ids == filtered_repo_ids
 
 
-@_SKIP_NO_DB
 async def test_repo_parent_project_matches_project_detail(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -68,7 +60,6 @@ async def test_repo_parent_project_matches_project_detail(
     assert parent["display_name"] == project_data["display_name"]
 
 
-@_SKIP_NO_DB
 async def test_project_dep_edges_consistent_with_repo_dep_edges(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:

@@ -11,6 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -20,8 +21,8 @@ from sqlalchemy.orm import selectinload
 from pg_atlas.db_models.base import RepoVertexType
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
-from pg_atlas.db_models.session import maybe_db_session
-from pg_atlas.db_models.vertex_ops import _POLY_LOAD
+from pg_atlas.db_models.vertex_ops import POLY_LOAD
+from pg_atlas.routers.common import DbSession, PaginationParams
 from pg_atlas.routers.models import (
     ContributorSummary,
     DepCounts,
@@ -41,16 +42,19 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-def _require_session(session: AsyncSession | None) -> AsyncSession:
-    """Raise HTTP 503 if the database session is unavailable."""
+def _re_encode_purl(canonical_id: str) -> str:
+    """
 
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database is not configured.",
-        )
+    Re-apply percent-encoding that Starlette strips from ``{path}`` params.
 
-    return session
+    PURL canonical IDs stored in the database retain percent-encoding from
+    upstream sources (e.g. ``pkg:npm/%40tailwindcss/postcss``).  Starlette
+    auto-decodes path parameters (``%40`` → ``@``), which breaks DB lookups.
+    Re-encoding with ``safe="/:"`` restores the original form while keeping
+    PURL structural separators intact.
+    """
+
+    return quote(canonical_id, safe="/:")
 
 
 async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
@@ -58,10 +62,20 @@ async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
     Fetch a Repo by canonical_id or raise 404.
 
     Uses the JTI polymorphic loader and verifies the result is a ``Repo``
-    (not ``ExternalRepo``).
+    (not ``ExternalRepo``).  Tries the raw path parameter first, then the
+    re-encoded form to handle Starlette's automatic percent-decoding.
     """
-    result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(_POLY_LOAD))
+    # Try decoded value first (most canonical_ids have no percent-encoding).
+    result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(POLY_LOAD))
     vertex = result.scalar_one_or_none()
+
+    # Fall back to re-encoded form for PURLs with percent-encoded chars (e.g. npm scoped packages).
+    if vertex is None:
+        encoded = _re_encode_purl(canonical_id)
+
+        if encoded != canonical_id:
+            result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == encoded).options(POLY_LOAD))
+            vertex = result.scalar_one_or_none()
 
     if vertex is None or not isinstance(vertex, Repo):
         raise HTTPException(
@@ -84,11 +98,10 @@ async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
     tags=[Graph.repos, Source.github, Source.deps_dev],
 )
 async def list_repos(
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
     project_id: int | None = None,
     search: Annotated[str | None, Query(max_length=256)] = None,
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[RepoSummary]:
     """
     Paginated list of in-ecosystem repos with optional filters.
@@ -97,8 +110,6 @@ async def list_repos(
     - **search**: case-insensitive substring match on `display_name`.
     - Results are ordered by `canonical_id` for deterministic pagination.
     """
-    db = _require_session(session)
-
     base = select(Repo)
 
     if project_id is not None:
@@ -110,14 +121,14 @@ async def list_repos(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
-    rows_result = await db.execute(base.order_by(Repo.canonical_id).limit(limit).offset(offset))
+    rows_result = await db.execute(base.order_by(Repo.canonical_id).limit(pagination.limit).offset(pagination.offset))
     repos = rows_result.scalars().all()
 
     return PaginatedResponse[RepoSummary](
         items=[RepoSummary.model_validate(r) for r in repos],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -134,7 +145,7 @@ async def list_repos(
 )
 async def get_repo_depends_on(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> list[RepoDependency]:
     """
     List of direct dependencies (outgoing edges) for a given repo.
@@ -142,7 +153,6 @@ async def get_repo_depends_on(
     Each entry includes the target vertex's canonical ID, display name,
     type (``repo`` or ``external-repo``), version range, and confidence level.
     """
-    db = _require_session(session)
     repo = await _get_repo_or_404(db, canonical_id)
 
     return await _dep_edges(db, repo.id, direction="outgoing")
@@ -156,7 +166,7 @@ async def get_repo_depends_on(
 )
 async def get_repo_has_dependents(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> list[RepoDependency]:
     """
     List of direct dependents (incoming edges) for a given repo.
@@ -164,7 +174,6 @@ async def get_repo_has_dependents(
     Each entry includes the source vertex's canonical ID, display name,
     type, version range, and confidence level.
     """
-    db = _require_session(session)
     repo = await _get_repo_or_404(db, canonical_id)
 
     return await _dep_edges(db, repo.id, direction="incoming")
@@ -178,13 +187,12 @@ async def get_repo_has_dependents(
 )
 async def get_repo(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> RepoDetailResponse:
     """
     Full detail for a single repo including parent project, contributors,
-    and dependency counts.
+    releases, and dependency counts.
     """
-    db = _require_session(session)
     repo = await _get_repo_or_404(db, canonical_id)
 
     # Dependency counts by direction and target vertex type.
@@ -211,6 +219,7 @@ async def get_repo(
         adoption_stars=repo.adoption_stars,
         adoption_forks=repo.adoption_forks,
         updated_at=repo.updated_at,
+        releases=repo.releases,
         parent_project=parent,
         contributors=contributors,
         outgoing_dep_counts=outgoing,

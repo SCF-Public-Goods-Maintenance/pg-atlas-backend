@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
-
-_SKIP_NO_DB = pytest.mark.skipif(
-    not pytest.importorskip("asyncpg", reason="DB driver"),
-    reason="requires asyncpg",
-)
-
 
 # ---------------------------------------------------------------------------
 # No-DB tests
@@ -36,7 +29,6 @@ async def test_repos_db_unavailable_returns_503(no_db_client: AsyncClient) -> No
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_NO_DB
 async def test_list_repos_pagination(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -51,7 +43,6 @@ async def test_list_repos_pagination(
     assert data["total"] >= 3
 
 
-@_SKIP_NO_DB
 async def test_list_repos_filter_by_project_id(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -67,7 +58,6 @@ async def test_list_repos_filter_by_project_id(
         assert item["project_id"] == pid
 
 
-@_SKIP_NO_DB
 async def test_list_repos_search(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -82,7 +72,6 @@ async def test_list_repos_search(
     assert any("repo-a1" in r["display_name"] for r in data["items"])
 
 
-@_SKIP_NO_DB
 async def test_get_repo_detail_with_parent_project(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -99,7 +88,6 @@ async def test_get_repo_detail_with_parent_project(
     assert data["parent_project"]["canonical_id"] == seed["project_a"].canonical_id
 
 
-@_SKIP_NO_DB
 async def test_get_repo_detail_includes_contributors(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -115,7 +103,6 @@ async def test_get_repo_detail_includes_contributors(
     assert any(c["name"] == "Test Contributor" for c in contribs)
 
 
-@_SKIP_NO_DB
 async def test_get_repo_detail_includes_dep_counts(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -132,7 +119,6 @@ async def test_get_repo_detail_includes_dep_counts(
     assert data["outgoing_dep_counts"]["external_repos"] >= 1
 
 
-@_SKIP_NO_DB
 async def test_get_repo_not_found_returns_404(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -143,7 +129,6 @@ async def test_get_repo_not_found_returns_404(
     assert resp.status_code == 404
 
 
-@_SKIP_NO_DB
 async def test_get_repo_depends_on(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
@@ -161,7 +146,6 @@ async def test_get_repo_depends_on(
     assert seed["ext_repo"].canonical_id in target_ids
 
 
-@_SKIP_NO_DB
 async def test_get_repo_has_dependents(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:

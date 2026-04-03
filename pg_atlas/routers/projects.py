@@ -20,7 +20,7 @@ from pg_atlas.db_models.base import ActivityStatus, ProjectType
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
-from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.routers.common import DbSession, PaginationParams
 from pg_atlas.routers.models import (
     PaginatedResponse,
     ProjectDependency,
@@ -37,18 +37,6 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _require_session(session: AsyncSession | None) -> AsyncSession:
-    """Raise HTTP 503 if the database session is unavailable."""
-
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database is not configured.",
-        )
-
-    return session
 
 
 async def _get_project_or_404(db: AsyncSession, canonical_id: str) -> Project:
@@ -78,12 +66,11 @@ async def _get_project_or_404(db: AsyncSession, canonical_id: str) -> Project:
     tags=[Graph.projects, Source.opengrants, Source.pg_atlas],
 )
 async def list_projects(
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
     project_type: ProjectType | None = None,
     activity_status: ActivityStatus | None = None,
     search: Annotated[str | None, Query(max_length=256)] = None,
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[ProjectSummary]:
     """
     Paginated list of SCF-funded projects with optional filters.
@@ -93,8 +80,6 @@ async def list_projects(
     - **search**: case-insensitive substring match on `display_name`.
     - Results are ordered by `canonical_id` for deterministic pagination.
     """
-    db = _require_session(session)
-
     base = select(Project)
 
     if project_type is not None:
@@ -109,14 +94,14 @@ async def list_projects(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
-    rows_result = await db.execute(base.order_by(Project.canonical_id).limit(limit).offset(offset))
+    rows_result = await db.execute(base.order_by(Project.canonical_id).limit(pagination.limit).offset(pagination.offset))
     projects = rows_result.scalars().all()
 
     return PaginatedResponse[ProjectSummary](
         items=[ProjectSummary.model_validate(p) for p in projects],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -128,7 +113,7 @@ async def list_projects(
 )
 async def get_project(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> ProjectDetailResponse:
     """
     Full detail for a single project, including validated metadata.
@@ -136,7 +121,6 @@ async def get_project(
     The ``metadata`` field is the normalised form of the raw JSONB column —
     unknown keys from the crawler are passed through via ``extra="allow"``.
     """
-    db = _require_session(session)
     project = await _get_project_or_404(db, canonical_id)
 
     return ProjectDetailResponse(
@@ -162,16 +146,14 @@ async def get_project(
 )
 async def get_project_repos(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[RepoSummary]:
     """
     Paginated list of repos that belong to the given project.
 
     Returns 404 if the project does not exist.
     """
-    db = _require_session(session)
     project = await _get_project_or_404(db, canonical_id)
 
     base = select(Repo).where(Repo.project_id == project.id)
@@ -179,14 +161,14 @@ async def get_project_repos(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
-    rows_result = await db.execute(base.order_by(Repo.canonical_id).limit(limit).offset(offset))
+    rows_result = await db.execute(base.order_by(Repo.canonical_id).limit(pagination.limit).offset(pagination.offset))
     repos = rows_result.scalars().all()
 
     return PaginatedResponse[RepoSummary](
         items=[RepoSummary.model_validate(r) for r in repos],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -198,7 +180,7 @@ async def get_project_repos(
 )
 async def get_project_depends_on(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> list[ProjectDependency]:
     """
     Collapsed project-level dependencies.
@@ -208,7 +190,6 @@ async def get_project_depends_on(
     the two projects.  Self-references and edges to external repos (which have no
     project) are excluded.
     """
-    db = _require_session(session)
     project = await _get_project_or_404(db, canonical_id)
 
     return await _project_level_deps(db, project, direction="outgoing")
@@ -222,7 +203,7 @@ async def get_project_depends_on(
 )
 async def get_project_has_dependents(
     canonical_id: str,
-    session: Annotated[AsyncSession | None, Depends(maybe_db_session)],
+    db: DbSession,
 ) -> list[ProjectDependency]:
     """
     Collapsed project-level reverse dependencies.
@@ -230,7 +211,6 @@ async def get_project_has_dependents(
     Same aggregation as ``depends-on`` but in the reverse direction: which
     other projects have repos that depend on repos of *this* project.
     """
-    db = _require_session(session)
     project = await _get_project_or_404(db, canonical_id)
 
     return await _project_level_deps(db, project, direction="incoming")
