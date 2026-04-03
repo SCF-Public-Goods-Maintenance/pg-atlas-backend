@@ -10,7 +10,7 @@ Migrations live in `pg_atlas/migrations/versions`.  Importing
 `PgBase.metadata`, which is what autogenerate inspects.
 
 All Alembic commands in this repository require `PG_ATLAS_DATABASE_URL` to
-point at a real PostgreSQL database. For local development, the canonical
+point at a real PostgreSQL database. For local development, the default
 working database is:
 
 ```sh
@@ -46,55 +46,37 @@ uv run alembic upgrade atlas@head
 For local development, use a single database (`pg_atlas`) and reset it in
 place instead of creating task-specific throwaway databases.
 
-To completely reset the local schema to the current state of all Alembic
-bases:
+To completely reset the local schema **and data** to the current state of all
+Alembic branches:
 
 ```sh
-export PG_ATLAS_DATABASE_URL=postgresql://atlas:changeme@localhost:5432/pg_atlas
-
 uv run alembic downgrade base
 uv run alembic upgrade heads
 ```
 
 This is the standard local reset workflow for the project.
 
-## Restore the hosted development snapshot
+## Restore a `pg_dump` that has been provided to you
 
-For real-data validation, restore the hosted snapshot dump onto the same
+For real-data validation, restore the (hosted) snapshot dump onto the same
 local `pg_atlas` database after resetting the schema:
 
 ```sh
-export PG_ATLAS_DATABASE_URL=postgresql://atlas:changeme@localhost:5432/pg_atlas
-export DUMP_PATH=/Users/jaygut/Downloads/pg-atlas-v0.2-dev.dump
-
-uv run alembic downgrade base
-uv run alembic upgrade heads
+pg_restore -v -d $PG_ATLAS_DATABASE_URL \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --no-privileges \
+  --exit-on-error
+  /path/to/snapshot.dump
 ```
 
-Then restore the dump:
+If you try to restore this dump into a blank database, that will fail. The
+hosted dump does not include everything needed to bootstrap the schema from
+scratch (notably PostgreSQL enum types), so the correct sequence is always:
 
-```sh
-docker cp "$DUMP_PATH" pg-atlas-backend-postgres-1:/tmp/pg-atlas-v0.2-dev.dump
-docker exec pg-atlas-backend-postgres-1 sh -lc \
-  'export PGPASSWORD=changeme; \
-   pg_restore -d postgresql://atlas:changeme@localhost:5432/pg_atlas \
-     --clean \
-     --if-exists \
-     --no-owner \
-     --no-privileges \
-     --exit-on-error \
-     /tmp/pg-atlas-v0.2-dev.dump'
-```
-
-Important: do **not** restore this dump into a blank database. The hosted
-dump does not carry everything needed to bootstrap the schema from scratch
-(notably PostgreSQL enum types), so the correct sequence is always:
-
-1. migrate the local database to `heads`
-2. restore the dump onto that migrated schema
-
-If `pg_restore` is not available on the host shell, use the containerized
-command above.
+1. migrate the local database to `heads` (or the specified `alembic heads`)
+1. restore the dump onto that migrated schema
 
 ## Generate a new revision
 
