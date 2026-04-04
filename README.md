@@ -137,6 +137,17 @@ Releases and `CHANGELOG.md` are managed automatically by
 See the [cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)
 on how to write _good_ commit messages.
 
+## Release Instructions
+
+Collect all commits you want to release on the trunk branch: `main`.
+
+1. Review and merge the Release Please PR; ensure it's pushed.
+1. Wait until this release is deployed on Digital Ocean.
+1. Check if `.info.version` in the hosted `openapi.json` is the one you just released.
+1. Release the Typescript SDK to maintain version sync: [SDK publish.md](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-sdk/blob/main/publish.md).
+
+(The SDK release can be skipped if this is a patch release without consequences for API consumers.)
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
