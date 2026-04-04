@@ -116,6 +116,7 @@ class ProjectDetailResponse(ProjectSummary):
     ``metadata`` is the normalised form of the ``project_metadata`` JSONB column.
     """
 
+    project_id: int
     metadata: ProjectMetadata
 
 

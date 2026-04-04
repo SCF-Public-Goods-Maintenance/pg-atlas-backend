@@ -134,6 +134,7 @@ async def get_project(
         criticality_score=project.criticality_score,
         adoption_score=project.adoption_score,
         updated_at=project.updated_at,
+        project_id=project.id,
         metadata=ProjectMetadata.model_validate(project.project_metadata or {}),
     )
 
