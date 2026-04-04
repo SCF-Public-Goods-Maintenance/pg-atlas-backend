@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.3.0...v0.4.0) (2026-04-04)
+
+
+### Features
+
+* **API:** add `project_id` field to `ProjectDetailResponse` ([9021637](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/90216370a816eebb999688c44d1b2458a57d01b4))
+* **API:** create all API endpoints needed to unblock SDK and frontend development ([#22](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/22)) ([83df2ac](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/83df2acbc9048eb5ca917ae882fb7c9a65fb1f29))
+
+
+### Documentation
+
+* **API:** add contribute-data section and generate prettier route IDs ([24e7456](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/24e74569c0c67b8a92a679c8d9b67bfe5bec34b2))
+* **migrations:** document single-db local workflow ([#21](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/21)) ([ba61dfa](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/ba61dfa85a8d95c12b5b9de990150c0a174f04bb))
+* provide release instructions ([b7660e8](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/b7660e82e355f041c2d67d9c9f0541d5f6666230))
+
 ## [0.3.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.2.0...v0.3.0) (2026-04-02)
 
 
