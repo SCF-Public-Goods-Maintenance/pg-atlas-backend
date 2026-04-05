@@ -37,7 +37,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Application lifespan manager.
 
     Startup and shutdown hooks live here. Database connection pool setup (A2)
-    and NetworkX graph loading (A6/A8) may be added in later deliverables.
+    and runtime NetworkX graph loading / refresh may be added in later
+    deliverables. Graph refresh remains follow-up A8 work, not part of this PR.
     """
     logger.info(f"PG Atlas starting up (API_URL={settings.API_URL})")
     yield

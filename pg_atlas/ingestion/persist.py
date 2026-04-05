@@ -1,26 +1,34 @@
 """
-A3 SBOM write path — persist SBOM submissions to PostgreSQL.
+A3/A8 SBOM persistence flow for PostgreSQL-backed ingestion.
 
-Implements the ingestion pipeline that runs after successful OIDC authentication:
+The HTTP request thread now owns only the synchronous admission steps:
 
-0.  Check for existing SBOM content hash: if it exists, create an ``SbomSubmission`` row
+0.  Check for an existing non-failed submission with the same repository and
+    SBOM content hash; if it exists, record a duplicate ``SbomSubmission`` row
     and skip further processing.
-1.  Store the raw SBOM bytes as an artifact (filesystem for local dev / CID for prod).
+1.  Store the raw SBOM bytes as an artifact (filesystem for local dev / CID
+    for prod).
 2.  Parse and validate the SPDX 2.3 document; on failure create a ``failed``
     ``SbomSubmission`` row so the payload is retained for manual triage.
-3.  Upsert the submitting ``Repo`` vertex (canonical_id derived from the OIDC
+3.  Create and commit a ``pending`` ``SbomSubmission`` audit row.
+4.  Defer background processing to the dedicated Procrastinate ``sbom`` queue.
+
+The worker path then owns the heavy graph mutation steps:
+
+5.  Re-read the stored artifact and re-validate it.
+6.  Upsert the submitting ``Repo`` vertex (canonical_id derived from the OIDC
     ``repository`` claim as ``pkg:github/owner/repo``).
-4.  Upsert each declared package as an ``ExternalRepo`` vertex (self-references
+7.  Upsert each declared package as an ``ExternalRepo`` vertex (self-references
     that resolve to the same canonical_id as the submitting repo are skipped).
     TODO: after A5 we need to check for Project membership; some vertices will
     become ``Repo`` instead of ``ExternalRepo``.
-5.  Bulk-replace all ``DependsOn`` edges from the submitting repo with the
+8.  Bulk-replace all ``DependsOn`` edges from the submitting repo with the
     current SBOM's dependency set (delete-then-insert for idempotency).
-6.  Mark the ``SbomSubmission`` as ``processed`` and commit.
+9.  Mark the ``SbomSubmission`` as ``processed`` and commit.
 
-All database work executes inside a single transaction.  If any step fails the
-transaction is rolled back and a best-effort ``failed`` audit row is committed
-in a new transaction so the raw artifact and error detail are preserved.
+If any request-thread or worker step fails, the relevant ``SbomSubmission`` row
+is marked ``failed`` with preserved error detail so the raw artifact remains
+available for diagnosis.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -28,25 +36,33 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
 
+from pg_atlas.config import settings
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
+from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import store_artifact
 
 logger = logging.getLogger(__name__)
+
+
+class SbomQueueingError(RuntimeError):
+    """Raised when a validated SBOM could not be deferred for background processing."""
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +244,171 @@ async def _replace_depends_on_edges(
     await session.flush()
 
 
+def _artifact_store_path(artifact_path: str) -> Path:
+    """
+    Resolve an artifact-store-relative path to an absolute filesystem path.
+    """
+
+    return settings.ARTIFACT_STORE_PATH / artifact_path
+
+
+def _read_artifact_bytes_sync(artifact_path: str) -> bytes:
+    """Read raw artifact bytes from the local artifact store."""
+
+    return _artifact_store_path(artifact_path).read_bytes()
+
+
+async def _read_artifact_bytes(artifact_path: str) -> bytes:
+    """Read artifact bytes without blocking the event loop."""
+
+    return await asyncio.get_running_loop().run_in_executor(None, _read_artifact_bytes_sync, artifact_path)
+
+
+async def _mark_submission_failed(
+    session: AsyncSession,
+    submission_id: int,
+    error_detail: str,
+) -> None:
+    """
+    Mark an existing submission row as failed.
+    """
+
+    await session.rollback()
+    submission = await session.get(SbomSubmission, submission_id)
+    if submission is None:
+        logger.warning(f"SBOM submission missing while marking failed: submission_id={submission_id}")
+
+        return
+
+    submission.status = SubmissionStatus.failed
+    submission.error_detail = error_detail[:4096]
+    await session.commit()
+
+
+async def _record_failed_validation(
+    session: AsyncSession,
+    repository: str,
+    actor: str,
+    content_hash_hex: str,
+    artifact_path: str,
+    error_detail: str,
+) -> None:
+    """
+    Persist a failed submission row for a validation-time error.
+    """
+
+    failed_submission = SbomSubmission(
+        repository_claim=repository,
+        actor_claim=actor,
+        sbom_content_hash=content_hash_hex,
+        artifact_path=artifact_path,
+        status=SubmissionStatus.failed,
+        error_detail=error_detail[:4096],
+    )
+    session.add(failed_submission)
+    await session.commit()
+
+
+async def _persist_sbom_graph(
+    session: AsyncSession,
+    repository: str,
+    actor: str,
+    sbom: ParsedSbom,
+) -> int:
+    """
+    Apply repo and dependency changes for one validated SBOM document.
+
+    Returns:
+        Number of dependency edges emitted from the submitting repo.
+    """
+
+    submitting_canonical_id = canonical_id_for_github_repo(repository)
+    repo_display_name = repository.split("/")[-1]
+    submitting_repo = await _upsert_repo(
+        session,
+        canonical_id=submitting_canonical_id,
+        display_name=repo_display_name,
+        latest_version="",
+        repo_url=f"https://github.com/{repository}",
+    )
+
+    dep_vertex_ids: dict[int, str] = {}
+    for pkg in sbom.document.packages:
+        pkg_canonical_id = canonical_id_for_spdx_package(pkg)
+        if pkg_canonical_id == submitting_canonical_id:
+            logger.debug(f"Skipping self-referential package {pkg_canonical_id}")
+            continue
+
+        version = _version_for_spdx_package(pkg)
+        repo_url = _repo_url_for_spdx_package(pkg)
+
+        try:
+            dep_vertex = await _upsert_external_repo(
+                session,
+                canonical_id=pkg_canonical_id,
+                display_name=str(pkg.name),
+                latest_version=version,
+                repo_url=repo_url,
+            )
+        except ValueError:
+            existing = await get_vertex(session, pkg_canonical_id)
+            if existing is None:
+                continue
+
+            dep_vertex = existing
+
+        dep_vertex_ids[dep_vertex.id] = version
+
+    await _replace_depends_on_edges(session, submitting_repo.id, dep_vertex_ids)
+
+    logger.info(
+        f"SBOM graph applied: repository={repository} actor={actor} packages={sbom.package_count} deps={len(dep_vertex_ids)}"
+    )
+
+    return len(dep_vertex_ids)
+
+
+async def process_pending_sbom_submission(session: AsyncSession, submission_id: int) -> None:
+    """
+    Process one pending SBOM submission from its stored artifact.
+
+    Missing or already-terminal submissions are logged and ignored.
+    """
+
+    submission = await session.get(SbomSubmission, submission_id)
+    if submission is None:
+        logger.warning(f"SBOM submission not found: submission_id={submission_id}")
+
+        return
+
+    if submission.status != SubmissionStatus.pending:
+        logger.info(
+            "Skipping SBOM submission with non-pending status: submission_id=%d status=%s",
+            submission_id,
+            submission.status.value,
+        )
+
+        return
+
+    try:
+        raw_body = await _read_artifact_bytes(submission.artifact_path)
+        sbom = parse_and_validate_spdx(raw_body)
+        await _persist_sbom_graph(session, submission.repository_claim, submission.actor_claim, sbom)
+        submission.status = SubmissionStatus.processed
+        submission.processed_at = dt.datetime.now(dt.UTC)
+        await session.commit()
+
+    except FileNotFoundError as exc:
+        logger.warning("Stored SBOM artifact missing for submission_id=%d", submission_id)
+        await _mark_submission_failed(session, submission_id, str(exc))
+    except SpdxValidationError as exc:
+        logger.warning("Stored SBOM artifact became invalid for submission_id=%d", submission_id)
+        await _mark_submission_failed(session, submission_id, str(exc))
+    except Exception as exc:
+        logger.exception(f"SBOM worker processing failed for submission_id={submission_id}")
+        await _mark_submission_failed(session, submission_id, str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -239,7 +420,7 @@ async def handle_sbom_submission(
     claims: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Orchestrate the full A3 SBOM ingestion pipeline for a single submission.
+    Orchestrate the request-thread portion of SBOM ingestion for one submission.
 
     When ``session`` is ``None`` (database not configured) the function falls
     back to the pre-A3 logging stub so that the endpoint remains functional
@@ -252,14 +433,10 @@ async def handle_sbom_submission(
     2.  Parse and validate the SPDX 2.3 document.
     3a. On validation failure: commit a ``failed`` ``SbomSubmission`` row and
         re-raise ``SpdxValidationError`` so the router returns 422.
-    3b. On success: proceed with the full write path.
-    4.  Create a ``pending`` ``SbomSubmission`` row.
-    5.  Upsert the submitting ``Repo`` vertex from OIDC claims.
-    6.  Upsert each package as an ``ExternalRepo`` (skip self-refs).
-    7.  Bulk-replace ``DependsOn`` edges.
-    8.  Mark submission ``processed`` and commit.
-    9.  If the DB transaction fails: roll back, commit a ``failed`` audit row
-        with error detail, then re-raise.
+    3b. On success: commit a ``pending`` ``SbomSubmission`` row.
+    4.  Defer background processing to Procrastinate.
+    5.  If the defer fails: mark the pending row ``failed`` and raise
+        ``SbomQueueingError`` so the router returns 503.
 
     Args:
         session: SQLAlchemy ``AsyncSession``, or ``None`` when the database is
@@ -276,6 +453,8 @@ async def handle_sbom_submission(
         SpdxValidationError: If ``raw_body`` cannot be parsed as SPDX 2.3.
             The exception is raised after a ``failed`` audit row has been
             committed (when ``session`` is not ``None``).
+        SbomQueueingError: If validation succeeded but background processing
+            could not be deferred.
     """
     repository: str = claims["repository"]
     actor: str = claims["actor"]
@@ -344,16 +523,14 @@ async def handle_sbom_submission(
     # ------------------------------------------------------------------
     if spdx_error is not None:
         try:
-            failed_submission = SbomSubmission(
-                repository_claim=repository,
-                actor_claim=actor,
-                sbom_content_hash=content_hash_hex,
+            await _record_failed_validation(
+                session,
+                repository=repository,
+                actor=actor,
+                content_hash_hex=content_hash_hex,
                 artifact_path=artifact_path,
-                status=SubmissionStatus.failed,
-                error_detail=str(spdx_error)[:4096],
+                error_detail=str(spdx_error),
             )
-            session.add(failed_submission)
-            await session.commit()
             logger.info(f"SBOM validation failed, recorded for triage: repository={repository} hash={content_hash_hex}")
         except Exception:
             logger.exception(f"Failed to record failed SBOM submission for {repository}")
@@ -362,7 +539,7 @@ async def handle_sbom_submission(
     assert sbom is not None
 
     # ------------------------------------------------------------------
-    # Core DB write path — single transaction
+    # Commit the pending submission row, then defer background processing
     # ------------------------------------------------------------------
     try:
         submission = SbomSubmission(
@@ -373,79 +550,30 @@ async def handle_sbom_submission(
             status=SubmissionStatus.pending,
         )
         session.add(submission)
-        await session.flush()
-
-        # Upsert the submitting Repo from OIDC claims
-        submitting_canonical_id = canonical_id_for_github_repo(repository)
-        repo_display_name = repository.split("/")[-1]
-        submitting_repo = await _upsert_repo(
-            session,
-            canonical_id=submitting_canonical_id,
-            display_name=repo_display_name,
-            latest_version="",
-            repo_url=f"https://github.com/{repository}",
-        )
-
-        # Upsert each package as ExternalRepo; skip the submitting repo itself
-        dep_vertex_ids: dict[int, str] = {}
-        for pkg in sbom.document.packages:
-            pkg_canonical_id = canonical_id_for_spdx_package(pkg)
-            if pkg_canonical_id == submitting_canonical_id:
-                logger.debug(f"Skipping self-referential package {pkg_canonical_id}")
-                continue
-
-            version = _version_for_spdx_package(pkg)
-            repo_url = _repo_url_for_spdx_package(pkg)
-
-            try:
-                dep_vertex = await _upsert_external_repo(
-                    session,
-                    canonical_id=pkg_canonical_id,
-                    display_name=str(pkg.name),
-                    latest_version=version,
-                    repo_url=repo_url,
-                )
-
-            except ValueError:
-                # canonical_id already tracked as a Repo — reuse it for the edge.
-                existing = await get_vertex(session, pkg_canonical_id)
-                if existing is None:
-                    continue
-
-                dep_vertex = existing
-
-            dep_vertex_ids[dep_vertex.id] = version
-
-        # Bulk-replace outgoing DependsOn edges for this repo
-        await _replace_depends_on_edges(session, submitting_repo.id, dep_vertex_ids)
-
-        submission.status = SubmissionStatus.processed
-        submission.processed_at = dt.datetime.now(dt.UTC)
         await session.commit()
-
-        logger.info(
-            f"SBOM submission processed: repository={repository} actor={actor} "
-            f"packages={sbom.package_count} deps={len(dep_vertex_ids)}"
-        )
-
     except Exception as exc:
         await session.rollback()
-        logger.exception(f"DB write failed for SBOM submission from {repository}")
-        # Best-effort: commit a failed audit row so the raw artifact is not silently lost
+        logger.exception(f"Failed to persist pending SBOM submission for {repository}")
         try:
-            fail_record = SbomSubmission(
-                repository_claim=repository,
-                actor_claim=actor,
-                sbom_content_hash=content_hash_hex,
+            await _record_failed_validation(
+                session,
+                repository=repository,
+                actor=actor,
+                content_hash_hex=content_hash_hex,
                 artifact_path=artifact_path,
-                status=SubmissionStatus.failed,
-                error_detail=str(exc)[:4096],
+                error_detail=str(exc),
             )
-            session.add(fail_record)
-            await session.commit()
         except Exception:
             logger.exception(f"Failed to commit failure record for {repository}")
         raise
+
+    await session.refresh(submission)
+
+    try:
+        await defer_sbom_processing(submission.id)
+    except Exception as exc:
+        await _mark_submission_failed(session, submission.id, str(exc))
+        raise SbomQueueingError(f"Could not enqueue SBOM submission {submission.id}") from exc
 
     return {
         "message": "queued",

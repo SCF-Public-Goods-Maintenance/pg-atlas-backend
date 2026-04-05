@@ -1,17 +1,19 @@
 """
-Procrastinate task definitions for the A5 Reference Graph Bootstrap pipeline.
+Procrastinate task definitions for PG Atlas background processing.
 
 Task hierarchy (queue names in brackets)::
+
+    process_sbom_submission  [sbom]
 
     sync_opengrants  [opengrants]
       └─ process_project  [opengrants]
            └─ crawl_github_repo  [opengrants]
                 └─ crawl_package_deps  [package-deps]
 
-Workers are invoked sequentially per queue so that all ``crawl_github_repo``
-tasks are complete before ``crawl_package_deps`` begins.  This guarantees
-that ``Repo`` vertices and their ``Project`` associations exist by the time
-the dependency crawl needs to check them.
+The A5 bootstrap workers are invoked sequentially per queue so that all
+``crawl_github_repo`` tasks are complete before ``crawl_package_deps`` begins.
+This guarantees that ``Repo`` vertices and their ``Project`` associations
+exist by the time the dependency crawl needs to check them.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -37,7 +39,7 @@ from sqlalchemy import select
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
 from pg_atlas.db_models.repo_vertex import RepoVertex
 from pg_atlas.db_models.session import get_session_factory
-from pg_atlas.ingestion.persist import strip_purl_version
+from pg_atlas.ingestion.persist import process_pending_sbom_submission, strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
@@ -352,6 +354,24 @@ async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool
         logger.warning(str(exc))
 
         return False
+
+
+# ---------------------------------------------------------------------------
+# Task: process_sbom_submission
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="sbom")
+async def process_sbom_submission(submission_id: int) -> None:
+    """
+    Process one pending SBOM submission from the post-validation queue.
+    """
+
+    logger.info(f"process_sbom_submission: submission_id={submission_id}")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        await process_pending_sbom_submission(session, submission_id)
 
 
 # ---------------------------------------------------------------------------

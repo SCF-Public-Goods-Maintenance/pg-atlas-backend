@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus
+from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
@@ -32,6 +32,7 @@ from pg_atlas.ingestion.persist import (
     canonical_id_for_github_repo,
     canonical_id_for_spdx_package,
     handle_sbom_submission,
+    process_pending_sbom_submission,
     strip_purl_version,
 )
 from tests.conftest import get_test_database_url
@@ -61,6 +62,25 @@ def _unique_claims(owner: str = "test-org") -> dict[str, Any]:
     """Return claims with a unique per-invocation repository name to avoid DB conflicts."""
     suffix = uuid.uuid4().hex[:8]
     return {"repository": f"{owner}/test-repo-{suffix}", "actor": "test-user"}
+
+
+async def _submission_for_payload(
+    session: AsyncSession,
+    raw_body: bytes,
+    claims: dict[str, Any],
+) -> SbomSubmission:
+    """
+    Load the submission row corresponding to one repository-specific payload.
+    """
+
+    content_hash_hex = hashlib.sha256(raw_body).hexdigest()
+    return (
+        await session.execute(
+            select(SbomSubmission)
+            .where(SbomSubmission.sbom_content_hash == content_hash_hex)
+            .where(SbomSubmission.repository_claim == claims["repository"])
+        )
+    ).scalar_one()
 
 
 # ---------------------------------------------------------------------------
@@ -114,75 +134,63 @@ def test_canonical_id_for_spdx_package_fallback() -> None:
 async def test_handle_sbom_submission_valid(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
 ) -> None:
     """
-    A valid SPDX 2.3 submission creates a processed SbomSubmission, upserts a
-    Repo for the submitting repo, creates ExternalRepo vertices for each
-    dependency, and creates DependsOn edges with ``verified_sbom`` confidence.
+    A valid SPDX 2.3 submission records a pending audit row and defers one job.
     """
     claims = _unique_claims()
     valid_sbom = (FIXTURES / "valid.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     result = await handle_sbom_submission(db_session, valid_sbom, claims)
 
     assert result["repository"] == claims["repository"]
     assert result["package_count"] == 2  # requests + httpx in valid.spdx.json
 
-    # SbomSubmission audit row — filter by both hash and repository_claim to
-    # tolerate rows from previous test runs sharing the same fixture hash.
-    content_hash_hex = hashlib.sha256(valid_sbom).hexdigest()
-    sub = (
-        await db_session.execute(
-            select(SbomSubmission)
-            .where(SbomSubmission.sbom_content_hash == content_hash_hex)
-            .where(SbomSubmission.repository_claim == claims["repository"])
-        )
-    ).scalar_one()
-    assert sub.status == SubmissionStatus.processed
+    sub = await _submission_for_payload(db_session, valid_sbom, claims)
+    assert sub.status == SubmissionStatus.pending
     assert sub.actor_claim == claims["actor"]
-    assert sub.processed_at is not None
+    assert sub.processed_at is None
+    defer_mock.assert_awaited_once_with(sub.id)
 
-    # Submitting Repo vertex
     repo_cid = canonical_id_for_github_repo(claims["repository"])
-    repo = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalar_one()
-    assert repo.repo_url == f"https://github.com/{claims['repository']}"
-
-    # ExternalRepo vertices (requests + httpx from valid.spdx.json)
-    ext_repos = (
-        (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id.in_(["requests", "httpx"]))))
-        .scalars()
-        .all()
-    )
-    assert len(ext_repos) == 2
-
-    # DependsOn edges — both with verified_sbom confidence
-    edges = (await db_session.execute(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).scalars().all()
-    assert len(edges) == 2
-    assert all(e.confidence == EdgeConfidence.verified_sbom for e in edges)
+    repo = await db_session.scalar(select(Repo).where(Repo.canonical_id == repo_cid))
+    assert repo is None
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
 async def test_handle_sbom_submission_is_idempotent(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
 ) -> None:
     """
-    Re-submitting the same SBOM twice must not create duplicate Repo vertices.
-    Each submission produces an audit row, but the canonical vertex is upserted.
+    Re-submitting the same SBOM twice keeps one canonical repo and skips re-enqueueing.
     """
     claims = _unique_claims()
     valid_sbom = (FIXTURES / "valid.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
     await handle_sbom_submission(db_session, valid_sbom, claims)
-    await handle_sbom_submission(db_session, valid_sbom, claims)
+    first_submission = await _submission_for_payload(db_session, valid_sbom, claims)
+    await process_pending_sbom_submission(db_session, first_submission.id)
+
+    second_result = await handle_sbom_submission(db_session, valid_sbom, claims)
+    assert second_result["message"] == "duplicate skipped"
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
     repos = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalars().all()
     assert len(repos) == 1, "Re-ingestion must not create duplicate Repo vertices"
+    assert defer_mock.await_count == 1
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
 async def test_handle_sbom_submission_github_dep_graph(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
 ) -> None:
     """
     A GitHub Dependency Graph SBOM (with PURL externalRefs and a DESCRIBES
@@ -199,9 +207,14 @@ async def test_handle_sbom_submission_github_dep_graph(
         "repository": "SCF-Public-Goods-Maintenance/pg-atlas-sbom-action",
         "actor": "test-user",
     }
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     raw = (FIXTURES / "github_dep_graph.spdx.json").read_bytes()
     result = await handle_sbom_submission(db_session, raw, claims)
     assert result["repository"] == claims["repository"]
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await process_pending_sbom_submission(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id)
 
     # Submitting repo → Repo vertex, NOT ExternalRepo
     repo_cid = canonical_id_for_github_repo(claims["repository"])
@@ -224,6 +237,7 @@ async def test_handle_sbom_submission_github_dep_graph(
 async def test_handle_sbom_submission_duplicate_edges(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
 ) -> None:
     """
     See how `handle_sbom_submission` handles duplicate PURLs within a single SBOM.
@@ -232,10 +246,15 @@ async def test_handle_sbom_submission_duplicate_edges(
     """
     claims = _unique_claims()
     long_sbom = (FIXTURES / "py-stellar-sdk-a9b110.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     result = await handle_sbom_submission(db_session, long_sbom, claims)
 
     assert result["repository"] == claims["repository"]
     assert result["package_count"] == 109
+    submission = await _submission_for_payload(db_session, long_sbom, claims)
+    await process_pending_sbom_submission(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id)
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
     repo = await db_session.scalar(select(Repo).where(Repo.canonical_id == repo_cid))
