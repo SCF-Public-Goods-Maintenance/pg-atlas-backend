@@ -36,7 +36,7 @@ from pg_atlas.config import settings
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
-from pg_atlas.ingestion.persist import SbomQueueingError, handle_sbom_submission
+from pg_atlas.ingestion.persist import SbomAcceptedResponse, SbomQueueingError, handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
 from pg_atlas.routers.common import DbSession, PaginationParams
 
@@ -48,14 +48,6 @@ router = APIRouter(tags=["ingestion"])
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
-
-class SbomAcceptedResponse(BaseModel):
-    """Response body returned on successful SBOM submission (202 Accepted)."""
-
-    message: str
-    repository: str
-    package_count: int
 
 
 class SbomSubmissionResponse(BaseModel):
@@ -157,6 +149,7 @@ async def ingest_sbom(
 
     Raises:
         HTTPException 422: If the request body is not a valid SPDX 2.3 document.
+        HTTPException 503: If the SBOM could not be persisted due to queuing error.
     """
     raw_body = await request.body()
 
@@ -176,7 +169,7 @@ async def ingest_sbom(
             detail=str(exc),
         ) from exc
 
-    return SbomAcceptedResponse(**result)
+    return result
 
 
 @router.get(

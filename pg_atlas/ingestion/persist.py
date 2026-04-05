@@ -43,6 +43,7 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
+from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
@@ -414,11 +415,19 @@ async def process_pending_sbom_submission(session: AsyncSession, submission_id: 
 # ---------------------------------------------------------------------------
 
 
+class SbomAcceptedResponse(BaseModel):
+    """Response body returned on successful SBOM submission (202 Accepted)."""
+
+    message: str
+    repository: str
+    package_count: int
+
+
 async def handle_sbom_submission(
     session: AsyncSession | None,
     raw_body: bytes,
     claims: dict[str, Any],
-) -> dict[str, Any]:
+) -> SbomAcceptedResponse:
     """
     Orchestrate the request-thread portion of SBOM ingestion for one submission.
 
@@ -467,16 +476,13 @@ async def handle_sbom_submission(
     if session is None:
         no_db_sbom = parse_and_validate_spdx(raw_body)
         logger.info(
-            "SBOM submission received (no DB): repository=%s actor=%s packages=%d",
-            repository,
-            actor,
-            no_db_sbom.package_count,
+            f"SBOM submission received (no DB): repository={repository} actor={actor} packages={no_db_sbom.package_count}"
         )
-        return {
-            "message": "queued",
-            "repository": repository,
-            "package_count": no_db_sbom.package_count,
-        }
+        return SbomAcceptedResponse(
+            message="queued",
+            repository=repository,
+            package_count=no_db_sbom.package_count,
+        )
 
     # ------------------------------------------------------------------
     # Check existing: if we know this SBOM for this repository, record the submission, skip processing
@@ -497,11 +503,11 @@ async def handle_sbom_submission(
         session.add(existing_submission)
         await session.commit()
 
-        return {
-            "message": "duplicate skipped",
-            "repository": repository,
-            "package_count": -1,
-        }
+        return SbomAcceptedResponse(
+            message="duplicate skipped",
+            repository=repository,
+            package_count=-1,
+        )
 
     # ------------------------------------------------------------------
     # Store artifact — idempotent filesystem write, runs before parsing
@@ -575,8 +581,8 @@ async def handle_sbom_submission(
         await _mark_submission_failed(session, submission.id, str(exc))
         raise SbomQueueingError(f"Could not enqueue SBOM submission {submission.id}") from exc
 
-    return {
-        "message": "queued",
-        "repository": repository,
-        "package_count": sbom.package_count,
-    }
+    return SbomAcceptedResponse(
+        message="queued",
+        repository=repository,
+        package_count=sbom.package_count,
+    )
