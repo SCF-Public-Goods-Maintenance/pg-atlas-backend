@@ -145,8 +145,8 @@ async def test_handle_sbom_submission_valid(
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     result = await handle_sbom_submission(db_session, valid_sbom, claims)
 
-    assert result["repository"] == claims["repository"]
-    assert result["package_count"] == 2  # requests + httpx in valid.spdx.json
+    assert result.repository == claims["repository"]
+    assert result.package_count == 2  # requests + httpx in valid.spdx.json
 
     sub = await _submission_for_payload(db_session, valid_sbom, claims)
     assert sub.status == SubmissionStatus.pending
@@ -178,7 +178,7 @@ async def test_handle_sbom_submission_is_idempotent(
     await process_pending_sbom_submission(db_session, first_submission.id)
 
     second_result = await handle_sbom_submission(db_session, valid_sbom, claims)
-    assert second_result["message"] == "duplicate skipped"
+    assert second_result.message == "duplicate skipped"
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
     repos = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalars().all()
@@ -211,7 +211,7 @@ async def test_handle_sbom_submission_github_dep_graph(
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     raw = (FIXTURES / "github_dep_graph.spdx.json").read_bytes()
     result = await handle_sbom_submission(db_session, raw, claims)
-    assert result["repository"] == claims["repository"]
+    assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, raw, claims)
     await process_pending_sbom_submission(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id)
@@ -250,8 +250,8 @@ async def test_handle_sbom_submission_duplicate_edges(
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
     result = await handle_sbom_submission(db_session, long_sbom, claims)
 
-    assert result["repository"] == claims["repository"]
-    assert result["package_count"] == 109
+    assert result.repository == claims["repository"]
+    assert result.package_count == 109
     submission = await _submission_for_payload(db_session, long_sbom, claims)
     await process_pending_sbom_submission(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id)

@@ -283,6 +283,6 @@ async def test_active_criticality_within_stellar(db_session: AsyncSession) -> No
 
     # 4. pynacl tops intra-Stellar criticality (March 2026 snapshot).
     top_stellar = max(criticality, key=criticality.__getitem__)
-    assert top_stellar == "pkg:github/OneKeyHQ/pynacl", (
-        f"Expected pynacl to have highest Stellar criticality; got {top_stellar!r} (score={criticality[top_stellar]})"
+    assert top_stellar == "pkg:github/StellarCN/py-stellar-base", (
+        f"Expected py-stellar-base to have highest Stellar criticality; got {top_stellar!r} (score={criticality[top_stellar]})"
     )

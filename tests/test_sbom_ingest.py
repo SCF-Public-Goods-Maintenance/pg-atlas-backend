@@ -32,7 +32,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from jwt import PyJWKClientError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -319,6 +319,8 @@ async def test_invalid_spdx_with_db_records_failed_submission(
     client, session = authenticated_db_client
     invalid_sbom = (FIXTURES / "invalid.spdx.json").read_bytes()
 
+    pre_submission_count = (await session.execute(select(func.count()).select_from(SbomSubmission))).scalar_one()
+
     response = await client.post(
         "/ingest/sbom",
         content=invalid_sbom,
@@ -327,9 +329,10 @@ async def test_invalid_spdx_with_db_records_failed_submission(
 
     assert response.status_code == 422
 
-    submissions = (await session.execute(select(SbomSubmission))).scalars().all()
-    assert len(submissions) == 1
-    assert submissions[0].status == SubmissionStatus.failed
+    submissions = (await session.execute(select(SbomSubmission).order_by(SbomSubmission.id.desc()))).scalars().all()
+    assert len(submissions) == 1 + pre_submission_count
+    added_submission = submissions[0]
+    assert added_submission.status == SubmissionStatus.failed
 
 
 async def test_valid_sbom_returns_503_when_queue_defer_fails(
@@ -347,6 +350,8 @@ async def test_valid_sbom_returns_503_when_queue_defer_fails(
         new=mocker.AsyncMock(side_effect=RuntimeError("queue unavailable")),
     )
 
+    pre_submission_count = (await session.execute(select(func.count()).select_from(SbomSubmission))).scalar_one()
+
     valid_sbom = (FIXTURES / "valid.spdx.json").read_bytes()
     response = await client.post(
         "/ingest/sbom",
@@ -356,11 +361,12 @@ async def test_valid_sbom_returns_503_when_queue_defer_fails(
 
     assert response.status_code == 503
 
-    submissions = (await session.execute(select(SbomSubmission))).scalars().all()
-    assert len(submissions) == 1
-    assert submissions[0].status == SubmissionStatus.failed
-    assert submissions[0].error_detail is not None
-    assert "queue unavailable" in submissions[0].error_detail
+    submissions = (await session.execute(select(SbomSubmission).order_by(SbomSubmission.id.desc()))).scalars().all()
+    assert len(submissions) == 1 + pre_submission_count
+    added_submission = submissions[0]
+    assert added_submission.status == SubmissionStatus.failed
+    assert added_submission.error_detail is not None
+    assert "queue unavailable" in added_submission.error_detail
 
 
 async def test_no_db_fallback_does_not_enqueue_processing(

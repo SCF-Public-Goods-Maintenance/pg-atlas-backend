@@ -177,14 +177,33 @@ async def test_process_sbom_submission_marks_pending_row_processed(
     assert updated.status == SubmissionStatus.processed
     assert updated.processed_at is not None
 
-    repo_rows = (await db_session.execute(select(Repo).order_by(Repo.canonical_id))).scalars().all()
-    external_rows = (await db_session.execute(select(ExternalRepo).order_by(ExternalRepo.canonical_id))).scalars().all()
-    edge_rows = (await db_session.execute(select(DependsOn))).scalars().all()
+    expected_repo = "pkg:github/test-org/test-repo"
 
-    assert [repo.canonical_id for repo in repo_rows] == ["pkg:github/test-org/test-repo"]
-    assert [repo.canonical_id for repo in external_rows] == ["httpx", "requests"]
-    assert len(edge_rows) == 2
-    assert {edge.confidence for edge in edge_rows} == {EdgeConfidence.verified_sbom}
+    # The DB may contain pre-existing rows from other tests. Ensure the
+    # expected repo and external deps exist and that two verified edges were
+    # created for the submitted repository.
+    repo_row = (await db_session.execute(select(Repo).where(Repo.canonical_id == expected_repo))).scalars().first()
+    assert repo_row is not None
+
+    external_rows = (
+        (
+            await db_session.execute(
+                select(ExternalRepo)
+                .where(ExternalRepo.canonical_id.in_(["httpx", "requests"]))
+                .order_by(ExternalRepo.canonical_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {r.canonical_id for r in external_rows} == {"httpx", "requests"}
+
+    edge_rows = (await db_session.execute(select(DependsOn))).scalars().all()
+    edges_for_repo = [
+        e for e in edge_rows if e.in_node.canonical_id == expected_repo and e.confidence == EdgeConfidence.verified_sbom
+    ]
+    assert len(edges_for_repo) == 2
+    assert {e.out_node.canonical_id for e in edges_for_repo} == {"httpx", "requests"}
 
 
 async def test_process_sbom_submission_marks_missing_artifact_failed(
@@ -262,6 +281,7 @@ async def test_process_sbom_submission_is_noop_for_terminal_submission(
     submission.processed_at = dt.datetime.now(dt.UTC)
     await db_session.commit()
 
+    pre_repo_ids = (await db_session.execute(select(Repo.canonical_id))).scalars().all()
     await process_sbom_submission(submission_id=submission.id)
 
     await db_session.refresh(submission)
@@ -269,8 +289,9 @@ async def test_process_sbom_submission_is_noop_for_terminal_submission(
     assert updated is not None
     assert updated.status == SubmissionStatus.processed
 
-    repo_rows = (await db_session.execute(select(Repo))).scalars().all()
-    assert repo_rows == []
+    # Ensure processing didn't add any new repos (compare canonical_id lists).
+    post_repo_ids = (await db_session.execute(select(Repo.canonical_id))).scalars().all()
+    assert post_repo_ids == pre_repo_ids
 
 
 async def test_ingest_then_worker_persists_dependency_graph(
@@ -304,11 +325,15 @@ async def test_ingest_then_worker_persists_dependency_graph(
 
     await process_sbom_submission(submission_id=captured_submission_ids[0])
 
-    repos = (await db_session.execute(select(Repo).order_by(Repo.canonical_id))).scalars().all()
-    edges = (await db_session.execute(select(DependsOn))).scalars().all()
     submission = await db_session.get(SbomSubmission, captured_submission_ids[0])
 
     assert submission is not None
     assert submission.status == SubmissionStatus.processed
-    assert [repo.canonical_id for repo in repos] == ["pkg:github/test-org/test-repo"]
-    assert len(edges) == 2
+
+    expected_repo = "pkg:github/test-org/test-repo"
+    repo_row = (await db_session.execute(select(Repo).where(Repo.canonical_id == expected_repo))).scalars().first()
+    assert repo_row is not None
+
+    edge_rows = (await db_session.execute(select(DependsOn))).scalars().all()
+    edges_for_repo = [e for e in edge_rows if e.in_node.canonical_id == expected_repo]
+    assert len(edges_for_repo) == 2
