@@ -7,8 +7,8 @@ Read endpoints are unauthenticated so submitters can verify their submissions.
 
 Currently implemented:
     POST /ingest/sbom — Accept an SPDX 2.3 SBOM submission from the
-        pg-atlas-sbom-action, validate it, persist Repo/ExternalRepo vertices
-        and DependsOn edges, and store a raw artifact for auditability.
+        pg-atlas-sbom-action, validate it, store a raw artifact and audit row,
+        and defer graph persistence to the background ``sbom`` queue.
     GET  /ingest/sbom — List all SBOM submissions with optional filtering and
         pagination.
     GET  /ingest/sbom/{submission_id} — Detail view for a single submission
@@ -36,7 +36,7 @@ from pg_atlas.config import settings
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
-from pg_atlas.ingestion.persist import handle_sbom_submission
+from pg_atlas.ingestion.persist import SbomAcceptedResponse, SbomQueueingError, handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
 from pg_atlas.routers.common import DbSession, PaginationParams
 
@@ -48,14 +48,6 @@ router = APIRouter(tags=["ingestion"])
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
-
-class SbomAcceptedResponse(BaseModel):
-    """Response body returned on successful SBOM submission (202 Accepted)."""
-
-    message: str
-    repository: str
-    package_count: int
 
 
 class SbomSubmissionResponse(BaseModel):
@@ -141,9 +133,9 @@ async def ingest_sbom(
     1. OIDC token is verified by the ``verify_github_oidc_token`` dependency
        before this handler is invoked.
     2. ``handle_sbom_submission`` stores the raw artifact, parses the SPDX
-       document, and persists Repo/ExternalRepo vertices and DependsOn edges
-       within a single DB transaction.  When no database is configured it
-       falls back to a logging stub so the endpoint stays functional in CI.
+       document, records a ``pending`` audit row, and defers the heavy repo /
+       edge persistence work to Procrastinate. When no database is configured
+       it falls back to a logging stub so the endpoint stays functional in CI.
 
     Args:
         request: Raw FastAPI request — body is read directly to preserve bytes.
@@ -157,6 +149,7 @@ async def ingest_sbom(
 
     Raises:
         HTTPException 422: If the request body is not a valid SPDX 2.3 document.
+        HTTPException 503: If the SBOM could not be persisted due to queuing error.
     """
     raw_body = await request.body()
 
@@ -170,8 +163,13 @@ async def ingest_sbom(
                 "messages": exc.messages,
             },
         ) from exc
+    except SbomQueueingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
-    return SbomAcceptedResponse(**result)
+    return result
 
 
 @router.get(

@@ -1,10 +1,9 @@
 """
-SBOM submission queue stub for PG Atlas.
+Async queue handoff for SBOM post-validation processing.
 
-In v0 (A3), the queue is a logging stub that records the submission and returns
-a structured result. The A8 processing pipeline will replace this stub with a
-task dispatch that triggers schema validation, dependency extraction,
-repo and edge upserts, and NetworkX graph reload.
+The request path validates SPDX submissions synchronously, then defers the
+heavy repo / dependency persistence work to Procrastinate. This module is the
+thin boundary between ingestion and the background worker system.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -13,37 +12,23 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
-from typing import Any
-
-from pg_atlas.ingestion.spdx import ParsedSbom
 
 logger = logging.getLogger(__name__)
 
 
-def queue_sbom(sbom: ParsedSbom, claims: dict[str, Any]) -> dict[str, Any]:
+async def defer_sbom_processing(submission_id: int) -> None:
     """
-    Enqueue a validated SBOM submission for downstream processing.
-
-    Currently a stub: logs the submission details and returns a structured
-    response. No persistent queue is involved yet.
+    Defer background processing for one validated SBOM submission.
 
     Args:
-        sbom: Validated ParsedSbom returned by parse_and_validate_spdx.
-        claims: Decoded OIDC JWT claims dict. Must contain ``repository``
-            (e.g. "owner/repo") and ``actor`` (triggering GitHub user).
-
-    Returns:
-        dict: Response payload for the 202 Accepted response, containing
-            ``message``, ``repository``, and ``package_count``.
+        submission_id: Primary key of the ``SbomSubmission`` audit row whose
+            stored artifact should be processed by the background worker.
     """
-    # TODO A8: replace this stub with a procrastinate deferred task
-    repository: str = claims["repository"]
-    actor: str = claims["actor"]
 
-    logger.info(f"SBOM submission received: repository={repository} actor={actor} packages={sbom.package_count}")
+    from pg_atlas.procrastinate.app import app
+    from pg_atlas.procrastinate.tasks import process_sbom_submission
 
-    return {
-        "message": "queued",
-        "repository": repository,
-        "package_count": sbom.package_count,
-    }
+    async with app.open_async():
+        job_id = await process_sbom_submission.defer_async(submission_id=submission_id)
+
+    logger.info(f"Deferred SBOM processing job: submission_id={submission_id} job_id={job_id}")

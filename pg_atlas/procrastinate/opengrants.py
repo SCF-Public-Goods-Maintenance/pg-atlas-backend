@@ -177,14 +177,7 @@ async def _get_with_retry(
 
         delay = _retry_delay_from_headers(response.headers, fallback=backoff)
 
-        logger.warning(
-            "HTTP %d from %s (attempt %d/%d) — retrying in %.1fs",
-            response.status_code,
-            url,
-            attempt,
-            MAX_RETRIES,
-            delay,
-        )
+        logger.warning(f"HTTP {response.status_code} from {url} (attempt {attempt}/{MAX_RETRIES}) — retrying in {delay:.1f}s")
         await asyncio.sleep(delay)
         backoff *= 2
 

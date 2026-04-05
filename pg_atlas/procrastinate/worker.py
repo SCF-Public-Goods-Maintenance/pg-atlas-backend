@@ -105,11 +105,7 @@ def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int
             pruned_rows = cur.fetchall()
             pruned_count = len(pruned_rows)
             if pruned_count > 0:
-                logger.warning(
-                    "Pruned %d stale workers older than %d seconds",
-                    pruned_count,
-                    stale_worker_seconds,
-                )
+                logger.warning(f"Pruned {pruned_count} stale workers older than {stale_worker_seconds} seconds")
 
             cur.execute(
                 """
@@ -172,12 +168,7 @@ async def process_queue(
         stale_worker_seconds: Worker heartbeat staleness threshold (seconds)
             passed to `procrastinate_prune_stalled_workers_v1`.
     """
-    logger.info(
-        "Starting worker: queue=%s concurrency=%d wait=%s",
-        queue_name,
-        concurrency,
-        wait,
-    )
+    logger.info(f"Starting worker: queue={queue_name} concurrency={concurrency} wait={wait}")
 
     if wait:
         async with app.open_async():
@@ -190,11 +181,7 @@ async def process_queue(
         if recover_stale_doing:
             recovered_jobs = _recover_stale_doing_jobs(queue_name, stale_worker_seconds)
             if recovered_jobs > 0:
-                logger.warning(
-                    "Recovered %d orphaned doing jobs in queue %s",
-                    recovered_jobs,
-                    queue_name,
-                )
+                logger.warning(f"Recovered {recovered_jobs} orphaned doing jobs in queue {queue_name}")
 
         for round_number in range(1, drain_rounds + 1):
             pending_before = _pending_jobs_count(queue_name)
@@ -202,13 +189,7 @@ async def process_queue(
                 logger.info(f"Queue {queue_name} is empty before round {round_number}")
                 break
 
-            logger.info(
-                "Drain round %d/%d for queue %s (pending=%d)",
-                round_number,
-                drain_rounds,
-                queue_name,
-                pending_before,
-            )
+            logger.info(f"Drain round {round_number}/{drain_rounds} for queue {queue_name} (pending={pending_before})")
 
             async with app.open_async():
                 await app.run_worker_async(
@@ -224,21 +205,14 @@ async def process_queue(
 
         else:
             logger.warning(
-                "Queue %s still has pending jobs after %d rounds; consider rerunning the worker",
-                queue_name,
-                drain_rounds,
+                f"Queue {queue_name} still has pending jobs after {drain_rounds} rounds; consider rerunning the worker"
             )
 
         status_counts = _queue_status_counts(queue_name)
         logger.info(
-            "Queue %s final status counts: todo=%d doing=%d succeeded=%d failed=%d cancelled=%d aborted=%d",
-            queue_name,
-            status_counts["todo"],
-            status_counts["doing"],
-            status_counts["succeeded"],
-            status_counts["failed"],
-            status_counts["cancelled"],
-            status_counts["aborted"],
+            f"Queue {queue_name} final status counts: todo={status_counts['todo']} "
+            f"doing={status_counts['doing']} succeeded={status_counts['succeeded']} failed={status_counts['failed']} "
+            f"cancelled={status_counts['cancelled']} aborted={status_counts['aborted']}"
         )
 
     logger.info(f"Worker finished: queue={queue_name}")
