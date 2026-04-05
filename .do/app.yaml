@@ -9,6 +9,10 @@ databases:
 features:
   - buildpack-stack=ubuntu-24
 
+domains:
+  - domain: api.pgatlas.xyz
+    type: PRIMARY
+
 services:
   - name: api
     github:
@@ -34,3 +38,7 @@ ingress:
     match:
       path:
         prefix: /
+
+alerts:
+- rule: DEPLOYMENT_FAILED
+- rule: DOMAIN_FAILED
