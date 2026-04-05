@@ -59,10 +59,10 @@ The pg-atlas-sdk major version tracks the API stable version:
 
 | SDK Version | API Version | Status |
 | ----------- | ----------- | ------ |
-| `@pg-atlas/sdk@0.x` | `/` | pre-v1 |
-| `@pg-atlas/sdk@1.x` | `/v1/` | Stable |
-| `@pg-atlas/sdk@2.x` | `/v2/` | Stable |
-| `@pg-atlas/sdk@latest` | `/` | Dev (`main`) |
+| `@pg-atlas/data-sdk@0.x` | `/` | pre-v1 |
+| `@pg-atlas/data-sdk@1.x` | `/v1/` | Stable |
+| `@pg-atlas/data-sdk@2.x` | `/v2/` | Stable |
+| `@pg-atlas/data-sdk@latest` | `/` | Dev (`main`) |
 
 ### Triggering Event for v1.0.0
 

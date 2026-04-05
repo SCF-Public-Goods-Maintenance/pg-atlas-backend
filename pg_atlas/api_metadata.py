@@ -38,7 +38,7 @@ DESCRIPTION = dedent(
     API is the primary interface for the
     [PG Atlas Dashboard](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-frontend)
     and the
-    [PG Atlas TypeScript SDK](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-sdk).
+    [PG Atlas TypeScript SDK](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-ts-sdk).
 
     ## Data sources
 
