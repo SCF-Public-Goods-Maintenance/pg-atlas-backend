@@ -384,9 +384,7 @@ async def process_pending_sbom_submission(session: AsyncSession, submission_id: 
 
     if submission.status != SubmissionStatus.pending:
         logger.info(
-            "Skipping SBOM submission with non-pending status: submission_id=%d status=%s",
-            submission_id,
-            submission.status.value,
+            f"Skipping SBOM submission with non-pending status: submission_id={submission_id} status={submission.status.value}"
         )
 
         return
@@ -400,10 +398,10 @@ async def process_pending_sbom_submission(session: AsyncSession, submission_id: 
         await session.commit()
 
     except FileNotFoundError as exc:
-        logger.warning("Stored SBOM artifact missing for submission_id=%d", submission_id)
+        logger.warning(f"Stored SBOM artifact missing for submission_id={submission_id}")
         await _mark_submission_failed(session, submission_id, str(exc))
     except SpdxValidationError as exc:
-        logger.warning("Stored SBOM artifact became invalid for submission_id=%d", submission_id)
+        logger.warning(f"Stored SBOM artifact became invalid for submission_id={submission_id}")
         await _mark_submission_failed(session, submission_id, str(exc))
     except Exception as exc:
         logger.exception(f"SBOM worker processing failed for submission_id={submission_id}")

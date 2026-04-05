@@ -624,13 +624,7 @@ async def crawl_github_repo(
                 logger.debug(f"Package not found on deps.dev: {system}/{name}")
 
     if len(releases) > _MAX_RELEASE_ENTRIES:
-        logger.warning(
-            "Truncating releases for %s/%s from %d to %d entries",
-            owner,
-            repo,
-            len(releases),
-            _MAX_RELEASE_ENTRIES,
-        )
+        logger.warning(f"Truncating releases for {owner}/{repo} from {len(releases)} to {_MAX_RELEASE_ENTRIES} entries")
         releases = releases[-_MAX_RELEASE_ENTRIES:]
 
     # ----- Determine latest_version -----
