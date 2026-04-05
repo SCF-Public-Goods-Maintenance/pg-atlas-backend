@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.4.0...v0.4.1) (2026-04-05)
+
+
+### Documentation
+
+* **SDK:** change references to repo and package name ([bb98d33](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/bb98d3344fb101ac59886894c0e3c0eda58eecba))
+
 ## [0.4.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.3.0...v0.4.0) (2026-04-04)
 
 
