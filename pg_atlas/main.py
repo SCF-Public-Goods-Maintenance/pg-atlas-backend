@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from pg_atlas.api_metadata import DESCRIPTION, VERSION, generate_route_id
 from pg_atlas.config import settings
@@ -58,6 +59,17 @@ app = FastAPI(
     openapi_tags=TAGS_METADATA,
     docs_url="/docs",
     redoc_url="/redoc",
+)
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # ---------------------------------------------------------------------------
