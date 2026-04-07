@@ -14,8 +14,12 @@
         "pg_atlas/deps_dev/lib",
         "pg_atlas/deps_dev/generate_async_client.py",
     ],
+    "stubPath": "./typings",
     // many modules re-export symbols without __all__.
     "reportPrivateImportUsage": "none",
+    "reportMissingTypeStubs": true,
+    "reportUntypedFunctionDecorator": true,
+    "reportUntypedClassDecorator": true,
     "executionEnvironments": [
         {
             "root": "tests",

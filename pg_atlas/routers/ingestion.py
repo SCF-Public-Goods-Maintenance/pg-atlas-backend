@@ -7,8 +7,8 @@ Read endpoints are unauthenticated so submitters can verify their submissions.
 
 Currently implemented:
     POST /ingest/sbom — Accept an SPDX 2.3 SBOM submission from the
-        pg-atlas-sbom-action, validate it, persist Repo/ExternalRepo vertices
-        and DependsOn edges, and store a raw artifact for auditability.
+        pg-atlas-sbom-action, validate it, store a raw artifact and audit row,
+        and defer graph persistence to the background ``sbom`` queue.
     GET  /ingest/sbom — List all SBOM submissions with optional filtering and
         pagination.
     GET  /ingest/sbom/{submission_id} — Detail view for a single submission
@@ -20,10 +20,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,13 +30,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
-from pg_atlas.config import settings
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
-from pg_atlas.ingestion.persist import handle_sbom_submission
+from pg_atlas.ingestion.persist import SbomAcceptedResponse, SbomQueueingError, handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
 from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.storage.artifacts import read_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +46,6 @@ router = APIRouter(tags=["ingestion"])
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
-
-class SbomAcceptedResponse(BaseModel):
-    """Response body returned on successful SBOM submission (202 Accepted)."""
-
-    message: str
-    repository: str
-    package_count: int
 
 
 class SbomSubmissionResponse(BaseModel):
@@ -105,17 +95,6 @@ class SbomSubmissionListResponse(BaseModel):
     offset: int
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _read_file_sync(path: Path) -> str:
-    """Synchronous file read — intended to run in a thread-pool executor."""
-
-    return path.read_text(encoding="utf-8")
-
-
 @router.post(
     "/sbom",
     status_code=status.HTTP_202_ACCEPTED,
@@ -141,9 +120,9 @@ async def ingest_sbom(
     1. OIDC token is verified by the ``verify_github_oidc_token`` dependency
        before this handler is invoked.
     2. ``handle_sbom_submission`` stores the raw artifact, parses the SPDX
-       document, and persists Repo/ExternalRepo vertices and DependsOn edges
-       within a single DB transaction.  When no database is configured it
-       falls back to a logging stub so the endpoint stays functional in CI.
+       document, records a ``pending`` audit row, and defers the heavy repo /
+       edge persistence work to Procrastinate. When no database is configured
+       it falls back to a logging stub so the endpoint stays functional in CI.
 
     Args:
         request: Raw FastAPI request — body is read directly to preserve bytes.
@@ -157,6 +136,7 @@ async def ingest_sbom(
 
     Raises:
         HTTPException 422: If the request body is not a valid SPDX 2.3 document.
+        HTTPException 503: If the SBOM could not be persisted due to queuing error.
     """
     raw_body = await request.body()
 
@@ -170,8 +150,13 @@ async def ingest_sbom(
                 "messages": exc.messages,
             },
         ) from exc
+    except SbomQueueingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
-    return SbomAcceptedResponse(**result)
+    return result
 
 
 @router.get(
@@ -255,18 +240,13 @@ async def get_sbom_submission(
 
     # Read the raw artifact from the backing store.
     raw_artifact: str | None = None
-    artifact_full_path = settings.ARTIFACT_STORE_PATH / row.artifact_path
 
     try:
-        raw_artifact = await asyncio.get_running_loop().run_in_executor(
-            None,
-            _read_file_sync,
-            artifact_full_path,
-        )
+        raw_artifact = (await read_artifact(row.artifact_path)).decode("utf-8")
     except FileNotFoundError:
-        logger.warning(f"Artifact file not found: {artifact_full_path}")
-    except OSError:
-        logger.exception(f"Error reading artifact file: {artifact_full_path}")
+        logger.warning(f"Artifact file not found: {row.artifact_path}")
+    except OSError, UnicodeDecodeError:
+        logger.exception(f"Error reading artifact file: {row.artifact_path}")
 
     detail = SbomSubmissionDetailResponse.model_validate(row)
     detail.raw_artifact = raw_artifact

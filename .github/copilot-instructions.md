@@ -52,20 +52,22 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
   `requires-python = ">=3.14"` (i.e. `target-version = "py314"`) intentionally rewrites `except (A, B):`
   → `except A, B:` per PEP 758.
 - **mypy** in strict mode (`disallow_untyped_defs`, `explicit_package_bases`, `ignore_missing_imports`).
-- **pylance** for IDE-integrated quality control. If Pylance tools are available: run diagnostics
-  and fix problems for every file you touch. Strict really is strict, also for test files. Check
-  for `types-*` packages on PyPI. Write missing `.pyi` stubs. Wrap fetched JSON in Pydantic models.
-  Never cast. Only suppress warnings if you have exhausted these options.
+- **basedpyright** in strict mode. Run diagnostics and fix problems for every file you touch. Strict
+  really is strict, also for test files. Check for `types-*` packages on PyPI. Write missing `.pyi`
+  stubs. Wrap fetched JSON in Pydantic models. Never cast. Only suppress warnings if you have
+  exhausted these options.
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Translate all `pytest` commands to the `runTests` tool equivalent, and run them with the tool.
   Only fall back to the terminal after trying `runTests` on the test you must run.
 - Run the full check suite before considering work done:
   ```sh
+  rg '%[sdf]' pg_atlas/  # always use f-strings
   uv run pytest -v
   uv run ruff check .
   uv run ruff format --check .
   uv run mypy pg_atlas/
-  # run pylance diagnostics last; it is the strictest QA in the check suite.
+  # run basedpyright last; it is the strictest QA in the check suite.
+  uv run basedpyright $(git diff --name-only -- '*.py')
   ```
   Prepend `PG_ATLAS_API_URL=https://test.pg-atlas.example` if a test errors because the env var is
   not set. This is rare.
@@ -90,7 +92,7 @@ These rules MUST be enforced manually. No ruff rules are available to enforce th
     function or logical section.
   - Use blank lines between adjacent control structures (like an `if` block followed by a `for`
     loop).
-- Always use `f"hey {agent}!"` format strings instead of older string interpolation.
+- Always use `f"hey {agent}!"` f-strings instead of older string interpolation.
 - Style normalization scope: apply breathing-space and interpolation to authored app/test code;
   do not mass-normalize migration/revision scripts (`pg_atlas/migrations/versions/`,
   `pg_atlas/procrastinate/versions/`) unless specifically fixing a functional defect.
