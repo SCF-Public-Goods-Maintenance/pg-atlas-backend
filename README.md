@@ -93,6 +93,26 @@ Lint and type checks:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy pg_atlas/
+# pyright is slower, but it must be run on all files you change
+uv run basedpyright $(git diff --name-only -- '*.py')
+```
+
+### Strict Type Checking
+
+Some libraries do not ship with good type annotations. For popular packages,
+[Typeshed](https://github.com/python/typeshed) tends to have them. Always do an additional check
+with Pylance/Pyright when you introduce new dependencies, as mypy does not catch everything that
+reviewers check for. (It's just a bit inconvenient to run Pyright in CI.)
+
+Typeshed is not the only source of type stubs. For example, whenever `aiobotocore` type checking
+starts reporting errors while working on your PR, it's time to run:
+
+```sh
+# generate aiobotocore services
+uvx --with 'aiobotocore==3.3.0' mypy-boto3-builder ./vendored --download-static-stubs --product aiobotocore-custom --output-type wheel --services s3
+
+# install with uv
+uv add --dev vendored/types_aiobotocore_custom-3.3.0-py3-none-any.whl
 ```
 
 ## Environment Variables
