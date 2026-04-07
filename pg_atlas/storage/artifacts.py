@@ -25,7 +25,8 @@ from pathlib import Path
 
 import httpx
 from aiobotocore.config import AioConfig
-from aiobotocore.session import get_session
+from aiobotocore.session import ClientCreatorContext, get_session
+from types_aiobotocore_s3.client import S3Client
 
 from pg_atlas.config import settings
 
@@ -70,7 +71,7 @@ def _filebase_enabled() -> bool:
     return settings.ARTIFACT_S3_ENDPOINT is not None
 
 
-def _get_filebase_s3_client():
+def _get_filebase_s3_client() -> ClientCreatorContext[S3Client]:
     """Return a Filebase S3 client context manager."""
 
     endpoint = settings.ARTIFACT_S3_ENDPOINT
