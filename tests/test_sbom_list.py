@@ -25,6 +25,7 @@ import hashlib
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -72,6 +73,18 @@ def _make_submission(
         sbom_content_hash=h,
         artifact_path=artifact_path or f"sboms/{h}.spdx.json",
     )
+
+
+class _FakeGatewayResponse:
+    """Minimal async HTTP response stub for Filebase gateway tests."""
+
+    def __init__(self, *, status_code: int, content: bytes) -> None:
+        self.status_code = status_code
+        self.content = content
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"gateway status {self.status_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +322,7 @@ async def test_detail_with_artifact(
     (tmp_path / "sboms").mkdir()
     (tmp_path / artifact_rel).write_text(artifact_content)
     monkeypatch.setattr(settings, "ARTIFACT_STORE_PATH", tmp_path)
+    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", None)
 
     sub = _make_submission(repo, artifact_path=artifact_rel)
     session.add(sub)
@@ -328,10 +342,12 @@ async def test_detail_with_artifact(
 async def test_detail_missing_artifact(
     db_client: tuple[AsyncClient, AsyncSession],
     cleanup_db_rows_for_db_client_tests: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /ingest/sbom/{id} returns null raw_artifact when the file is missing."""
     client, session = db_client
     repo = _unique_repo()
+    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", None)
 
     sub = _make_submission(repo, artifact_path="sboms/nonexistent.spdx.json")
     session.add(sub)
@@ -344,6 +360,42 @@ async def test_detail_missing_artifact(
     body = resp.json()
     assert body["id"] == sub.id
     assert body["raw_artifact"] is None
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_detail_with_filebase_cid_artifact(
+    db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_db_client_tests: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /ingest/sbom/{id} reads raw_artifact from Filebase when artifact_path is a CID."""
+    client, session = db_client
+    repo = _unique_repo()
+    cid = "QmTestFilebaseCidForDetailEndpoint"
+    artifact_content = b'{"spdxVersion":"SPDX-2.3","name":"filebase"}'
+    original_get = AsyncClient.get
+
+    async def _fake_get(self: AsyncClient, url: str, *args: Any, **kwargs: Any) -> _FakeGatewayResponse:
+        if isinstance(url, str) and url.startswith("https://ipfs.filebase.io/ipfs/"):
+            assert url.endswith(cid)
+            return _FakeGatewayResponse(status_code=200, content=artifact_content)
+
+        return await original_get(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", "https://s3.filebase.com")
+    monkeypatch.setattr(AsyncClient, "get", _fake_get)
+
+    sub = _make_submission(repo, artifact_path=cid)
+    session.add(sub)
+    await session.commit()
+    await session.refresh(sub)
+
+    resp = await client.get(f"/ingest/sbom/{sub.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == sub.id
+    assert body["raw_artifact"] == artifact_content.decode("utf-8")
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")

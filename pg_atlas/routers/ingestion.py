@@ -20,10 +20,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,13 +30,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
-from pg_atlas.config import settings
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.ingestion.persist import SbomAcceptedResponse, SbomQueueingError, handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
 from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.storage.artifacts import read_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +93,6 @@ class SbomSubmissionListResponse(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _read_file_sync(path: Path) -> str:
-    """Synchronous file read — intended to run in a thread-pool executor."""
-
-    return path.read_text(encoding="utf-8")
 
 
 @router.post(
@@ -253,18 +240,13 @@ async def get_sbom_submission(
 
     # Read the raw artifact from the backing store.
     raw_artifact: str | None = None
-    artifact_full_path = settings.ARTIFACT_STORE_PATH / row.artifact_path
 
     try:
-        raw_artifact = await asyncio.get_running_loop().run_in_executor(
-            None,
-            _read_file_sync,
-            artifact_full_path,
-        )
+        raw_artifact = (await read_artifact(row.artifact_path)).decode("utf-8")
     except FileNotFoundError:
-        logger.warning(f"Artifact file not found: {artifact_full_path}")
-    except OSError:
-        logger.exception(f"Error reading artifact file: {artifact_full_path}")
+        logger.warning(f"Artifact file not found: {row.artifact_path}")
+    except OSError, UnicodeDecodeError:
+        logger.exception(f"Error reading artifact file: {row.artifact_path}")
 
     detail = SbomSubmissionDetailResponse.model_validate(row)
     detail.raw_artifact = raw_artifact

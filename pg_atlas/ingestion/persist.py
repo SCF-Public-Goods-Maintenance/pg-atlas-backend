@@ -36,11 +36,9 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import hashlib
 import logging
-from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -48,7 +46,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
 
-from pg_atlas.config import settings
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import Repo
@@ -57,7 +54,7 @@ from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
-from pg_atlas.storage.artifacts import store_artifact
+from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -245,26 +242,6 @@ async def _replace_depends_on_edges(
     await session.flush()
 
 
-def _artifact_store_path(artifact_path: str) -> Path:
-    """
-    Resolve an artifact-store-relative path to an absolute filesystem path.
-    """
-
-    return settings.ARTIFACT_STORE_PATH / artifact_path
-
-
-def _read_artifact_bytes_sync(artifact_path: str) -> bytes:
-    """Read raw artifact bytes from the local artifact store."""
-
-    return _artifact_store_path(artifact_path).read_bytes()
-
-
-async def _read_artifact_bytes(artifact_path: str) -> bytes:
-    """Read artifact bytes without blocking the event loop."""
-
-    return await asyncio.get_running_loop().run_in_executor(None, _read_artifact_bytes_sync, artifact_path)
-
-
 async def _mark_submission_failed(
     session: AsyncSession,
     submission_id: int,
@@ -390,7 +367,7 @@ async def process_pending_sbom_submission(session: AsyncSession, submission_id: 
         return
 
     try:
-        raw_body = await _read_artifact_bytes(submission.artifact_path)
+        raw_body = await read_artifact(submission.artifact_path)
         sbom = parse_and_validate_spdx(raw_body)
         await _persist_sbom_graph(session, submission.repository_claim, submission.actor_claim, sbom)
         submission.status = SubmissionStatus.processed

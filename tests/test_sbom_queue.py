@@ -47,6 +47,18 @@ except ValueError:
 FIXTURES = Path(__file__).parent / "data_fixtures"
 
 
+class _FakeGatewayResponse:
+    """Minimal async HTTP response stub for Filebase gateway tests."""
+
+    def __init__(self, *, status_code: int, content: bytes) -> None:
+        self.status_code = status_code
+        self.content = content
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"gateway status {self.status_code}")
+
+
 @pytest.fixture
 async def db_authenticated_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession], None]:
     """
@@ -251,6 +263,43 @@ async def test_process_sbom_submission_marks_invalid_artifact_failed(
     assert updated.status == SubmissionStatus.failed
     assert updated.error_detail is not None
     assert "Invalid SPDX 2.3 document." in updated.error_detail
+
+
+async def test_process_sbom_submission_reads_filebase_cid_artifact(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Pending submissions can be processed from a Filebase CID without a local artifact file.
+    """
+
+    from pg_atlas.config import settings
+
+    raw_body = (FIXTURES / "valid.spdx.json").read_bytes()
+    cid = "QmTestFilebaseCidForWorker"
+
+    async def _fake_get(self: AsyncClient, url: str, *args: Any, **kwargs: Any) -> _FakeGatewayResponse:
+        assert url.endswith(cid)
+        return _FakeGatewayResponse(status_code=200, content=raw_body)
+
+    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", "https://s3.filebase.com")
+    monkeypatch.setattr(AsyncClient, "get", _fake_get)
+
+    submission = await _create_submission(
+        db_session,
+        raw_body,
+        artifact_path=cid,
+    )
+
+    await process_sbom_submission(submission_id=submission.id)
+
+    await db_session.refresh(submission)
+    updated = await db_session.get(SbomSubmission, submission.id)
+    assert updated is not None
+    assert updated.status == SubmissionStatus.processed
+    assert updated.processed_at is not None
 
 
 async def test_process_sbom_submission_is_noop_for_missing_submission(

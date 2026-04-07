@@ -16,6 +16,7 @@ dependencies = [
     "spdx-tools>=0.8.3",
     "pyjwt[crypto]>=2.11.0",
     "cryptography>=46.0.5",
+    "aiobotocore>=2.24.2",
     "httpx>=0.28.1",
     "cachetools>=7.0.1",
     "procrastinate>=3.7.2",
