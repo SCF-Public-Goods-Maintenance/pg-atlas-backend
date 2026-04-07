@@ -38,14 +38,6 @@ ingress:
     match:
       path:
         prefix: /
-    cors:
-      allow_origins:
-        - regex: ".*"
-      allow_methods:
-        - GET
-      allow_headers:
-        - Content-Type
-        - Authorization
 
 alerts:
 - rule: DEPLOYMENT_FAILED
