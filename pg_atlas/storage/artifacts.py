@@ -24,8 +24,8 @@ import logging
 from pathlib import Path
 
 import httpx
+from aiobotocore.config import AioConfig
 from aiobotocore.session import get_session
-from botocore.config import Config
 
 from pg_atlas.config import settings
 
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 _FILEBASE_REGION = "us-east-1"
 _FILEBASE_GATEWAY_BASE_URL = "https://ipfs.filebase.io/ipfs"
-_FILEBASE_S3_TIMEOUT = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
+_FILEBASE_S3_TIMEOUT = AioConfig(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
 
 
 def _compute_sha256(data: bytes) -> str:
@@ -70,8 +70,8 @@ def _filebase_enabled() -> bool:
     return settings.ARTIFACT_S3_ENDPOINT is not None
 
 
-def _filebase_client_kwargs() -> dict[str, str | Config]:
-    """Return keyword arguments for creating a Filebase S3 client."""
+def _get_filebase_s3_client():
+    """Return a Filebase S3 client context manager."""
 
     endpoint = settings.ARTIFACT_S3_ENDPOINT
     access_key = settings.FILEBASE_ACCESS_KEY
@@ -79,13 +79,16 @@ def _filebase_client_kwargs() -> dict[str, str | Config]:
     if endpoint is None or not access_key or not secret_key:
         raise ValueError("Filebase artifact storage is not fully configured.")
 
-    return {
-        "region_name": _FILEBASE_REGION,
-        "endpoint_url": str(endpoint),
-        "aws_access_key_id": access_key,
-        "aws_secret_access_key": secret_key,
-        "config": _FILEBASE_S3_TIMEOUT,
-    }
+    session = get_session()
+
+    return session.create_client(
+        "s3",
+        region_name=_FILEBASE_REGION,
+        endpoint_url=str(endpoint),
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=_FILEBASE_S3_TIMEOUT,
+    )
 
 
 async def _store_artifact_local(data: bytes, filename: str, content_hex: str) -> tuple[str, str]:
@@ -101,21 +104,17 @@ async def _store_artifact_local(data: bytes, filename: str, content_hex: str) ->
 async def _store_artifact_filebase(data: bytes, filename: str, content_hex: str) -> tuple[str, str]:
     """Persist bytes to Filebase and return the CID as the stored artifact path."""
 
-    session = get_session()
+    client_context = _get_filebase_s3_client()
 
     try:
-        async with session.create_client("s3", **_filebase_client_kwargs()) as client:
+        async with client_context as client:
             response = await client.put_object(
                 Bucket=settings.ARTIFACT_S3_BUCKET,
                 Key=filename,
                 Body=data,
             )
     except Exception:
-        logger.warning(
-            "Filebase artifact upload failed: bucket=%s key=%s",
-            settings.ARTIFACT_S3_BUCKET,
-            filename,
-        )
+        logger.warning(f"Filebase artifact upload failed: bucket={settings.ARTIFACT_S3_BUCKET} key={filename}")
 
         raise
 
@@ -123,18 +122,12 @@ async def _store_artifact_filebase(data: bytes, filename: str, content_hex: str)
     cid = headers.get("x-amz-meta-cid")
     if not cid:
         logger.warning(
-            "Filebase artifact upload response did not include a CID: bucket=%s key=%s",
-            settings.ARTIFACT_S3_BUCKET,
-            filename,
+            f"Filebase artifact upload response did not include a CID: bucket={settings.ARTIFACT_S3_BUCKET} key={filename}"
         )
         raise RuntimeError("Filebase artifact upload response did not include a CID.")
 
     logger.debug(
-        "Stored artifact in Filebase bucket=%s key=%s cid=%s sha256=%s",
-        settings.ARTIFACT_S3_BUCKET,
-        filename,
-        cid,
-        content_hex,
+        f"Stored artifact in Filebase bucket={settings.ARTIFACT_S3_BUCKET} key={filename} cid={cid} sha256={content_hex}"
     )
 
     return cid, content_hex
@@ -157,7 +150,7 @@ async def _read_artifact_filebase(artifact_path: str) -> bytes:
         raise FileNotFoundError(f"Filebase artifact not found: {artifact_path}")
 
     if response.status_code >= 400:
-        logger.warning("Filebase artifact gateway error: cid=%s status=%s", artifact_path, response.status_code)
+        logger.warning(f"Filebase artifact gateway error: cid={artifact_path} status={response.status_code}")
         raise OSError(f"Filebase artifact gateway returned HTTP {response.status_code} for {artifact_path}")
 
     return response.content
