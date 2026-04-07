@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import HttpUrl, ValidationError
 
 from pg_atlas.config import Settings
 from pg_atlas.storage.artifacts import store_artifact
@@ -30,7 +30,7 @@ def test_settings_require_filebase_credentials_when_endpoint_is_set() -> None:
     with pytest.raises(ValidationError):
         Settings(
             API_URL="https://test.pg-atlas.example",
-            ARTIFACT_S3_ENDPOINT="https://s3.filebase.com",
+            ARTIFACT_S3_ENDPOINT=HttpUrl("https://s3.filebase.com"),
             FILEBASE_ACCESS_KEY=None,
             FILEBASE_SECRET_KEY=None,
         )

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -375,8 +375,8 @@ async def test_detail_with_filebase_cid_artifact(
     artifact_content = b'{"spdxVersion":"SPDX-2.3","name":"filebase"}'
     original_get = AsyncClient.get
 
-    async def _fake_get(self: AsyncClient, url: str, *args: Any, **kwargs: Any) -> _FakeGatewayResponse:
-        if isinstance(url, str) and url.startswith("https://ipfs.filebase.io/ipfs/"):
+    async def _fake_get(self: AsyncClient, url: str, *args: Any, **kwargs: Any) -> _FakeGatewayResponse | Response:
+        if url.startswith("https://ipfs.filebase.io/ipfs/"):
             assert url.endswith(cid)
             return _FakeGatewayResponse(status_code=200, content=artifact_content)
 

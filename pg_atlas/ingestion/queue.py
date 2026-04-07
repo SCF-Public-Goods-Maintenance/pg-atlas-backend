@@ -12,8 +12,6 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
-from contextlib import AbstractAsyncContextManager
-from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,8 @@ async def defer_sbom_processing(submission_id: int) -> None:
     from pg_atlas.procrastinate.app import app
     from pg_atlas.procrastinate.tasks import process_sbom_submission
 
-    app_context = cast(AbstractAsyncContextManager[Any], app.open_async())
-    async with app_context:
+    # reportUnknownMemberType, fix tracked in: https://github.com/procrastinate-org/procrastinate/pull/1536
+    async with app.open_async():
         job_id = await process_sbom_submission.defer_async(submission_id=submission_id)
 
     logger.info(f"Deferred SBOM processing job: submission_id={submission_id} job_id={job_id}")
