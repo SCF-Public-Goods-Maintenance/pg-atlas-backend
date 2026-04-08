@@ -983,7 +983,7 @@ wheels = [
 
 [[package]]
 name = "pg-atlas-backend"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -1037,7 +1037,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "networkx", specifier = ">=3.0" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "procrastinate", specifier = ">=3.7.2" },
+    { name = "procrastinate", specifier = ">=3.8.1" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.3" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pygithub", specifier = ">=2.8.1" },
@@ -1086,7 +1086,7 @@ wheels = [
 
 [[package]]
 name = "procrastinate"
-version = "3.7.2"
+version = "3.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
@@ -1097,9 +1097,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/b4/e4940db96fed26c50bb58bc184f060fd8025388a37dec384ac2f16887eae/procrastinate-3.7.2.tar.gz", hash = "sha256:9845f6aa464b525fd0f38934f56bc4c04f4631bbdcb23fedc8c656c006e89d79", size = 83942, upload-time = "2026-01-22T20:36:33.443Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8f/cd/cbb88b0f19fa94e8a610af2fd3844e96b70591f4263ef4c36f10e4ebe4e2/procrastinate-3.8.1.tar.gz", hash = "sha256:cf7f11dfd4247daa166e9b61a211f9d5b70512d86eccc2bf4298f6ad182a32fa", size = 85343, upload-time = "2026-04-08T06:24:21.385Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/a3/e07797a7aaf36892ea506c4520e7b605f25fb8ae0d7e7eb5ab1f22a55b51/procrastinate-3.7.2-py3-none-any.whl", hash = "sha256:a2c71eb592067c57ec19d1a5074c81d4859489d2f8036ec3c2c046edf175736f", size = 147690, upload-time = "2026-01-22T20:36:31.447Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/ef/05a54e7ef9328d3d91a1a3b84ccf08a578128a48c57cd1117d1fbd8e6f17/procrastinate-3.8.1-py3-none-any.whl", hash = "sha256:67db4e9f0243c45775c02a0090fb3bfc7877d496e6b279d960d9ad4b1fa2f185", size = 148736, upload-time = "2026-04-08T06:24:19.754Z" },
 ]
 
 [[package]]

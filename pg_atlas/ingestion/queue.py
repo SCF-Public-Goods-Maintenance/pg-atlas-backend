@@ -28,7 +28,6 @@ async def defer_sbom_processing(submission_id: int) -> None:
     from pg_atlas.procrastinate.app import app
     from pg_atlas.procrastinate.tasks import process_sbom_submission
 
-    # reportUnknownMemberType, fix tracked in: https://github.com/procrastinate-org/procrastinate/pull/1536
     async with app.open_async():
         job_id = await process_sbom_submission.defer_async(submission_id=submission_id)
 
