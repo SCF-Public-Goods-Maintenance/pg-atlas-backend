@@ -1,0 +1,115 @@
+{
+  "sbom": {
+    "spdxVersion": "SPDX-2.3",
+    "dataLicense": "CC0-1.0",
+    "SPDXID": "SPDXRef-DOCUMENT",
+    "name": "com.github.SCF-Public-Goods-Maintenance/pg-atlas-backend",
+    "documentNamespace": "https://spdx.org/spdxdocs/protobom/2e182413-c4ee-4b6f-8121-27e1037900e1",
+    "creationInfo": {
+      "creators": [
+        "Tool: protobom-v0.0.0-20260407150314-74ec19d17753+dirty",
+        "Tool: GitHub.com-Dependency-Graph"
+      ],
+      "created": "2026-04-07T22:42:03Z"
+    },
+    "packages": [
+      {
+        "name": "com.github.SCF-Public-Goods-Maintenance/pg-atlas-backend",
+        "SPDXID": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "versionInfo": "main",
+        "downloadLocation": "git+https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:github/SCF-Public-Goods-Maintenance/pg-atlas-backend@main"
+          }
+        ]
+      },
+      {
+        "name": "SCF-Public-Goods-Maintenance/pg-atlas-sbom-action",
+        "SPDXID": "SPDXRef-githubactions-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-75c946",
+        "versionInfo": "main",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:githubactions/SCF-Public-Goods-Maintenance/pg-atlas-sbom-action@main"
+          }
+        ]
+      },
+      {
+        "name": "googleapis/release-please-action",
+        "SPDXID": "SPDXRef-githubactions-googleapis-release-please-action-4..-75c946",
+        "versionInfo": "4.*.*",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:githubactions/googleapis/release-please-action@4.%2A.%2A"
+          }
+        ]
+      },
+      {
+        "name": "networkx",
+        "SPDXID": "SPDXRef-pypi-networkx-3.6.1-75c946",
+        "versionInfo": "3.6.1",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:pypi/networkx@3.6.1"
+          }
+        ]
+      },
+      {
+        "name": "procrastinate",
+        "SPDXID": "SPDXRef-pypi-procrastinate-3.7.2-75c946",
+        "versionInfo": "3.7.2",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:pypi/procrastinate@3.7.2"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "spdxElementId": "SPDXRef-DOCUMENT",
+        "relatedSpdxElement": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "relationshipType": "DESCRIBES"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "relatedSpdxElement": "SPDXRef-githubactions-googleapis-release-please-action-4..-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "relatedSpdxElement": "SPDXRef-githubactions-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "relatedSpdxElement": "SPDXRef-pypi-networkx-3.6.1-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-backend-main-49d637",
+        "relatedSpdxElement": "SPDXRef-pypi-procrastinate-3.7.2-75c946",
+        "relationshipType": "DEPENDS_ON"
+      }
+    ]
+  }
+}

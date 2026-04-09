@@ -14,7 +14,6 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -35,6 +34,7 @@ from pg_atlas.ingestion.persist import (
     process_pending_sbom_submission,
     strip_purl_version,
 )
+from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -73,7 +73,7 @@ async def _submission_for_payload(
     Load the submission row corresponding to one repository-specific payload.
     """
 
-    content_hash_hex = hashlib.sha256(raw_body).hexdigest()
+    content_hash_hex = compute_sbom_semantic_hash(raw_body)
     return (
         await session.execute(
             select(SbomSubmission)
@@ -285,7 +285,7 @@ async def test_handle_sbom_submission_invalid_records_failed_row(
     with pytest.raises(SpdxValidationError):
         await handle_sbom_submission(db_session, invalid_sbom, claims)
 
-    content_hash_hex = hashlib.sha256(invalid_sbom).hexdigest()
+    content_hash_hex = compute_sbom_semantic_hash(invalid_sbom)
     sub = (
         await db_session.execute(
             select(SbomSubmission)

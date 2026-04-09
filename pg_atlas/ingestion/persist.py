@@ -37,7 +37,6 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import logging
 from typing import Any, cast
 
@@ -53,7 +52,7 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
-from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
+from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, compute_sbom_semantic_hash, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
@@ -442,7 +441,7 @@ async def handle_sbom_submission(
     """
     repository: str = claims["repository"]
     actor: str = claims["actor"]
-    content_hash_hex = hashlib.sha256(raw_body).hexdigest()
+    content_hash_hex = compute_sbom_semantic_hash(raw_body)
     artifact_filename = f"sboms/{content_hash_hex}.spdx.json"
 
     # ------------------------------------------------------------------
