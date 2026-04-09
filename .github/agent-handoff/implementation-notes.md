@@ -157,3 +157,16 @@ These conventions emerged during A5 implementation and apply to all future task/
 - `ruff per-file-ignores`: `E501` for Procrastinate migration files (embedded SQL).
 - `mypy exclude`: `pg_atlas/deps_dev/lib` (generated code).
 - `types-PyYAML` added to dev deps for type stubs.
+
+## A8 Implementation Notes
+
+These conventions emerged during A8 implementation (PR #26) and apply to artifact storage and background processing.
+
+### Artifact Storage (Filebase)
+
+- Durable artifact storage uses Filebase's S3-compatible API.
+- The `ARTIFACT_S3_ENDPOINT` requires `ARTIFACT_S3_BUCKET`, `FILEBASE_ACCESS_KEY`, and `FILEBASE_SECRET_KEY`. Pydantic models validate this implicitly.
+- Uploads happen using `boto3` (via `aiobotocore`) via S3 APIs `put_object`.
+- The durable unique ID (CID) of an artifact is returned in the `x-amz-meta-cid` header from both `put_object` and `head_object`.
+- Retrieval path differs from S3: reading Filebase objects via standard S3 API `get_object` by CID returns `NoSuchKey`. Instead, all reads (both worker processing and public API) use the IPFS gateway endpoint `https://ipfs.filebase.io/ipfs/<cid>`.
+- The `artifact_path` stored in the DB is always the CID string itself.
