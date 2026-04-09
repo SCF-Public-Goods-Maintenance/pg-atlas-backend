@@ -51,7 +51,7 @@ class SbomSubmission(PgBase):
 
     #: Path or reference identifying the raw artifact in the backing store.
     #: For local dev: a relative filesystem path under the configured artifact store root.
-    #: For production: a Storacha CID or equivalent content-addressed reference.
+    #: For production: an IPFS CID obtained through Filebase.
     artifact_path: Mapped[str] = mapped_column(String(1024))
 
     # --- processing state ---

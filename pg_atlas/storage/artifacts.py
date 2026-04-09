@@ -22,13 +22,16 @@ import asyncio
 import hashlib
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from aiobotocore.config import AioConfig
 from aiobotocore.session import ClientCreatorContext, get_session
-from types_aiobotocore_s3.client import S3Client
 
 from pg_atlas.config import settings
+
+if TYPE_CHECKING:
+    from types_aiobotocore_s3.client import S3Client
 
 logger = logging.getLogger(__name__)
 
