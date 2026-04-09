@@ -5,6 +5,7 @@ SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,11 +24,16 @@ Queue package-deps final status counts: todo=1 doing=0 succeeded=3 failed=1 canc
 
     script_path = Path(__file__).parent.parent.parent / ".github" / "scripts" / "parse-bootstrap-log.py"
 
+    # emulate non-GitHub Actions environment
+    env = os.environ.copy()
+    env.pop("GITHUB_OUTPUT", None)
+
     result = subprocess.run(
         [sys.executable, str(script_path), str(log_file)],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
 
     stdout = result.stdout
@@ -50,11 +56,16 @@ Queue sbom final status counts: todo=1 doing=0 succeeded=1 failed=0 cancelled=0 
 
     script_path = Path(__file__).parent.parent.parent / ".github" / "scripts" / "parse-sbom-log.py"
 
+    # emulate non-GitHub Actions environment
+    env = os.environ.copy()
+    env.pop("GITHUB_OUTPUT", None)
+
     result = subprocess.run(
         [sys.executable, str(script_path), str(log_file)],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
 
     stdout = result.stdout
