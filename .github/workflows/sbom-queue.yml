@@ -1,0 +1,54 @@
+# SBOM Queue Processing — hourly processing of async SBOMs
+#
+# Processes post-validation tasks in the `sbom` queue.
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+name: SBOM Queue Processing
+
+on:
+  schedule:
+    - cron: "37 * * * *"   # hourly at minute 37
+  workflow_dispatch:
+
+jobs:
+  process-sboms:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.PG_ATLAS_DATABASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run worker — sbom queue
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=4 2>&1 | tee sbom-worker.log
+
+      - name: Parse worker logs
+        id: parse-logs
+        run: python .github/scripts/parse-sbom-log.py sbom-worker.log
+
+      - name: Write job summary
+        run: |
+          python .github/scripts/render-template.py \
+            .github/templates/sbom-queue-summary.md \
+            trigger="${{ github.event_name }}" \
+            run_id="${{ github.run_id }}" \
+            server_url="${{ github.server_url }}" \
+            repository="${{ github.repository }}" \
+            finished="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            sbom_succeeded="${{ steps.parse-logs.outputs.sbom_succeeded || '—' }}" \
+            sbom_failed="${{ steps.parse-logs.outputs.sbom_failed || '—' }}" \
+            sbom_todo="${{ steps.parse-logs.outputs.sbom_todo || '—' }}" \
+            sbom_cancelled="${{ steps.parse-logs.outputs.sbom_cancelled || '—' }}" \
+            warning_count="${{ steps.parse-logs.outputs.warning_count || '0' }}" \
+            error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
+            error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
+            spdx_details="${{ steps.parse-logs.outputs.spdx_details || 'No records details available.' }}" \
+            >> "$GITHUB_STEP_SUMMARY"
