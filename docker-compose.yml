@@ -31,8 +31,8 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      # Raw SBOM artifact store (local dev). Mount a host path so artifacts survive
-      # container restarts. In production, this is replaced by Storacha.
+      # Raw SBOM artifact store (local dev). Mount a host path so artifacts survive container
+      # restarts. In production, this we use Filebase instead of the local filesystem.
       - ./artifact_store:/data/artifacts
 
 volumes:
