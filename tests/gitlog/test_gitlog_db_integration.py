@@ -22,7 +22,7 @@ from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.gitlog.parser import ContributorStats, RepoParseResult, hash_email
 from pg_atlas.gitlog.persist import persist_repo_result
 from tests.conftest import get_test_database_url
-from tests.test_gitlog.conftest import create_test_repo
+from tests.gitlog.conftest import create_test_repo
 
 pytestmark = pytest.mark.skipif(
     not get_test_database_url(),

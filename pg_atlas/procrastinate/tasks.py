@@ -22,7 +22,6 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from threading import Lock
 from typing import Any
 
 import httpx
+import msgspec
 import yaml
 from github import Auth, Github, GithubException
 from procrastinate.exceptions import AlreadyEnqueued
@@ -249,11 +249,12 @@ def _detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageRefere
             # Try to read the actual package name from package.json.
             try:
                 pj = repo.get_contents("package.json")
-                pkg_data = json.loads(pj.decoded_content)  # type: ignore[union-attr]
-                npm_name = pkg_data.get("name", repo_name)
+                pkg_data = msgspec.json.decode(pj.decoded_content, type=dict[str, object])  # type: ignore[union-attr]
+                npm_name_obj = pkg_data.get("name")
+                npm_name = npm_name_obj if isinstance(npm_name_obj, str) else repo_name
                 packages.append(PackageReference(system="NPM", name=npm_name))
 
-            except Exception:
+            except GithubException, msgspec.DecodeError, msgspec.ValidationError, AttributeError, TypeError:
                 packages.append(PackageReference(system="NPM", name=repo_name))
 
         if "pyproject.toml" in filenames or "setup.py" in filenames or "setup.cfg" in filenames:

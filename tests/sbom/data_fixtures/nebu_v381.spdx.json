@@ -1,0 +1,116 @@
+{
+  "sbom": {
+    "spdxVersion": "SPDX-2.3",
+    "dataLicense": "CC0-1.0",
+    "SPDXID": "SPDXRef-DOCUMENT",
+    "name": "com.github.withObsrvr/nebu",
+    "documentNamespace": "https://spdx.org/spdxdocs/protobom/e9dc395e-d028-4ed0-ba8d-26d8c5ba1c86",
+    "creationInfo": {
+      "creators": [
+        "Tool: protobom-v0.0.0-20260407150314-74ec19d17753+dirty",
+        "Tool: GitHub.com-Dependency-Graph",
+        "Tool: dependabot"
+      ],
+      "created": "2026-04-09T11:43:06Z"
+    },
+    "packages": [
+      {
+        "name": "com.github.withObsrvr/nebu",
+        "SPDXID": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "versionInfo": "main",
+        "downloadLocation": "git+https://github.com/withObsrvr/nebu",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:github/withObsrvr/nebu@main"
+          }
+        ]
+      },
+      {
+        "name": "SCF-Public-Goods-Maintenance/pg-atlas-sbom-action",
+        "SPDXID": "SPDXRef-githubactions-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-75c946",
+        "versionInfo": "main",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:githubactions/SCF-Public-Goods-Maintenance/pg-atlas-sbom-action@main"
+          }
+        ]
+      },
+      {
+        "name": "googleapis/release-please-action",
+        "SPDXID": "SPDXRef-githubactions-googleapis-release-please-action-4..-75c946",
+        "versionInfo": "4.*.*",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:githubactions/googleapis/release-please-action@4.%2A.%2A"
+          }
+        ]
+      },
+      {
+        "name": "networkx",
+        "SPDXID": "SPDXRef-pypi-networkx-3.6.1-75c946",
+        "versionInfo": "3.6.1",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:pypi/networkx@3.6.1"
+          }
+        ]
+      },
+      {
+        "name": "procrastinate",
+        "SPDXID": "SPDXRef-pypi-procrastinate-3.8.1-75c946",
+        "versionInfo": "3.8.1",
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": false,
+        "externalRefs": [
+          {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:pypi/procrastinate@3.8.1"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "spdxElementId": "SPDXRef-DOCUMENT",
+        "relatedSpdxElement": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "relationshipType": "DESCRIBES"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "relatedSpdxElement": "SPDXRef-githubactions-googleapis-release-please-action-4..-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "relatedSpdxElement": "SPDXRef-githubactions-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "relatedSpdxElement": "SPDXRef-pypi-networkx-3.6.1-75c946",
+        "relationshipType": "DEPENDS_ON"
+      },
+      {
+        "spdxElementId": "SPDXRef-github-withObsrvr-nebu-main-49d637",
+        "relatedSpdxElement": "SPDXRef-pypi-procrastinate-3.8.1-75c946",
+        "relationshipType": "DEPENDS_ON"
+      }
+    ]
+  }
+}

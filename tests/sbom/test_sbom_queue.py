@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -216,6 +217,28 @@ async def test_process_sbom_submission_marks_pending_row_processed(
     ]
     assert len(edges_for_repo) == 2
     assert {e.out_node.canonical_id for e in edges_for_repo} == {"httpx", "requests"}
+
+
+async def test_process_sbom_submission_accepts_legacy_enveloped_artifact(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+) -> None:
+    """
+    Worker processing remains compatible with legacy ``{"sbom": ...}`` artifacts.
+    """
+
+    inner = json.loads((FIXTURES / "valid.spdx.json").read_bytes())
+    wrapped = json.dumps({"sbom": inner}).encode()
+    submission = await _create_submission(db_session, wrapped)
+
+    await process_sbom_submission(submission_id=submission.id)
+
+    await db_session.refresh(submission)
+    updated = await db_session.get(SbomSubmission, submission.id)
+    assert updated is not None
+    assert updated.status == SubmissionStatus.processed
+    assert updated.processed_at is not None
 
 
 async def test_process_sbom_submission_marks_missing_artifact_failed(

@@ -25,6 +25,7 @@ dependencies = [
     "betterproto2[all]>=0.9.1",
     "networkx>=3.0",
     "numpy>=1.26",
+    "msgspec>=0.21.0",
 ]
 
 [dependency-groups]
@@ -67,10 +68,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["pg_atlas"]
 
-[tool.pytest.ini_options]
+[tool.pytest]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["slow: marks tests that decompress large fixtures"]
+markers = [
+    "flaky: tests that can randomly fail through no change to the code",
+    "slow: tests that decompress large fixtures",
+]
 
 [tool.black]
 line-length = 127

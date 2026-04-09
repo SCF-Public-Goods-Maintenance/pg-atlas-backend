@@ -442,22 +442,59 @@ async def handle_sbom_submission(
     """
     repository: str = claims["repository"]
     actor: str = claims["actor"]
+
+    parsed_sbom: ParsedSbom | None = None
+    spdx_error: SpdxValidationError | None = None
+    artifact_payload = raw_body
     content_hash_hex = hashlib.sha256(raw_body).hexdigest()
+
+    try:
+        parsed_sbom = parse_and_validate_spdx(raw_body)
+        artifact_payload = parsed_sbom.unwrapped_bytes
+        content_hash_hex = parsed_sbom.semantic_hash
+    except SpdxValidationError as exc:
+        spdx_error = exc
+        if exc.unwrapped_bytes is not None:
+            artifact_payload = exc.unwrapped_bytes
+
     artifact_filename = f"sboms/{content_hash_hex}.spdx.json"
 
     # ------------------------------------------------------------------
     # Fallback: no database configured — log and return stub response
     # ------------------------------------------------------------------
     if session is None:
-        no_db_sbom = parse_and_validate_spdx(raw_body)
+        if spdx_error is not None:
+            raise spdx_error
+
+        assert parsed_sbom is not None
         logger.info(
-            f"SBOM submission received (no DB): repository={repository} actor={actor} packages={no_db_sbom.package_count}"
+            f"SBOM submission received (no DB): repository={repository} actor={actor} packages={parsed_sbom.package_count}"
         )
+
         return SbomAcceptedResponse(
             message="queued",
             repository=repository,
-            package_count=no_db_sbom.package_count,
+            package_count=parsed_sbom.package_count,
         )
+
+    if spdx_error is not None:
+        artifact_path, _ = await store_artifact(artifact_payload, artifact_filename)
+        try:
+            await _record_failed_validation(
+                session,
+                repository=repository,
+                actor=actor,
+                content_hash_hex=content_hash_hex,
+                artifact_path=artifact_path,
+                error_detail=str(spdx_error),
+            )
+            logger.info(f"SBOM validation failed, recorded for triage: repository={repository} hash={content_hash_hex}")
+        except Exception:
+            logger.exception(f"Failed to record failed SBOM submission for {repository}")
+
+        raise spdx_error
+
+    assert parsed_sbom is not None
 
     # ------------------------------------------------------------------
     # Check existing: if we know this SBOM for this repository, record the submission, skip processing
@@ -485,39 +522,9 @@ async def handle_sbom_submission(
         )
 
     # ------------------------------------------------------------------
-    # Store artifact — idempotent filesystem write, runs before parsing
+    # Store artifact — idempotent filesystem write, now always unwrapped SPDX JSON
     # ------------------------------------------------------------------
-    artifact_path, _ = await store_artifact(raw_body, artifact_filename)
-
-    # ------------------------------------------------------------------
-    # Parse SPDX — capture errors; we still want a DB audit row on failure
-    # ------------------------------------------------------------------
-    sbom: ParsedSbom | None = None
-    spdx_error: SpdxValidationError | None = None
-    try:
-        sbom = parse_and_validate_spdx(raw_body)
-    except SpdxValidationError as exc:
-        spdx_error = exc
-
-    # ------------------------------------------------------------------
-    # On validation failure: commit a failed audit record, then raise 422
-    # ------------------------------------------------------------------
-    if spdx_error is not None:
-        try:
-            await _record_failed_validation(
-                session,
-                repository=repository,
-                actor=actor,
-                content_hash_hex=content_hash_hex,
-                artifact_path=artifact_path,
-                error_detail=str(spdx_error),
-            )
-            logger.info(f"SBOM validation failed, recorded for triage: repository={repository} hash={content_hash_hex}")
-        except Exception:
-            logger.exception(f"Failed to record failed SBOM submission for {repository}")
-        raise spdx_error
-
-    assert sbom is not None
+    artifact_path, _ = await store_artifact(artifact_payload, artifact_filename)
 
     # ------------------------------------------------------------------
     # Commit the pending submission row, then defer background processing
@@ -559,5 +566,5 @@ async def handle_sbom_submission(
     return SbomAcceptedResponse(
         message="queued",
         repository=repository,
-        package_count=sbom.package_count,
+        package_count=parsed_sbom.package_count,
     )

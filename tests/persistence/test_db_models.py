@@ -37,7 +37,7 @@ from tests.db_cleanup import DB_MODELS_TABLE_SPECS, capture_snapshot, cleanup_cr
 
 
 @pytest.fixture(autouse=True)
-async def _cleanup_db_rows_for_model_tests(
+async def _cleanup_db_rows_for_model_tests(  # pyright: ignore[reportUnusedFunction]
     request: pytest.FixtureRequest,
     db_session: AsyncSession,
 ) -> AsyncGenerator[None, None]:
