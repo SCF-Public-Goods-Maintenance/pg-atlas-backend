@@ -22,7 +22,7 @@ from pathlib import Path
 
 from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
 
-FIXTURES = Path(__file__).parent / "data_fixtures" / "sbom_dedup"
+FIXTURES = Path(__file__).parent / "data_fixtures"
 
 # ---------------------------------------------------------------------------
 # Load fixtures
