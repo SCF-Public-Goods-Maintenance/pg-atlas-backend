@@ -129,7 +129,9 @@ When you have validated that a deliverable has been completed, update `implement
 - **A6 complete**: Active Subgraph Projection (`pg_atlas/metrics/active_subgraph.py`) fully
   implemented and validated. Registry Crawlers incorporated in graph bootstrapper.
 - A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.
-- A8: the SBOM post-validation processing needs to be moved to a new Procrastinate queue.
+- **A8 complete**: SBOM post-validation processing now runs in a dedicated Procrastinate `sbom`
+  queue, with parser and semantic-hash hot-path optimizations (`msgspec` +
+  `JsonLikeDictParser`) and canonical unwrapped SPDX artifact storage for new submissions.
 
 ## Keeping These Instructions Current
 

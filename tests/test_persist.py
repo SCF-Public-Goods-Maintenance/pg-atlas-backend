@@ -14,6 +14,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -35,6 +36,7 @@ from pg_atlas.ingestion.persist import (
     strip_purl_version,
 )
 from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
+from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -295,3 +297,36 @@ async def test_handle_sbom_submission_invalid_records_failed_row(
     ).scalar_one()
     assert sub.status == SubmissionStatus.failed
     assert sub.error_detail is not None
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_handle_sbom_submission_stores_unwrapped_spdx_artifact(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    New SBOM submissions persist canonical unwrapped SPDX JSON artifacts.
+
+    If the incoming payload is a GitHub API envelope (``{"sbom": {...}}``),
+    the stored artifact must contain the inner SPDX document only.
+    """
+
+    claims = _unique_claims()
+    inner = json.loads((FIXTURES / "github_dep_graph.spdx.json").read_bytes())
+    wrapped = json.dumps({"sbom": inner}).encode()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    result = await handle_sbom_submission(db_session, wrapped, claims)
+
+    assert result.repository == claims["repository"]
+    submission = await _submission_for_payload(db_session, wrapped, claims)
+    defer_mock.assert_awaited_once_with(submission.id)
+
+    stored = await read_artifact(submission.artifact_path)
+    stored_json = json.loads(stored)
+
+    assert isinstance(stored_json, dict)
+    assert "sbom" not in stored_json
+    assert stored_json["spdxVersion"] == "SPDX-2.3"

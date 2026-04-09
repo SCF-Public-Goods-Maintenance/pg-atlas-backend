@@ -170,3 +170,21 @@ These conventions emerged during A8 implementation (PR #26) and apply to artifac
 - The durable unique ID (CID) of an artifact is returned in the `x-amz-meta-cid` header from both `put_object` and `head_object`.
 - Retrieval path differs from S3: reading Filebase objects via standard S3 API `get_object` by CID returns `NoSuchKey`. Instead, all reads (both worker processing and public API) use the IPFS gateway endpoint `https://ipfs.filebase.io/ipfs/<cid>`.
 - The `artifact_path` stored in the DB is always the CID string itself.
+
+### Parser/latency optimization (A8 follow-up)
+
+- `pg_atlas/ingestion/spdx.py` no longer uses stdlib `json` or Pydantic for SBOM decode/hash extraction.
+- Raw SPDX bytes are decoded exactly once in `parse_and_validate_spdx()` using `msgspec` (`msgspec.json.Decoder`).
+- SPDX validation uses `spdx_tools.spdx.parser.jsonlikedict.JsonLikeDictParser` directly (no temp files).
+- `ParsedSbom` now carries:
+  - `document`
+  - `package_count`
+  - `unwrapped_bytes` (canonical SPDX JSON with no GitHub `{"sbom": ...}` envelope)
+  - `semantic_hash`
+- `compute_sbom_semantic_hash(raw)` now delegates to `parse_and_validate_spdx(raw)` and falls back to raw SHA-256 when parsing fails.
+
+### Artifact write format
+
+- New ingested artifacts are persisted as **unwrapped SPDX JSON** bytes (inner document only).
+- Legacy stored enveloped artifacts remain supported: worker parsing still accepts `{"sbom": ...}` payloads.
+- On validation failure where envelope decoding succeeds, failed-submission artifacts are still stored in unwrapped form for consistency.

@@ -12,17 +12,27 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import tempfile
 from dataclasses import dataclass
+from operator import attrgetter
+from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict
+import msgspec
 from spdx_tools.spdx.model import Document
 from spdx_tools.spdx.parser.error import SPDXParsingError
-from spdx_tools.spdx.parser.parse_anything import parse_file
+from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
 
 logger = logging.getLogger(__name__)
+
+
+_SBOM_DICT_DECODER = msgspec.json.Decoder(type=dict[str, object])
+_DETERMINISTIC_ENCODER = msgspec.json.Encoder(order="deterministic")
+
+
+def _empty_object_dict_list() -> list[dict[str, object]]:
+    """Return a new empty list typed as ``list[dict[str, object]]``."""
+
+    return []
 
 
 class SpdxValidationError(ValueError):
@@ -32,12 +42,22 @@ class SpdxValidationError(ValueError):
     Carries a human-readable ``detail`` string and an optional list of
     ``messages`` from the underlying spdx-tools parser for structured error
     reporting back to the caller.
+
+    When available, ``unwrapped_bytes`` contains the normalized SPDX JSON bytes
+    (without the GitHub ``{"sbom": ...}`` envelope). This lets callers store
+    canonicalized artifacts even when schema validation fails.
     """
 
-    def __init__(self, detail: str, messages: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        detail: str,
+        messages: list[str] | None = None,
+        unwrapped_bytes: bytes | None = None,
+    ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.messages = messages or []
+        self.unwrapped_bytes = unwrapped_bytes
 
 
 @dataclass
@@ -51,34 +71,139 @@ class ParsedSbom:
         package_count: Number of packages declared in the SPDX document.
             Exposed directly for quick logging and response shaping without
             callers needing to inspect the document internals.
+        unwrapped_bytes: Canonical SPDX JSON bytes with no GitHub envelope.
+            New artifacts should persist this representation.
+        semantic_hash: Stable semantic hash of the canonical content used for
+            deduplication in submission intake.
     """
 
     document: Document
     package_count: int
+    unwrapped_bytes: bytes
+    semantic_hash: str
 
 
-def _unwrap_github_api_envelope(raw: bytes) -> bytes:
+class _SbomPackageKey(msgspec.Struct):
+    """Sort key model for SPDX packages."""
+
+    SPDXID: str = ""
+
+
+class _SbomRelationshipKey(msgspec.Struct):
+    """Sort key model for SPDX relationships."""
+
+    spdxElementId: str = ""
+    relatedSpdxElement: str = ""
+    relationshipType: str = ""
+
+
+class _SbomHashDoc(msgspec.Struct, forbid_unknown_fields=False):
     """
-    Strip the GitHub Dependency Graph API envelope if present.
+    Typed view of top-level fields used for semantic hash canonicalization.
 
-    The GitHub API endpoint ``/repos/{owner}/{repo}/dependency-graph/sbom``
-    wraps the SPDX document in a top-level ``{"sbom": {…}}`` object. When
-    the pg-atlas-sbom-action submits the raw API response, this function
-    extracts the inner document so that spdx-tools can parse it correctly.
-
-    Non-enveloped payloads (already bare SPDX JSON) are returned unchanged.
-    Any bytes that cannot be decoded as UTF-8 JSON are returned unchanged so
-    that the spdx-tools parser can produce the appropriate error message.
+    Unknown fields are ignored by design because volatile metadata such as
+    ``documentNamespace`` and ``creationInfo.created`` must not influence the
+    semantic hash.
     """
+
+    name: str = ""
+    packages: list[dict[str, object]] = msgspec.field(default_factory=_empty_object_dict_list)
+    relationships: list[dict[str, object]] = msgspec.field(default_factory=_empty_object_dict_list)
+
+
+@dataclass(frozen=True)
+class _SortablePackage:
+    """Raw package payload paired with a validated key for deterministic sort."""
+
+    key: _SbomPackageKey
+    payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _SortableRelationship:
+    """Raw relationship payload paired with a validated key for deterministic sort."""
+
+    key: _SbomRelationshipKey
+    payload: dict[str, object]
+
+
+def _decode_unwrapped_sbom(raw: bytes) -> tuple[dict[str, object], bytes]:
+    """
+    Decode raw JSON bytes and unwrap GitHub's ``{"sbom": ...}`` envelope.
+
+    Returns both the decoded dict and a deterministic JSON byte representation
+    of that same unwrapped dict.
+    """
+
     try:
-        outer = json.loads(raw)
-    except json.JSONDecodeError, UnicodeDecodeError:
-        return raw
+        decoded = _SBOM_DICT_DECODER.decode(raw)
+    except msgspec.DecodeError as exc:
+        raise SpdxValidationError(
+            detail="Invalid SPDX 2.3 document.",
+            messages=[str(exc)],
+        ) from exc
 
-    if isinstance(outer, dict) and "sbom" in outer and isinstance(outer["sbom"], dict):
-        return json.dumps(outer["sbom"]).encode()
+    sbom_obj: dict[str, object] = decoded
+    envelope = decoded.get("sbom")
+    if isinstance(envelope, dict):
+        sbom_obj = cast(dict[str, object], envelope)
 
-    return raw
+    unwrapped_bytes = _DETERMINISTIC_ENCODER.encode(sbom_obj)
+
+    return sbom_obj, unwrapped_bytes
+
+
+def _semantic_hash_from_sbom_dict(sbom_obj: dict[str, object], raw_fallback: bytes) -> str:
+    """
+    Build a stable semantic hash from decoded SPDX JSON.
+
+    When required semantic fields are missing or structurally invalid, falls
+    back to raw SHA-256 so invalid payloads still get deterministic IDs.
+    """
+
+    if "packages" not in sbom_obj:
+        return hashlib.sha256(raw_fallback).hexdigest()
+
+    try:
+        doc = msgspec.convert(sbom_obj, type=_SbomHashDoc)
+    except msgspec.ValidationError:
+        return hashlib.sha256(raw_fallback).hexdigest()
+
+    try:
+        sortable_packages = [
+            _SortablePackage(
+                key=msgspec.convert(pkg, type=_SbomPackageKey),
+                payload=pkg,
+            )
+            for pkg in doc.packages
+        ]
+        sortable_relationships = [
+            _SortableRelationship(
+                key=msgspec.convert(rel, type=_SbomRelationshipKey),
+                payload=rel,
+            )
+            for rel in doc.relationships
+        ]
+    except msgspec.ValidationError:
+        return hashlib.sha256(raw_fallback).hexdigest()
+
+    sortable_packages.sort(key=attrgetter("key.SPDXID"))
+    sortable_relationships.sort(
+        key=attrgetter(
+            "key.spdxElementId",
+            "key.relatedSpdxElement",
+            "key.relationshipType",
+        )
+    )
+
+    canonical: dict[str, object] = {
+        "name": doc.name,
+        "packages": [pkg.payload for pkg in sortable_packages],
+        "relationships": [rel.payload for rel in sortable_relationships],
+    }
+    canonical_bytes = _DETERMINISTIC_ENCODER.encode(canonical)
+
+    return hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
@@ -89,47 +214,42 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
     envelope returned by the GitHub Dependency Graph API. The envelope is
     transparently stripped before parsing.
 
-    Uses spdx-tools' ``parse_file`` which validates the document against the
-    SPDX 2.3 JSON schema and returns a typed Document object. The document
-    is not persisted here — that is the responsibility of the A8 processing
-    pipeline.
+    This function is the single JSON decode point for raw SPDX bytes in the
+    ingestion flow.
+
+    Uses spdx-tools' ``JsonLikeDictParser`` for SPDX 2.3 validation and typed
+    Document construction.
 
     Args:
         raw: Raw bytes of the SPDX 2.3 JSON document (or GitHub API envelope)
             submitted by the action.
 
     Returns:
-        ParsedSbom: Parsed document and package count on success.
+        ParsedSbom: Parsed document, package count, canonical unwrapped bytes,
+            and semantic hash.
 
     Raises:
         SpdxValidationError: If the bytes cannot be parsed as a valid SPDX 2.3
             JSON document, or if required fields (spdxVersion, SPDXID,
             documentNamespace, name) are missing or malformed.
     """
-    raw = _unwrap_github_api_envelope(raw)
 
-    # spdx-tools' parse_file requires a file path with a recognizable extension
-    # to select the correct format parser. We write to a named temp file with a
-    # .spdx.json suffix, parse it, then discard it immediately.
+    sbom_obj, unwrapped_bytes = _decode_unwrapped_sbom(raw)
+    semantic_hash = _semantic_hash_from_sbom_dict(sbom_obj, raw)
+    parser_input = cast(dict[Any, Any], sbom_obj)
+    parser: Any = JsonLikeDictParser()
+
     try:
-        with tempfile.NamedTemporaryFile(suffix=".spdx.json", delete=True) as tmp:
-            tmp.write(raw)
-            tmp.flush()
-            document = parse_file(tmp.name)
+        document = cast(Document, parser.parse(parser_input))
     except SPDXParsingError as exc:
-        messages = [str(m) for m in exc.get_messages()]
+        messages = [str(message) for message in exc.get_messages()]
         logger.info(f"SPDX validation failed: {messages}")
         raise SpdxValidationError(
             detail="Invalid SPDX 2.3 document.",
             messages=messages,
-        ) from exc
-    except Exception as exc:
-        logger.warning(f"Unexpected error during SPDX parsing: {exc}")
-        raise SpdxValidationError(
-            detail=f"Could not parse SPDX document: {exc}",
+            unwrapped_bytes=unwrapped_bytes,
         ) from exc
 
-    assert document, "Document is None"
     package_count = len(document.packages)
     logger.info(
         "SPDX document parsed OK: "
@@ -137,56 +257,13 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
         f"spdx_version={document.creation_info.spdx_version} "
         f"packages={package_count}"
     )
-    return ParsedSbom(document=document, package_count=package_count)
 
-
-# ---------------------------------------------------------------------------
-# Pydantic models for semantic-hash extraction
-# ---------------------------------------------------------------------------
-
-
-class _SbomPackage(BaseModel):
-    """
-    Typed view of one SPDX 2.3 package entry used for canonical sort-key access.
-
-    All undeclared fields are preserved via ``extra="allow"`` so that
-    ``model_dump()`` round-trips the complete package JSON for hashing.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    SPDXID: str = ""
-
-
-class _SbomRelationship(BaseModel):
-    """
-    Typed view of one SPDX 2.3 relationship entry used for canonical sort keys.
-
-    All undeclared fields are preserved via ``extra="allow"``.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    spdxElementId: str = ""
-    relatedSpdxElement: str = ""
-    relationshipType: str = ""
-
-
-class _SbomDoc(BaseModel):
-    """
-    Minimal typed view of the SPDX document fields included in the semantic hash.
-
-    Only ``name``, ``packages``, and ``relationships`` are extracted; all
-    other top-level fields (``documentNamespace``, ``creationInfo``, etc.) are
-    intentionally excluded (``extra="ignore"``) because they carry volatile
-    metadata that must not affect the semantic hash.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str = ""
-    packages: list[_SbomPackage] = []
-    relationships: list[_SbomRelationship] = []
+    return ParsedSbom(
+        document=document,
+        package_count=package_count,
+        unwrapped_bytes=unwrapped_bytes,
+        semantic_hash=semantic_hash,
+    )
 
 
 def compute_sbom_semantic_hash(raw: bytes) -> str:
@@ -222,31 +299,9 @@ def compute_sbom_semantic_hash(raw: bytes) -> str:
     Returns:
         A SHA-256 hex digest of the canonical semantic content.
     """
-    bare = _unwrap_github_api_envelope(raw)
-
     try:
-        sbom = json.loads(bare)
-    except json.JSONDecodeError, UnicodeDecodeError:
+        parsed = parse_and_validate_spdx(raw)
+    except SpdxValidationError:
         return hashlib.sha256(raw).hexdigest()
 
-    if not isinstance(sbom, dict) or "packages" not in sbom:
-        return hashlib.sha256(raw).hexdigest()
-
-    try:
-        doc = _SbomDoc.model_validate(sbom)
-    except Exception:
-        return hashlib.sha256(raw).hexdigest()
-
-    packages = sorted(doc.packages, key=lambda p: p.SPDXID)
-    relationships = sorted(
-        doc.relationships,
-        key=lambda r: (r.spdxElementId, r.relatedSpdxElement, r.relationshipType),
-    )
-    canonical: dict[str, object] = {
-        "name": doc.name,
-        "packages": [p.model_dump(mode="json") for p in packages],
-        "relationships": [r.model_dump(mode="json") for r in relationships],
-    }
-    canonical_bytes = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-
-    return hashlib.sha256(canonical_bytes).hexdigest()
+    return parsed.semantic_hash
