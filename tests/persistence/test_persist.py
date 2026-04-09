@@ -40,7 +40,7 @@ from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
-FIXTURES = Path(__file__).parent / "data_fixtures"
+FIXTURES = Path(__file__).parent.parent / "sbom" / "data_fixtures"
 
 _DB_AVAILABLE = bool(get_test_database_url())
 

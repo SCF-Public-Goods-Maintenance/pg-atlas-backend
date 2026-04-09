@@ -2,7 +2,7 @@
 Live repository tests for the git log parser.
 
 These tests clone real repositories and are intended for manual execution only.
-Run with: ``PG_ATLAS_TEST_LIVE_REPOS=1 uv run pytest tests/test_gitlog/test_live_repos.py -v``
+Run with: ``PG_ATLAS_TEST_LIVE_REPOS=1 uv run pytest tests/gitlog/test_live_repos.py -v``
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0

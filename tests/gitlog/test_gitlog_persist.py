@@ -21,7 +21,7 @@ from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.gitlog.parser import ContributorStats, RepoParseResult, hash_email
 from pg_atlas.gitlog.persist import persist_repo_result, upsert_contributed_to, upsert_contributor
-from tests.test_gitlog.conftest import create_test_repo
+from tests.gitlog.conftest import create_test_repo
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("PG_ATLAS_DATABASE_URL"),
