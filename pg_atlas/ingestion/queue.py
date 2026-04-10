@@ -13,22 +13,47 @@ from __future__ import annotations
 
 import logging
 
+from pg_atlas.db_models.base import SubmissionStatus
+
 logger = logging.getLogger(__name__)
 
 
-async def defer_sbom_processing(submission_id: int) -> None:
+async def defer_sbom_processing(
+    submission_id: int,
+    expected_status: SubmissionStatus = SubmissionStatus.pending,
+) -> bool:
     """
-    Defer background processing for one validated SBOM submission.
+    Defer background processing for one SBOM submission.
 
     Args:
         submission_id: Primary key of the ``SbomSubmission`` audit row whose
             stored artifact should be processed by the background worker.
+        expected_status: Submission status the worker must require before
+            processing this row.
+
+    Returns:
+        ``True`` when a new task was enqueued, ``False`` when an equivalent
+        lock-matching task is already queued.
     """
 
     from pg_atlas.procrastinate.app import app
-    from pg_atlas.procrastinate.tasks import process_sbom_submission
+    from pg_atlas.procrastinate.tasks import defer_with_lock, process_sbom_submission
+
+    queueing_lock = f"sbom:{expected_status.value}:{submission_id}"
 
     async with app.open_async():
-        job_id = await process_sbom_submission.defer_async(submission_id=submission_id)
+        enqueued = await defer_with_lock(
+            process_sbom_submission,
+            queueing_lock=queueing_lock,
+            submission_id=submission_id,
+            expected_status=expected_status.value,
+        )
 
-    logger.info(f"Deferred SBOM processing job: submission_id={submission_id} job_id={job_id}")
+    if enqueued:
+        logger.info(f"Deferred SBOM processing job: submission_id={submission_id} expected_status={expected_status.value}")
+    else:
+        logger.info(
+            f"Skipping duplicate SBOM defer request: submission_id={submission_id} expected_status={expected_status.value}"
+        )
+
+    return enqueued

@@ -366,6 +366,60 @@ async def test_process_sbom_submission_is_noop_for_terminal_submission(
     assert post_repo_ids == pre_repo_ids
 
 
+async def test_process_sbom_submission_reprocesses_failed_when_selected_status_matches(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+) -> None:
+    """
+    Failed submissions can be reprocessed when the task selects failed status.
+    """
+
+    raw_body = (FIXTURES / "valid.spdx.json").read_bytes()
+    submission = await _create_submission(
+        db_session,
+        raw_body,
+        status=SubmissionStatus.failed,
+        error_detail="[Errno 2] No such file or directory",
+    )
+
+    await process_sbom_submission(
+        submission_id=submission.id,
+        expected_status=SubmissionStatus.failed.value,
+    )
+
+    await db_session.refresh(submission)
+    updated = await db_session.get(SbomSubmission, submission.id)
+    assert updated is not None
+    assert updated.status == SubmissionStatus.processed
+    assert updated.processed_at is not None
+
+
+async def test_process_sbom_submission_skips_failed_when_default_status_is_pending(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+) -> None:
+    """
+    Failed submissions are skipped unless failed status is explicitly selected.
+    """
+
+    raw_body = (FIXTURES / "valid.spdx.json").read_bytes()
+    submission = await _create_submission(
+        db_session,
+        raw_body,
+        status=SubmissionStatus.failed,
+        error_detail="[Errno 2] No such file or directory",
+    )
+
+    await process_sbom_submission(submission_id=submission.id)
+
+    await db_session.refresh(submission)
+    updated = await db_session.get(SbomSubmission, submission.id)
+    assert updated is not None
+    assert updated.status == SubmissionStatus.failed
+
+
 async def test_ingest_then_worker_persists_dependency_graph(
     db_authenticated_client: tuple[AsyncClient, AsyncSession],
     cleanup_db_rows_for_queue_tests: None,

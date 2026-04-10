@@ -32,7 +32,7 @@ from pg_atlas.ingestion.persist import (
     canonical_id_for_github_repo,
     canonical_id_for_spdx_package,
     handle_sbom_submission,
-    process_pending_sbom_submission,
+    parse_sbom_and_persist_graph,
     strip_purl_version,
 )
 from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
@@ -177,7 +177,7 @@ async def test_handle_sbom_submission_is_idempotent(
 
     await handle_sbom_submission(db_session, valid_sbom, claims)
     first_submission = await _submission_for_payload(db_session, valid_sbom, claims)
-    await process_pending_sbom_submission(db_session, first_submission.id)
+    await parse_sbom_and_persist_graph(db_session, first_submission.id)
 
     second_result = await handle_sbom_submission(db_session, valid_sbom, claims)
     assert second_result.message == "duplicate skipped"
@@ -215,7 +215,7 @@ async def test_handle_sbom_submission_github_dep_graph(
     result = await handle_sbom_submission(db_session, raw, claims)
     assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, raw, claims)
-    await process_pending_sbom_submission(db_session, submission.id)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id)
 
     # Submitting repo → Repo vertex, NOT ExternalRepo
@@ -255,7 +255,7 @@ async def test_handle_sbom_submission_duplicate_edges(
     assert result.repository == claims["repository"]
     assert result.package_count == 109
     submission = await _submission_for_payload(db_session, long_sbom, claims)
-    await process_pending_sbom_submission(db_session, submission.id)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id)
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
