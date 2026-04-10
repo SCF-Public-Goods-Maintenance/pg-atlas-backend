@@ -12,10 +12,13 @@ on:
     - cron: "37 * * * *"   # hourly at minute 37
   workflow_dispatch:
 
+concurrency:
+  group: sbom
+
 jobs:
   process-sboms:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
       PG_ATLAS_IPFS_GATEWAY_URL: ${{ secrets.IPFS_GATEWAY_URL }}
@@ -32,7 +35,7 @@ jobs:
         run: uv run python -m pg_atlas.procrastinate.seed_reprocess_sboms
 
       - name: Run worker — sbom queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=4 2>&1 | tee sbom-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=1 2>&1 | tee sbom-worker.log
 
       - name: Parse worker logs
         id: parse-logs

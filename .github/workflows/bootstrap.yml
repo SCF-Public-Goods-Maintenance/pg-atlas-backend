@@ -17,6 +17,9 @@ on:
     - cron: "11 10 * * 2"   # weekly, Tuesday 10:11 UTC
   workflow_dispatch:
 
+concurrency:
+  group: shadow
+
 jobs:
   crawl:
     runs-on: ubuntu-latest
