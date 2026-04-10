@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Seed reprocess failed submissions
+        run: uv run python -m pg_atlas.procrastinate.seed_reprocess_failed_sboms
+
       - name: Run worker — sbom queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=4 2>&1 | tee sbom-worker.log
 

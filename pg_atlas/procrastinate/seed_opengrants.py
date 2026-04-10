@@ -1,12 +1,12 @@
 """
-Seed script — defers the root ``sync_opengrants`` task.
+Seed script - defers the root ``sync_opengrants`` task.
 
 Usage::
 
-    uv run python -m pg_atlas.procrastinate.seed
+    uv run python -m pg_atlas.procrastinate.seed_opengrants
 
 The script opens the Procrastinate connection, defers a single root task,
-and exits immediately.  The actual crawling happens when a worker processes
+and exits immediately. The actual crawling happens when a worker processes
 the queue.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors

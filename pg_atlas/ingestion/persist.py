@@ -346,11 +346,16 @@ async def _persist_sbom_graph(
     return len(dep_vertex_ids)
 
 
-async def process_pending_sbom_submission(session: AsyncSession, submission_id: int) -> None:
+async def parse_sbom_and_persist_graph(
+    session: AsyncSession,
+    submission_id: int,
+    expected_status: SubmissionStatus = SubmissionStatus.pending,
+) -> None:
     """
-    Process one pending SBOM submission from its stored artifact.
+    Parse one stored SBOM artifact and persist its graph mutations.
 
-    Missing or already-terminal submissions are logged and ignored.
+    Missing submissions or rows that do not match ``expected_status`` are
+    logged and ignored.
     """
 
     submission = await session.get(SbomSubmission, submission_id)
@@ -359,9 +364,10 @@ async def process_pending_sbom_submission(session: AsyncSession, submission_id: 
 
         return
 
-    if submission.status != SubmissionStatus.pending:
+    if submission.status != expected_status:
         logger.info(
-            f"Skipping SBOM submission with non-pending status: submission_id={submission_id} status={submission.status.value}"
+            "Skipping SBOM submission with non-selected status: "
+            f"submission_id={submission_id} status={submission.status.value} expected_status={expected_status.value}"
         )
 
         return

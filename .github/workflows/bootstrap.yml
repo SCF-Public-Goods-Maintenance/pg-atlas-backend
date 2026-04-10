@@ -35,7 +35,7 @@ jobs:
         run: uv sync
 
       - name: Queue bootstrap tasks
-        run: uv run python -m pg_atlas.procrastinate.seed
+        run: uv run python -m pg_atlas.procrastinate.seed_opengrants
 
       - name: Run worker — opengrants queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --concurrency=8 2>&1 | tee opengrants-worker.log

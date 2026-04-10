@@ -57,7 +57,7 @@ def test_worker_main_runs(monkeypatch: pytest.MonkeyPatch, mocker: pytest_mock.M
 async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate import worker
 
-    mocker.patch("pg_atlas.procrastinate.worker._recover_stale_doing_jobs", return_value=2)
+    recover_mock = mocker.patch("pg_atlas.procrastinate.worker._recover_stale_doing_jobs", return_value=2)
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
@@ -73,7 +73,7 @@ async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.Mocke
         stale_worker_seconds=600,
     )
 
-    worker._recover_stale_doing_jobs.assert_called_once_with("opengrants", 600)
+    recover_mock.assert_called_once_with("opengrants", 600)
 
 
 async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.MockerFixture) -> None:
@@ -99,9 +99,9 @@ async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.Mo
 
 
 async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) -> None:
-    from pg_atlas.procrastinate.seed import seed
+    from pg_atlas.procrastinate.seed_opengrants import seed
 
-    app_mock = mocker.patch("pg_atlas.procrastinate.seed.app")
+    app_mock = mocker.patch("pg_atlas.procrastinate.seed_opengrants.app")
     ctx = mocker.AsyncMock()
     app_mock.open_async.return_value = ctx
 
