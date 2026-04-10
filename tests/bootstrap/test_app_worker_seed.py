@@ -8,6 +8,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 import pytest_mock
 
@@ -61,7 +63,7 @@ async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.Mocke
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
-        return_value={"todo": 0, "doing": 0, "succeeded": 1, "failed": 0, "cancelled": 0, "aborted": 0},
+        return_value=Counter(),
     )
 
     await worker.process_queue(
@@ -83,7 +85,7 @@ async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.Mo
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
-        return_value={"todo": 0, "doing": 0, "succeeded": 0, "failed": 0, "cancelled": 0, "aborted": 0},
+        return_value=Counter(),
     )
 
     await worker.process_queue(
