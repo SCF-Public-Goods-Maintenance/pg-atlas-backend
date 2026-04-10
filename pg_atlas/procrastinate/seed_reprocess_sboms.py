@@ -3,7 +3,7 @@ Seed script - defer reprocessing for recent failed SBOM submissions.
 
 Usage::
 
-    uv run python -m pg_atlas.procrastinate.seed_reprocess_failed_sboms
+    uv run python -m pg_atlas.procrastinate.seed_reprocess_sboms
 
 This script targets the most recent failed submissions that match known,
 recoverable error details. Matching rows are re-enqueued to the SBOM queue
