@@ -382,7 +382,7 @@ async def test_detail_with_filebase_cid_artifact(
 
         return await original_get(self, url, *args, **kwargs)
 
-    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", "https://s3.filebase.com")
+    monkeypatch.setattr(settings, "IPFS_GATEWAY_URL", "https://ipfs.filebase.io/ipfs")
     monkeypatch.setattr(AsyncClient, "get", _fake_get)
 
     sub = _make_submission(repo, artifact_path=cid)

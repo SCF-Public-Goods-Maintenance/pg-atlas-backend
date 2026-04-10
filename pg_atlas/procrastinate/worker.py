@@ -29,7 +29,7 @@ from collections.abc import Iterable
 
 import psycopg
 
-from pg_atlas.procrastinate.app import _get_database_url, app
+from pg_atlas.procrastinate.app import app, get_database_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +43,7 @@ def _queue_status_counts(queue_name: str) -> dict[str, int]:
 
     Return per-status job counts for one queue.
     """
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -73,7 +73,7 @@ def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
     if not status_list:
         return 0
 
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -98,7 +98,7 @@ def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int
     A `doing` job is considered orphaned when it has no associated worker row
     after stale-worker pruning.
     """
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT worker_id FROM procrastinate_prune_stalled_workers_v1(%s)", (stale_worker_seconds,))
@@ -208,6 +208,7 @@ async def process_queue(
                 f"Queue {queue_name} still has pending jobs after {drain_rounds} rounds; consider rerunning the worker"
             )
 
+        # FIXME: needs after minus before diff
         status_counts = _queue_status_counts(queue_name)
         logger.info(
             f"Queue {queue_name} final status counts: todo={status_counts['todo']} "

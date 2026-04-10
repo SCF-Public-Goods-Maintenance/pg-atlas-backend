@@ -18,6 +18,14 @@
             "justMyCode": false,
         },
         {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "${command:extension.commandvariable.file.relativeFileDotsNoExtension}",
+            "args": "${command:pickArgs}",
+            "justMyCode": false
+        },
+        {
             "name": "Python: Debug Tests",
             "type": "debugpy",
             "request": "launch",

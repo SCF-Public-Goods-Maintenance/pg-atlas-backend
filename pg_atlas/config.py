@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         return db_url
 
     ARTIFACT_STORE_PATH: Path = Path("./artifact_store")
-    IPFS_GATEWAY_URL: HttpUrl = HttpUrl("https://ipfs.filebase.io/ipfs")
+    IPFS_GATEWAY_URL: HttpUrl | None = None
     ARTIFACT_S3_ENDPOINT: HttpUrl | None = None
     ARTIFACT_S3_BUCKET: str = "pga-ingested-artifacts"
     FILEBASE_ACCESS_KEY: str | None = None
