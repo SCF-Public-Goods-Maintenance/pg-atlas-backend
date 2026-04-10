@@ -7,7 +7,7 @@ databases:
     version: "18"
 
 features:
-  - buildpack-stack=ubuntu-24
+  - buildpack-stack=ubuntu-22
 
 domains:
   - domain: api.pgatlas.xyz
