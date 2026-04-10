@@ -378,6 +378,7 @@ async def parse_sbom_and_persist_graph(
         await _persist_sbom_graph(session, submission.repository_claim, submission.actor_claim, sbom)
         submission.status = SubmissionStatus.processed
         submission.processed_at = dt.datetime.now(dt.UTC)
+        submission.error_detail = None
         await session.commit()
 
     except FileNotFoundError as exc:

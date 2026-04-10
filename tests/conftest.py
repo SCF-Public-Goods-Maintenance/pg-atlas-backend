@@ -20,6 +20,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("PG_ATLAS_API_URL", "https://test.pg-atlas.example")
+# Ensure IPFS gateway reads are disabled in all tests unless a test explicitly
+# sets up a mock for the gateway response.
+os.environ.pop("PG_ATLAS_IPFS_GATEWAY_URL", None)
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
 from pg_atlas.config import Settings, settings

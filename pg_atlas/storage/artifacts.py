@@ -142,19 +142,19 @@ async def _read_artifact_local(artifact_path: str) -> bytes:
     return await asyncio.get_running_loop().run_in_executor(None, _read_sync, _local_artifact_path(artifact_path))
 
 
-async def _read_artifact_filebase(artifact_cid: str) -> bytes:
-    """Read artifact bytes from the Filebase IPFS gateway using the stored CID."""
+async def _read_artifact_ipfs(artifact_cid: str) -> bytes:
+    """Read artifact bytes from the configured IPFS gateway using the stored CID."""
 
     url = f"{settings.IPFS_GATEWAY_URL}/{artifact_cid}"
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(url)
 
     if response.status_code == 404:
-        raise FileNotFoundError(f"Filebase artifact not found: {artifact_cid}")
+        raise FileNotFoundError(f"IPFS artifact not found: {artifact_cid}")
 
     if response.status_code >= 400:
-        logger.warning(f"Filebase artifact gateway error: cid={artifact_cid} status={response.status_code}")
-        raise OSError(f"Filebase artifact gateway returned HTTP {response.status_code} for {artifact_cid}")
+        logger.warning(f"Artifact IPFS gateway error: cid={artifact_cid} status={response.status_code}")
+        raise OSError(f"Artifact IPFS gateway returned HTTP {response.status_code} for {artifact_cid}")
 
     return response.content
 
@@ -190,12 +190,17 @@ async def read_artifact(artifact_location: str) -> bytes:
     """
     Read one stored artifact from the configured backing store.
 
-    When Filebase storage is enabled, ``artifact_location`` is interpreted as the
-    persisted CID and resolved through Filebase's IPFS gateway. Otherwise it is
-    interpreted as a filesystem-relative artifact path under ``ARTIFACT_STORE_PATH``.
+    When IPFS_GATEWAY_URL is configured, ``artifact_location`` is interpreted as the
+    persisted CID and resolved through the IPFS gateway. Otherwise it is interpreted
+    as a filesystem-relative artifact path under ``ARTIFACT_STORE_PATH``.
+
+    If the IPFS gateway responds 404, fall back to the filesystem read path.
     """
 
-    if _filebase_enabled():
-        return await _read_artifact_filebase(artifact_location)
+    if settings.IPFS_GATEWAY_URL:
+        try:
+            return await _read_artifact_ipfs(artifact_location)
+        except FileNotFoundError:
+            logger.warning(f"IPFS 404 for {artifact_location}: falling back to local read")
 
     return await _read_artifact_local(artifact_location)

@@ -8,29 +8,31 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 import pytest_mock
 
 try:
-    from pg_atlas.procrastinate.app import _get_database_url
+    from pg_atlas.procrastinate.app import get_database_url
 except ValueError:
     pytest.skip("PG_ATLAS_DATABASE_URL intentionally not set for CI tests", allow_module_level=True)
 
 
 def test_get_database_url_plain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PG_ATLAS_DATABASE_URL", "postgresql://atlas:pw@localhost:5432/pg_atlas")
-    assert _get_database_url() == "postgresql://atlas:pw@localhost:5432/pg_atlas"
+    assert get_database_url() == "postgresql://atlas:pw@localhost:5432/pg_atlas"
 
 
 def test_get_database_url_normalizes_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PG_ATLAS_DATABASE_URL", "postgres://atlas:pw@host/db")
-    assert _get_database_url() == "postgresql://atlas:pw@host/db"
+    assert get_database_url() == "postgresql://atlas:pw@host/db"
 
 
 def test_get_database_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PG_ATLAS_DATABASE_URL", raising=False)
     with pytest.raises(ValueError, match="PG_ATLAS_DATABASE_URL must be set"):
-        _get_database_url()
+        get_database_url()
 
 
 def test_worker_main_requires_queue(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,7 +63,7 @@ async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.Mocke
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
-        return_value={"todo": 0, "doing": 0, "succeeded": 1, "failed": 0, "cancelled": 0, "aborted": 0},
+        return_value=Counter(),
     )
 
     await worker.process_queue(
@@ -83,7 +85,7 @@ async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.Mo
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
-        return_value={"todo": 0, "doing": 0, "succeeded": 0, "failed": 0, "cancelled": 0, "aborted": 0},
+        return_value=Counter(),
     )
 
     await worker.process_queue(

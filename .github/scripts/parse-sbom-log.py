@@ -82,7 +82,7 @@ def main() -> None:
         all_errors.extend(errors)
         all_spdx_parsed.extend(spdx_parsed)
 
-    extra_outputs = {}
+    extra_outputs: dict[str, str] = {}
     if all_spdx_parsed:
         # Format a nice markdown list for the details section
         bullets = [f"- {line}" for line in all_spdx_parsed]

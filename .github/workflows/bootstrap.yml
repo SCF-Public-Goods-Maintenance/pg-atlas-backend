@@ -17,13 +17,16 @@ on:
     - cron: "11 10 * * 2"   # weekly, Tuesday 10:11 UTC
   workflow_dispatch:
 
+concurrency:
+  group: shadow
+
 jobs:
   crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
-      PG_ATLAS_DATABASE_URL: ${{ secrets.PG_ATLAS_DATABASE_URL }}
-      PG_ATLAS_OPENGRANTS_KEY: ${{ secrets.PG_ATLAS_OPENGRANTS_KEY }}
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PG_ATLAS_OPENGRANTS_KEY: ${{ secrets.OPENGRANTS_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:

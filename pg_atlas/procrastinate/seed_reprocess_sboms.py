@@ -25,7 +25,7 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.ingestion.queue import defer_sbom_processing
 
-_N_MOST_RECENT = 10
+_N_MOST_RECENT = 7
 _ERROR_FILTER: tuple[str, ...] = ("No such file or directory",)
 
 logging.basicConfig(

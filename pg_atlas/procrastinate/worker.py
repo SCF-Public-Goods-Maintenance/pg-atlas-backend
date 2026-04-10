@@ -25,11 +25,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import Iterable
 
 import psycopg
 
-from pg_atlas.procrastinate.app import _get_database_url, app
+from pg_atlas.procrastinate.app import app, get_database_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,12 +39,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _queue_status_counts(queue_name: str) -> dict[str, int]:
+def _queue_status_counts(queue_name: str) -> Counter[str]:
     """
 
     Return per-status job counts for one queue.
     """
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -57,7 +58,7 @@ def _queue_status_counts(queue_name: str) -> dict[str, int]:
             )
             rows = cur.fetchall()
 
-    counts = {"todo": 0, "doing": 0, "succeeded": 0, "failed": 0, "cancelled": 0, "aborted": 0}
+    counts: Counter[str] = Counter()
     for status, count in rows:
         counts[str(status)] = int(count)
 
@@ -73,7 +74,7 @@ def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
     if not status_list:
         return 0
 
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -98,7 +99,7 @@ def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int
     A `doing` job is considered orphaned when it has no associated worker row
     after stale-worker pruning.
     """
-    dsn = _get_database_url()
+    dsn = get_database_url()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT worker_id FROM procrastinate_prune_stalled_workers_v1(%s)", (stale_worker_seconds,))
@@ -169,6 +170,7 @@ async def process_queue(
             passed to `procrastinate_prune_stalled_workers_v1`.
     """
     logger.info(f"Starting worker: queue={queue_name} concurrency={concurrency} wait={wait}")
+    status_counts_before = _queue_status_counts(queue_name)
 
     if wait:
         async with app.open_async():
@@ -208,7 +210,10 @@ async def process_queue(
                 f"Queue {queue_name} still has pending jobs after {drain_rounds} rounds; consider rerunning the worker"
             )
 
-        status_counts = _queue_status_counts(queue_name)
+        # subtract before counts from after counts
+        status_counts_after = _queue_status_counts(queue_name)
+        status_counts = status_counts_after - status_counts_before
+
         logger.info(
             f"Queue {queue_name} final status counts: todo={status_counts['todo']} "
             f"doing={status_counts['doing']} succeeded={status_counts['succeeded']} failed={status_counts['failed']} "

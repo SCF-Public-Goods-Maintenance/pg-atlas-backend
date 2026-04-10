@@ -22,7 +22,7 @@ import procrastinate
 logger = logging.getLogger(__name__)
 
 
-def _get_database_url() -> str:
+def get_database_url() -> str:
     """
     Return a plain ``postgresql://`` DSN suitable for Procrastinate.
 
@@ -50,7 +50,7 @@ def _get_database_url() -> str:
     return url
 
 
-_dsn = _get_database_url()
+_dsn = get_database_url()
 logger.info(f"Opening Procrastinate connection to {_dsn.split('@')[-1]}")
 app = procrastinate.App(
     connector=procrastinate.PsycopgConnector(conninfo=_dsn),

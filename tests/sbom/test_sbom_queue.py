@@ -307,7 +307,7 @@ async def test_process_sbom_submission_reads_filebase_cid_artifact(
         assert url.endswith(cid)
         return _FakeGatewayResponse(status_code=200, content=raw_body)
 
-    monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", "https://s3.filebase.com")
+    monkeypatch.setattr(settings, "IPFS_GATEWAY_URL", "https://ipfs.filebase.io/ipfs")
     monkeypatch.setattr(AsyncClient, "get", _fake_get)
 
     submission = await _create_submission(
