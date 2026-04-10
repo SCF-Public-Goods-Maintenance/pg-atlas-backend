@@ -28,9 +28,10 @@ class Settings(BaseSettings):
             (``postgresql://user:pass@host/db``). An empty string disables
             the database session factory; the server will start but any endpoint that
             calls ``get_db_session()`` will raise at runtime.
-        PG_ATLAS_ARTIFACT_STORE_PATH: Filesystem path where raw SBOM bytes are written
+        PG_ATLAS_ARTIFACT_STORE_PATH: Filesystem path where artifacts are written
             (local dev). Defaults to ``./artifact_store`` (relative to the working
             directory).
+        PG_ATLAS_IPFS_GATEWAY_URL: Optional IPFS Gateway URL, used for artifact reads.
         PG_ATLAS_ARTIFACT_S3_ENDPOINT: Optional Filebase S3-compatible endpoint URL.
             When set, raw artifacts are uploaded to Filebase and the stored
             ``artifact_path`` becomes the returned CID instead of a local relative path.
@@ -73,6 +74,7 @@ class Settings(BaseSettings):
         return db_url
 
     ARTIFACT_STORE_PATH: Path = Path("./artifact_store")
+    IPFS_GATEWAY_URL: HttpUrl = HttpUrl("https://ipfs.filebase.io/ipfs")
     ARTIFACT_S3_ENDPOINT: HttpUrl | None = None
     ARTIFACT_S3_BUCKET: str = "pga-ingested-artifacts"
     FILEBASE_ACCESS_KEY: str | None = None

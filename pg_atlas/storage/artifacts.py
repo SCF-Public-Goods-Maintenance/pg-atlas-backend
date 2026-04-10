@@ -36,7 +36,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _FILEBASE_REGION = "us-east-1"
-_FILEBASE_GATEWAY_BASE_URL = "https://ipfs.filebase.io/ipfs"
 _FILEBASE_S3_TIMEOUT = AioConfig(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
 
 
@@ -143,19 +142,19 @@ async def _read_artifact_local(artifact_path: str) -> bytes:
     return await asyncio.get_running_loop().run_in_executor(None, _read_sync, _local_artifact_path(artifact_path))
 
 
-async def _read_artifact_filebase(artifact_path: str) -> bytes:
+async def _read_artifact_filebase(artifact_cid: str) -> bytes:
     """Read artifact bytes from the Filebase IPFS gateway using the stored CID."""
 
-    url = f"{_FILEBASE_GATEWAY_BASE_URL}/{artifact_path}"
+    url = f"{settings.IPFS_GATEWAY_URL}/{artifact_cid}"
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(url)
 
     if response.status_code == 404:
-        raise FileNotFoundError(f"Filebase artifact not found: {artifact_path}")
+        raise FileNotFoundError(f"Filebase artifact not found: {artifact_cid}")
 
     if response.status_code >= 400:
-        logger.warning(f"Filebase artifact gateway error: cid={artifact_path} status={response.status_code}")
-        raise OSError(f"Filebase artifact gateway returned HTTP {response.status_code} for {artifact_path}")
+        logger.warning(f"Filebase artifact gateway error: cid={artifact_cid} status={response.status_code}")
+        raise OSError(f"Filebase artifact gateway returned HTTP {response.status_code} for {artifact_cid}")
 
     return response.content
 
@@ -187,17 +186,16 @@ async def store_artifact(data: bytes, filename: str) -> tuple[str, str]:
     return await _store_artifact_local(data, filename, content_hex)
 
 
-async def read_artifact(artifact_path: str) -> bytes:
+async def read_artifact(artifact_location: str) -> bytes:
     """
     Read one stored artifact from the configured backing store.
 
-    When Filebase storage is enabled, ``artifact_path`` is interpreted as the
+    When Filebase storage is enabled, ``artifact_location`` is interpreted as the
     persisted CID and resolved through Filebase's IPFS gateway. Otherwise it is
-    interpreted as a filesystem-relative artifact path under
-    ``ARTIFACT_STORE_PATH``.
+    interpreted as a filesystem-relative artifact path under ``ARTIFACT_STORE_PATH``.
     """
 
     if _filebase_enabled():
-        return await _read_artifact_filebase(artifact_path)
+        return await _read_artifact_filebase(artifact_location)
 
-    return await _read_artifact_local(artifact_path)
+    return await _read_artifact_local(artifact_location)
