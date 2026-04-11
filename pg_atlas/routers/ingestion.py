@@ -20,7 +20,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 from typing import Annotated, Any
 
@@ -65,8 +65,8 @@ class SbomSubmissionResponse(BaseModel):
     artifact_path: str
     status: SubmissionStatus
     error_detail: str | None
-    submitted_at: datetime.datetime
-    processed_at: datetime.datetime | None
+    submitted_at: dt.datetime
+    processed_at: dt.datetime | None
 
 
 class SbomSubmissionDetailResponse(SbomSubmissionResponse):

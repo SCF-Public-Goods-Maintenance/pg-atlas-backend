@@ -16,7 +16,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import hashlib
 import uuid
 from collections.abc import AsyncGenerator
@@ -31,11 +31,13 @@ from pg_atlas.db_models.base import (
     ActivityStatus,
     EdgeConfidence,
     ProjectType,
+    SubmissionStatus,
     Visibility,
 )
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.session import maybe_db_session
@@ -53,6 +55,7 @@ _DB_AVAILABLE = bool(get_test_database_url())
 API_TABLE_SPECS: list[TableSpec] = [
     TableSpec("contributed_to", ("contributor_id", "repo_id")),
     TableSpec("depends_on", ("in_vertex_id", "out_vertex_id")),
+    TableSpec("gitlog_artifacts", ("id",)),
     TableSpec("contributors", ("id",)),
     TableSpec("external_repos", ("id",)),
     TableSpec("repos", ("id",)),
@@ -94,8 +97,8 @@ async def no_db_client() -> AsyncGenerator[AsyncClient, None]:
 # ---------------------------------------------------------------------------
 
 
-def _now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.UTC)
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 def _uid() -> str:
@@ -223,10 +226,20 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             contributor_id=contributor.id,
             repo_id=repo_a1.id,
             number_of_commits=15,
-            first_commit_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
-            last_commit_date=datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC),
+            first_commit_date=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+            last_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
         )
         seed_session.add(contrib_edge)
+
+        gitlog_artifact = GitLogArtifact(
+            repo_id=repo_a1.id,
+            since_months=24,
+            artifact_path=None,
+            gitlog_content_hash=None,
+            status=SubmissionStatus.failed,
+            error_detail="seeded test failure",
+        )
+        seed_session.add(gitlog_artifact)
         await seed_session.commit()
 
         seed_data: dict[str, Any] = {
@@ -237,6 +250,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             "repo_b1": repo_b1,
             "ext_repo": ext_repo,
             "contributor": contributor,
+            "gitlog_artifact": gitlog_artifact,
         }
 
     # Override maybe_db_session to use our test engine.

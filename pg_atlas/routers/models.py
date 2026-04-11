@@ -10,7 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from pg_atlas.db_models.base import (
     EdgeConfidence,
     ProjectType,
     RepoVertexType,
+    SubmissionStatus,
     Visibility,
 )
 
@@ -106,7 +107,7 @@ class ProjectSummary(BaseModel):
     pony_factor: int | None
     criticality_score: int | None
     adoption_score: float | None
-    updated_at: datetime.datetime
+    updated_at: dt.datetime
 
 
 class ProjectDetailResponse(ProjectSummary):
@@ -137,7 +138,7 @@ class RepoSummary(BaseModel):
     display_name: str
     visibility: Visibility
     latest_version: str
-    latest_commit_date: datetime.datetime | None
+    latest_commit_date: dt.datetime | None
     repo_url: str | None
     project_id: int | None
     pony_factor: int | None
@@ -145,7 +146,7 @@ class RepoSummary(BaseModel):
     adoption_downloads: int | None
     adoption_stars: int | None
     adoption_forks: int | None
-    updated_at: datetime.datetime
+    updated_at: dt.datetime
 
 
 class DepCounts(BaseModel):
@@ -168,6 +169,20 @@ class ContributorSummary(BaseModel):
     id: int
     name: str
     email_hash: str
+
+
+class RepoContributorSummary(ContributorSummary):
+    """Contributor summary with commit counts for one repo."""
+
+    number_of_commits: int
+    first_commit_date: dt.datetime
+    last_commit_date: dt.datetime
+
+
+class ProjectContributorSummary(ContributorSummary):
+    """Contributor summary aggregated across all repos in a project."""
+
+    total_commits_in_project: int
 
 
 class RepoDetailResponse(RepoSummary):
@@ -225,8 +240,8 @@ class ContributionEntry(BaseModel):
     repo_display_name: str
     project_canonical_id: str | None
     number_of_commits: int
-    first_commit_date: datetime.datetime
-    last_commit_date: datetime.datetime
+    first_commit_date: dt.datetime
+    last_commit_date: dt.datetime
 
 
 class ContributorDetailResponse(BaseModel):
@@ -239,8 +254,8 @@ class ContributorDetailResponse(BaseModel):
     email_hash: str
     total_repos: int
     total_commits: int
-    first_contribution: datetime.datetime | None
-    last_contribution: datetime.datetime | None
+    first_contribution: dt.datetime | None
+    last_contribution: dt.datetime | None
     repos: list[ContributionEntry]
 
 
@@ -260,4 +275,28 @@ class MetadataResponse(BaseModel):
     total_external_repos: int
     total_dependency_edges: int
     total_contributor_edges: int
-    last_updated: datetime.datetime | None
+    active_contributors_30d: int
+    active_contributors_90d: int
+    commits_30d: int
+    last_updated: dt.datetime | None
+
+
+class GitLogArtifactSummary(BaseModel):
+    """Compact gitlog artifact audit record for list endpoints."""
+
+    id: int
+    repo_id: int
+    repo_canonical_id: str
+    repo_display_name: str
+    artifact_path: str | None
+    status: SubmissionStatus
+    error_detail: str | None
+    since_months: int
+    submitted_at: dt.datetime
+    processed_at: dt.datetime | None
+
+
+class GitLogArtifactDetailResponse(GitLogArtifactSummary):
+    """Full gitlog artifact audit record including raw artifact content."""
+
+    raw_artifact: str | None = None

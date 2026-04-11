@@ -7,7 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
@@ -67,37 +67,37 @@ def sample_commit_records() -> list[CommitRecord]:
         CommitRecord(
             author_name="Alice Dev",
             author_email="alice@example.com",
-            timestamp=datetime.datetime(2025, 6, 15, 10, 0, tzinfo=datetime.UTC),
+            timestamp=dt.datetime(2025, 6, 15, 10, 0, tzinfo=dt.UTC),
             commit_hash="aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
         ),
         CommitRecord(
             author_name="Alice Dev",
             author_email="alice@example.com",
-            timestamp=datetime.datetime(2025, 7, 20, 12, 30, tzinfo=datetime.UTC),  # +02:00 -> UTC
+            timestamp=dt.datetime(2025, 7, 20, 12, 30, tzinfo=dt.UTC),  # +02:00 -> UTC
             commit_hash="aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222",
         ),
         CommitRecord(
             author_name="Alice Dev",
             author_email="alice@example.com",
-            timestamp=datetime.datetime(2025, 8, 1, 14, 0, tzinfo=datetime.UTC),  # -05:00 -> UTC
+            timestamp=dt.datetime(2025, 8, 1, 14, 0, tzinfo=dt.UTC),  # -05:00 -> UTC
             commit_hash="aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333",
         ),
         CommitRecord(
             author_name="dependabot[bot]",
             author_email="49699333+dependabot[bot]@users.noreply.github.com",
-            timestamp=datetime.datetime(2025, 7, 1, 0, 0, tzinfo=datetime.UTC),
+            timestamp=dt.datetime(2025, 7, 1, 0, 0, tzinfo=dt.UTC),
             commit_hash="bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111",
         ),
         CommitRecord(
             author_name="dependabot[bot]",
             author_email="49699333+dependabot[bot]@users.noreply.github.com",
-            timestamp=datetime.datetime(2025, 7, 15, 0, 0, tzinfo=datetime.UTC),
+            timestamp=dt.datetime(2025, 7, 15, 0, 0, tzinfo=dt.UTC),
             commit_hash="bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
         ),
         CommitRecord(
             author_name="Bob Coder",
             author_email="bob@company.org",
-            timestamp=datetime.datetime(2025, 6, 20, 16, 45, tzinfo=datetime.UTC),
+            timestamp=dt.datetime(2025, 6, 20, 16, 45, tzinfo=dt.UTC),
             commit_hash="cccc1111cccc1111cccc1111cccc1111cccc1111",
         ),
     ]
@@ -116,15 +116,15 @@ def sample_contributor_stats() -> list[ContributorStats]:
             email_hash=hash_email("alice@example.com"),
             display_name="Alice Dev",
             number_of_commits=3,
-            first_commit_date=datetime.datetime(2025, 6, 15, 10, 0, tzinfo=datetime.UTC),
-            last_commit_date=datetime.datetime(2025, 8, 1, 14, 0, tzinfo=datetime.UTC),
+            first_commit_date=dt.datetime(2025, 6, 15, 10, 0, tzinfo=dt.UTC),
+            last_commit_date=dt.datetime(2025, 8, 1, 14, 0, tzinfo=dt.UTC),
         ),
         ContributorStats(
             email_hash=hash_email("bob@company.org"),
             display_name="Bob Coder",
             number_of_commits=1,
-            first_commit_date=datetime.datetime(2025, 6, 20, 16, 45, tzinfo=datetime.UTC),
-            last_commit_date=datetime.datetime(2025, 6, 20, 16, 45, tzinfo=datetime.UTC),
+            first_commit_date=dt.datetime(2025, 6, 20, 16, 45, tzinfo=dt.UTC),
+            last_commit_date=dt.datetime(2025, 6, 20, 16, 45, tzinfo=dt.UTC),
         ),
     ]
 

@@ -9,7 +9,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import uuid
 
 import pytest
@@ -45,8 +45,8 @@ def _make_stats(email: str, name: str, commits: int) -> ContributorStats:
         email_hash=hash_email(email),
         display_name=name,
         number_of_commits=commits,
-        first_commit_date=datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
-        last_commit_date=datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC),
+        first_commit_date=dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+        last_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
     )
 
 
@@ -57,7 +57,7 @@ def _make_result(
     bot_commit_count: int = 0,
     bot_contributor_count: int = 0,
 ) -> RepoParseResult:
-    latest = datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC) if contributors else None
+    latest = dt.datetime(2025, 6, 1, tzinfo=dt.UTC) if contributors else None
     return RepoParseResult(
         repo_url=repo_url,
         contributors=contributors,
@@ -94,13 +94,16 @@ async def test_full_pipeline_with_real_db(
     assert persist.edges_created == 2
 
     async with db_session_factory() as session:
-        contributors = (await session.execute(select(Contributor))).scalars().all()
+        expected_hashes = {hash_email("alice@ex.com"), hash_email("bob@ex.com")}
+        contributors = (
+            (await session.execute(select(Contributor).where(Contributor.email_hash.in_(expected_hashes)))).scalars().all()
+        )
         repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
 
     assert len(contributors) == 2
     assert len(edges) == 2
-    assert repo.latest_commit_date == datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC)
+    assert repo.latest_commit_date == dt.datetime(2025, 6, 1, tzinfo=dt.UTC)
 
 
 async def test_idempotent_rerun(db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None) -> None:
@@ -130,7 +133,11 @@ async def test_idempotent_rerun(db_session_factory: async_sessionmaker[AsyncSess
 
     # Verify no duplicates
     async with db_session_factory() as session:
-        contributors = (await session.execute(select(Contributor))).scalars().all()
+        contributors = (
+            (await session.execute(select(Contributor).where(Contributor.email_hash == hash_email("alice@ex.com"))))
+            .scalars()
+            .all()
+        )
         repo = (await session.execute(select(Repo).where(Repo.repo_url == repo_url))).scalar_one()
         edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
     assert len(contributors) == 1
@@ -156,8 +163,21 @@ async def test_multiple_repos_shared_contributor(
             await session.commit()
 
     async with db_session_factory() as session:
-        contributors = (await session.execute(select(Contributor))).scalars().all()
-        edges = (await session.execute(select(ContributedTo))).scalars().all()
+        contributors = (
+            (await session.execute(select(Contributor).where(Contributor.email_hash == hash_email("shared@ex.com"))))
+            .scalars()
+            .all()
+        )
+        repo_ids = (
+            (
+                await session.execute(
+                    select(Repo.id).where(Repo.repo_url.in_(["https://github.com/org/repo1", "https://github.com/org/repo2"]))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id.in_(repo_ids)))).scalars().all()
 
     assert len(contributors) == 1
     assert len(edges) == 2
@@ -193,7 +213,11 @@ async def test_bot_contributor_not_stored(
         await session.commit()
 
     async with db_session_factory() as session:
-        contributors = (await session.execute(select(Contributor))).scalars().all()
+        contributors = (
+            (await session.execute(select(Contributor).where(Contributor.email_hash == hash_email("human@ex.com"))))
+            .scalars()
+            .all()
+        )
         edges = (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == repo.id))).scalars().all()
 
     assert len(contributors) == 1

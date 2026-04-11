@@ -18,6 +18,7 @@ from pg_atlas.db_models.base import PgBase
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
@@ -31,5 +32,6 @@ __all__ = [
     "Contributor",
     "DependsOn",
     "ContributedTo",
+    "GitLogArtifact",
     "SbomSubmission",
 ]

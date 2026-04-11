@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from pg_atlas.db_models.base import RepoVertexType
+from pg_atlas.db_models.contributed_to import ContributedTo
+from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
@@ -28,6 +30,7 @@ from pg_atlas.routers.models import (
     DepCounts,
     PaginatedResponse,
     ProjectSummary,
+    RepoContributorSummary,
     RepoDependency,
     RepoDetailResponse,
     RepoSummary,
@@ -177,6 +180,62 @@ async def get_repo_has_dependents(
     repo = await _get_repo_or_404(db, canonical_id)
 
     return await _dep_edges(db, repo.id, direction="incoming")
+
+
+@router.get(
+    "/repos/{canonical_id:path}/contributors",
+    response_model=PaginatedResponse[RepoContributorSummary],
+    summary="Contributors for a repo",
+    tags=[Graph.repos, Graph.contributors, Graph.contributor_graph, Source.github],
+)
+async def get_repo_contributors(
+    canonical_id: str,
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
+    search: Annotated[str | None, Query(max_length=256)] = None,
+) -> PaginatedResponse[RepoContributorSummary]:
+    """Paginated contributors for one repo with commit-count and commit-date spans."""
+
+    repo = await _get_repo_or_404(db, canonical_id)
+
+    base = (
+        select(ContributedTo)
+        .join(Contributor, Contributor.id == ContributedTo.contributor_id)
+        .where(ContributedTo.repo_id == repo.id)
+        .options(selectinload(ContributedTo.contributor))
+    )
+    if search is not None:
+        base = base.where(Contributor.name.ilike(f"%{search}%"))
+
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    edges = (
+        (
+            await db.execute(
+                base.order_by(ContributedTo.number_of_commits.desc(), ContributedTo.contributor_id.asc())
+                .limit(pagination.limit)
+                .offset(pagination.offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return PaginatedResponse[RepoContributorSummary](
+        items=[
+            RepoContributorSummary(
+                id=edge.contributor.id,
+                name=edge.contributor.name,
+                email_hash=str(edge.contributor.email_hash),
+                number_of_commits=edge.number_of_commits,
+                first_commit_date=edge.first_commit_date,
+                last_commit_date=edge.last_commit_date,
+            )
+            for edge in edges
+        ],
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.get(

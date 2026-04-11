@@ -17,7 +17,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, func
@@ -110,7 +110,7 @@ class Repo(RepoVertex):
 
     # --- project membership (optional: we may ingest SBOMs before the project exists) ---
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), default=None)
-    latest_commit_date: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    latest_commit_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     repo_url: Mapped[str | None] = mapped_column(String(512), default=None, unique=True)
 
     # --- materialised metrics ---
@@ -127,7 +127,7 @@ class Repo(RepoVertex):
     repo_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, default=None)
 
     # --- audit ---
-    updated_at: Mapped[datetime.datetime] = mapped_column(
+    updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -211,7 +211,7 @@ class ExternalRepo(RepoVertex):
     releases: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, default=None)
 
     # --- audit ---
-    updated_at: Mapped[datetime.datetime] = mapped_column(
+    updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),

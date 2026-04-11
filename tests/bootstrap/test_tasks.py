@@ -36,6 +36,7 @@ try:
         _purl_type_for_system,
         crawl_github_repo,
         crawl_package_deps,
+        process_gitlog_batch,
         process_project,
         sync_opengrants,
     )
@@ -108,6 +109,14 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
     first_call: dict[str, Any] = defer_mock.call_args_list[0].kwargs
     assert first_call["git_owner_url"] == "https://github.com/enriched"
     assert first_call["category"] == "Developer Tooling"
+
+
+async def test_process_gitlog_batch_calls_runtime(mocker: Any) -> None:
+    runtime_mock = mocker.patch("pg_atlas.procrastinate.tasks.process_gitlog_repo_batch", new=mocker.AsyncMock())
+
+    await process_gitlog_batch([11, 12, 13])
+
+    runtime_mock.assert_awaited_once_with([11, 12, 13])
 
 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:

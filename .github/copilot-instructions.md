@@ -129,7 +129,9 @@ When you have validated that a deliverable has been completed, update `implement
   `bootstrap.yml` (weekly, log-based summary), `sync-depsdev-proto.yml` (daily).
 - **A6 complete**: Active Subgraph Projection (`pg_atlas/metrics/active_subgraph.py`) fully
   implemented and validated. Registry Crawlers incorporated in graph bootstrapper.
-- A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.
+- **A7 complete**: Git Log Parser is integrated with Procrastinate (`gitlog` queue), with batch deferral,
+  per-attempt `GitLogArtifact` audit rows, terminal-failure private marking, and API read endpoints for
+  gitlog artifact list/detail.
 - **A8 complete**: SBOM post-validation processing now runs in a dedicated Procrastinate `sbom`
   queue, with parser and semantic-hash hot-path optimizations (`msgspec` +
   `JsonLikeDictParser`) and canonical unwrapped SPDX artifact storage for new submissions.

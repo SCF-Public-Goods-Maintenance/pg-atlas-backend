@@ -11,7 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey
@@ -40,8 +40,8 @@ class ContributedTo(PgBase):
 
     # --- edge properties ---
     number_of_commits: Mapped[int]
-    first_commit_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
-    last_commit_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
+    first_commit_date: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    last_commit_date: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
 
     # --- relationships ---
     contributor: Mapped[Contributor] = relationship(

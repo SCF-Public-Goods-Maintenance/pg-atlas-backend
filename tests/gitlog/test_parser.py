@@ -8,7 +8,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -193,7 +193,7 @@ async def test_timezone_conversion_to_utc(mock_git_subprocess: Callable[..., Asy
     raw = "A\x00a@b.com\x002025-01-01T12:00:00+05:30\x00abcd1234\n"
     mock_git_subprocess(stdout=raw.encode(), returncode=0)
     records = await parse_git_log(tmp_path, since_months=24)
-    assert records[0].timestamp == datetime.datetime(2025, 1, 1, 6, 30, tzinfo=datetime.UTC)
+    assert records[0].timestamp == dt.datetime(2025, 1, 1, 6, 30, tzinfo=dt.UTC)
 
 
 async def test_null_delimited_parsing(mock_git_subprocess: Callable[..., AsyncMock], tmp_path: Path) -> None:
@@ -294,8 +294,8 @@ def test_aggregate_contributors(sample_commit_records: list[CommitRecord]) -> No
 def test_aggregate_same_person_different_names() -> None:
     """Same email with different names — latest name wins."""
     commits = [
-        CommitRecord("Old Name", "dev@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "a1"),
-        CommitRecord("New Name", "dev@ex.com", datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC), "a2"),
+        CommitRecord("Old Name", "dev@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "a1"),
+        CommitRecord("New Name", "dev@ex.com", dt.datetime(2025, 6, 1, tzinfo=dt.UTC), "a2"),
     ]
     stats, _, _ = aggregate_contributors(commits)
     assert len(stats) == 1
@@ -305,10 +305,10 @@ def test_aggregate_same_person_different_names() -> None:
 def test_aggregate_sort_order() -> None:
     """Results sorted by commit count descending."""
     commits = [
-        CommitRecord("Few", "few@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "a1"),
-        CommitRecord("Many", "many@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
-        CommitRecord("Many", "many@ex.com", datetime.datetime(2025, 2, 1, tzinfo=datetime.UTC), "b2"),
-        CommitRecord("Many", "many@ex.com", datetime.datetime(2025, 3, 1, tzinfo=datetime.UTC), "b3"),
+        CommitRecord("Few", "few@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "a1"),
+        CommitRecord("Many", "many@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
+        CommitRecord("Many", "many@ex.com", dt.datetime(2025, 2, 1, tzinfo=dt.UTC), "b2"),
+        CommitRecord("Many", "many@ex.com", dt.datetime(2025, 3, 1, tzinfo=dt.UTC), "b3"),
     ]
     stats, _, _ = aggregate_contributors(commits)
     assert stats[0].display_name == "Many"
@@ -319,8 +319,8 @@ def test_aggregate_sort_order() -> None:
 def test_aggregate_bot_excluded() -> None:
     """Bot contributors are not in the returned list."""
     commits = [
-        CommitRecord("dependabot[bot]", "bot@noreply.github.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
-        CommitRecord("Human", "human@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "h1"),
+        CommitRecord("dependabot[bot]", "bot@noreply.github.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
+        CommitRecord("Human", "human@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "h1"),
     ]
     stats, _, _ = aggregate_contributors(commits)
     assert len(stats) == 1
@@ -330,8 +330,8 @@ def test_aggregate_bot_excluded() -> None:
 def test_aggregate_bot_commit_count() -> None:
     """Bot commits counted in second return value."""
     commits = [
-        CommitRecord("dependabot[bot]", "bot@noreply.github.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
-        CommitRecord("dependabot[bot]", "bot@noreply.github.com", datetime.datetime(2025, 2, 1, tzinfo=datetime.UTC), "b2"),
+        CommitRecord("dependabot[bot]", "bot@noreply.github.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
+        CommitRecord("dependabot[bot]", "bot@noreply.github.com", dt.datetime(2025, 2, 1, tzinfo=dt.UTC), "b2"),
     ]
     _, bot_commits, _ = aggregate_contributors(commits)
     assert bot_commits == 2
@@ -340,8 +340,8 @@ def test_aggregate_bot_commit_count() -> None:
 def test_aggregate_bot_contributor_count() -> None:
     """Bot authors counted in third return value."""
     commits = [
-        CommitRecord("dependabot[bot]", "d@noreply.github.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
-        CommitRecord("renovate[bot]", "r@noreply.github.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b2"),
+        CommitRecord("dependabot[bot]", "d@noreply.github.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
+        CommitRecord("renovate[bot]", "r@noreply.github.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b2"),
     ]
     _, _, bot_contribs = aggregate_contributors(commits)
     assert bot_contribs == 2
@@ -350,8 +350,8 @@ def test_aggregate_bot_contributor_count() -> None:
 def test_aggregate_human_only() -> None:
     """All-human commits return full list with zero bot counts."""
     commits = [
-        CommitRecord("Alice", "a@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "a1"),
-        CommitRecord("Bob", "b@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
+        CommitRecord("Alice", "a@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "a1"),
+        CommitRecord("Bob", "b@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
     ]
     stats, bot_commits, bot_contribs = aggregate_contributors(commits)
     assert len(stats) == 2
@@ -362,11 +362,11 @@ def test_aggregate_human_only() -> None:
 def test_aggregate_mixed_bot_and_human() -> None:
     """3 humans + 1 bot -> list has 3 entries."""
     commits = [
-        CommitRecord("A", "a@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "a1"),
-        CommitRecord("B", "b@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "b1"),
-        CommitRecord("C", "c@ex.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "c1"),
-        CommitRecord("dependabot[bot]", "bot@x.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "d1"),
-        CommitRecord("dependabot[bot]", "bot@x.com", datetime.datetime(2025, 2, 1, tzinfo=datetime.UTC), "d2"),
+        CommitRecord("A", "a@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "a1"),
+        CommitRecord("B", "b@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "b1"),
+        CommitRecord("C", "c@ex.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "c1"),
+        CommitRecord("dependabot[bot]", "bot@x.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "d1"),
+        CommitRecord("dependabot[bot]", "bot@x.com", dt.datetime(2025, 2, 1, tzinfo=dt.UTC), "d2"),
     ]
     stats, bot_commits, bot_contribs = aggregate_contributors(commits)
     assert len(stats) == 3
@@ -377,8 +377,8 @@ def test_aggregate_mixed_bot_and_human() -> None:
 def test_aggregate_all_bots() -> None:
     """All contributors are bots -> empty list."""
     commits = [
-        CommitRecord("dependabot[bot]", "d@x.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "d1"),
-        CommitRecord("renovate[bot]", "r@x.com", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC), "r1"),
+        CommitRecord("dependabot[bot]", "d@x.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "d1"),
+        CommitRecord("renovate[bot]", "r@x.com", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), "r1"),
     ]
     stats, bot_commits, bot_contribs = aggregate_contributors(commits)
     assert stats == []

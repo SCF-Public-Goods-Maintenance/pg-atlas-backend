@@ -18,7 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import json
 import logging
 from typing import Any
@@ -137,7 +137,7 @@ async def upsert_repo(
     latest_version: str,
     project_id: int | None = None,
     repo_url: str | None = None,
-    latest_commit_date: datetime.datetime | None = None,
+    latest_commit_date: dt.datetime | None = None,
     adoption_stars: int | None = None,
     adoption_forks: int | None = None,
     releases: list[dict[str, Any]] | None = None,
@@ -294,7 +294,7 @@ async def _promote_external_to_repo(
     latest_version: str,
     project_id: int | None,
     repo_url: str | None,
-    latest_commit_date: datetime.datetime | None,
+    latest_commit_date: dt.datetime | None,
     adoption_stars: int | None,
     adoption_forks: int | None,
     releases: list[dict[str, Any]] | None,

@@ -11,13 +11,16 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
+from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.gitlog.parser import ContributorStats, RepoParseResult
 
@@ -30,6 +33,18 @@ class PersistResult:
     contributors_updated: int = field(default=0)
     edges_created: int = field(default=0)
     edges_updated: int = field(default=0)
+
+
+@dataclass
+class GitLogAttemptAudit:
+    """Inputs required to store one GitLogArtifact audit row."""
+
+    since_months: int
+    status: SubmissionStatus
+    error_detail: str | None = None
+    artifact_path: str | None = None
+    artifact_content_hash: str | None = None
+    null_previous_artifact_paths: bool = False
 
 
 async def upsert_contributor(session: AsyncSession, email_hash: str, name: str) -> tuple[Contributor, bool]:
@@ -128,3 +143,41 @@ async def persist_repo_result(
     repo.latest_commit_date = result.latest_commit_date
 
     return persist
+
+
+async def record_gitlog_attempt(
+    session: AsyncSession,
+    repo_id: int,
+    attempt: GitLogAttemptAudit,
+) -> GitLogArtifact:
+    """
+    Insert one GitLogArtifact row for a repo processing attempt.
+
+    When ``attempt.null_previous_artifact_paths`` is true and the current row has
+    a non-null ``artifact_path``, older rows for the same repo are updated to
+    ``artifact_path=NULL`` in the same transaction.
+    """
+
+    processed_at = dt.datetime.now(dt.UTC)
+    row = GitLogArtifact(
+        repo_id=repo_id,
+        since_months=attempt.since_months,
+        artifact_path=attempt.artifact_path,
+        gitlog_content_hash=attempt.artifact_content_hash,
+        status=attempt.status,
+        error_detail=attempt.error_detail[:4096] if attempt.error_detail is not None else None,
+    )
+    row.processed_at = processed_at
+    session.add(row)
+    await session.flush()
+
+    if attempt.null_previous_artifact_paths and attempt.artifact_path:
+        await session.execute(
+            update(GitLogArtifact)
+            .where(GitLogArtifact.repo_id == repo_id)
+            .where(GitLogArtifact.id != row.id)
+            .where(GitLogArtifact.artifact_path.isnot(None))
+            .values(artifact_path=None)
+        )
+
+    return row

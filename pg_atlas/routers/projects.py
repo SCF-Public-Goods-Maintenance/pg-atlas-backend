@@ -17,12 +17,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
+from pg_atlas.db_models.contributed_to import ContributedTo
+from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.routers.common import DbSession, PaginationParams
 from pg_atlas.routers.models import (
     PaginatedResponse,
+    ProjectContributorSummary,
     ProjectDependency,
     ProjectDetailResponse,
     ProjectMetadata,
@@ -167,6 +170,63 @@ async def get_project_repos(
 
     return PaginatedResponse[RepoSummary](
         items=[RepoSummary.model_validate(r) for r in repos],
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+
+
+@router.get(
+    "/projects/{canonical_id}/contributors",
+    response_model=PaginatedResponse[ProjectContributorSummary],
+    summary="Contributors across a project's repos",
+    tags=[Graph.projects, Graph.contributors, Graph.contributor_graph, Source.github],
+)
+async def get_project_contributors(
+    canonical_id: str,
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
+    search: Annotated[str | None, Query(max_length=256)] = None,
+) -> PaginatedResponse[ProjectContributorSummary]:
+    """Paginated contributors aggregated across all repos belonging to the project."""
+
+    project = await _get_project_or_404(db, canonical_id)
+
+    base = (
+        select(
+            Contributor.id.label("id"),
+            Contributor.name.label("name"),
+            Contributor.email_hash.label("email_hash"),
+            func.sum(ContributedTo.number_of_commits).label("total_commits_in_project"),
+        )
+        .join(ContributedTo, ContributedTo.contributor_id == Contributor.id)
+        .join(Repo, Repo.id == ContributedTo.repo_id)
+        .where(Repo.project_id == project.id)
+        .group_by(Contributor.id, Contributor.name, Contributor.email_hash)
+    )
+
+    if search is not None:
+        base = base.where(Contributor.name.ilike(f"%{search}%"))
+
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    rows = (
+        await db.execute(
+            base.order_by(func.sum(ContributedTo.number_of_commits).desc(), Contributor.id.asc())
+            .limit(pagination.limit)
+            .offset(pagination.offset)
+        )
+    ).all()
+
+    return PaginatedResponse[ProjectContributorSummary](
+        items=[
+            ProjectContributorSummary(
+                id=row.id,
+                name=row.name,
+                email_hash=row.email_hash,
+                total_commits_in_project=row.total_commits_in_project,
+            )
+            for row in rows
+        ],
         total=total,
         limit=pagination.limit,
         offset=pagination.offset,

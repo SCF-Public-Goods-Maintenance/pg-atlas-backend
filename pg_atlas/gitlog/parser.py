@@ -15,6 +15,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import logging
+import os
 import re
 import urllib.parse
 from dataclasses import dataclass, field
@@ -22,7 +23,6 @@ from operator import attrgetter
 from pathlib import Path
 
 from pg_atlas.gitlog.filters import is_bot
-from pg_atlas.storage.artifacts import store_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ class RepoParseResult:
     total_commits: int  # parsed commits in window (before bot filtering)
     bot_commit_count: int  # commits excluded because author is a bot
     bot_contributor_count: int  # unique bot authors excluded
+    rate_limit_hits: int = field(default=0)
+    terminal_git_failure: bool = field(default=False)
     errors: list[str] = field(default_factory=list[str])
 
 
@@ -129,13 +131,13 @@ async def clone_or_fetch_repo(repo_url: str, clone_dir: Path, timeout: float) ->
         raise ValueError(f"repo_url produces a path outside clone_dir: {repo_url}") from None
 
     if (target / ".git").is_dir():
-        # Existing clone — fetch updates (needs optimization to not fetch trees and blobs)
-        await _run_git(["git", "fetch", "--all"], cwd=target, timeout=timeout)
+        # Existing clone — fetch only commit history from the tracked origin remote.
+        await _run_git(["git", "fetch", "origin", "--prune", "--no-tags", "--filter=tree:0"], cwd=target, timeout=timeout)
         # Update origin/HEAD to track the remote's default branch
         await _run_git(["git", "remote", "set-head", "origin", "--auto"], cwd=target, timeout=timeout)
     else:
         # Fresh clone without blobs and trees (commit graph only)
-        clone_options = ["--filter=tree:0", "--no-checkout"]
+        clone_options = ["--filter=tree:0", "--no-checkout", "--no-tags"]
         cmd: list[str]
 
         # this block is disabled to test other auth strategies
@@ -162,11 +164,15 @@ async def _run_git(cmd: list[str], *, cwd: Path, timeout: float) -> bytes:
     Returns stdout on success. Raises ``RuntimeError`` on non-zero exit
     or ``asyncio.TimeoutError`` on timeout.
     """
+    env = os.environ.copy()
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
+        env=env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -188,16 +194,39 @@ async def _run_git(cmd: list[str], *, cwd: Path, timeout: float) -> bytes:
 
 _FALLBACK_REFS = ("origin/HEAD", "origin/main", "origin/master")
 
+_RATE_LIMIT_PATTERNS = (
+    "rate limit",
+    "too many requests",
+    "http 429",
+    "returned error: 429",
+)
 
-async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord]:
-    """
-    Parse ``git log`` output for the default branch over the given window.
+_TERMINAL_FAILURE_PATTERNS = (  # histogram from logs
+    "cannot determine remote head",  #####################
+    "repository not found",  #################
+    "repository unavailable due to dmca takedown",  #
+)
 
-    Tries ``origin/HEAD`` first, then falls back to ``origin/main`` and
-    ``origin/master``.
 
-    Store raw output as .gitlog artifact and ``GitLogArtifact`` audit record.
-    """
+def is_rate_limit_error_message(message: str) -> bool:
+    """Return ``True`` when a git error message indicates API/rate throttling."""
+    normalized = message.lower()
+
+    return any(pattern in normalized for pattern in _RATE_LIMIT_PATTERNS)
+
+
+def is_terminal_git_failure_message(message: str) -> bool:
+    """Return ``True`` when a git error appears terminal for this crawl run."""
+    if is_rate_limit_error_message(message):
+        return False
+
+    normalized = message.lower()
+
+    return any(pattern in normalized for pattern in _TERMINAL_FAILURE_PATTERNS)
+
+
+async def read_git_log_output(repo_path: Path, since_months: int) -> bytes:
+    """Return raw null-delimited ``git log`` output for the configured window."""
     since_arg = f"--since={since_months} months ago"
     fmt = "--format=%aN%x00%aE%x00%aI%x00%H"
 
@@ -224,12 +253,17 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
 
         raise RuntimeError(msg)
 
-    # store raw output as .gitlog artifact
-    # the filename intentionally stays consistent to allow overwriting
-    owner_repo = "/".join(repo_path.parts[-2:])
-    artifact_filename = f"git-logs/{owner_repo}.gitlog"
-    artifact_path, content_hash = await store_artifact(stdout, artifact_filename)
-    # TODO: store GitLogArtifact audit record
+    return stdout
+
+
+async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord]:
+    """
+    Parse ``git log`` output for the default branch over the given window.
+
+    Tries ``origin/HEAD`` first, then falls back to ``origin/main`` and
+    ``origin/master``.
+    """
+    stdout = await read_git_log_output(repo_path, since_months)
 
     return _parse_log_output(stdout.decode(errors="replace"))
 
@@ -329,19 +363,45 @@ async def parse_repo(
     Catches errors from clone/fetch/parse steps and returns a partial
     result with error messages rather than raising.
     """
+    result, _ = await parse_repo_with_raw_output(repo_url, clone_dir, since_months, timeout)
+
+    return result
+
+
+async def parse_repo_with_raw_output(
+    repo_url: str,
+    clone_dir: Path,
+    since_months: int,
+    timeout: float,
+) -> tuple[RepoParseResult, bytes | None]:
+    """
+    Clone/fetch, parse git log, and return parsed stats with raw git log bytes.
+
+    The returned raw bytes are used by callers that also persist an artifact
+    audit row. On parse failures this function returns ``None`` for raw bytes.
+    """
+
     try:
         repo_path = await clone_or_fetch_repo(repo_url, clone_dir, timeout)
-        commits = await parse_git_log(repo_path, since_months)
+        raw_git_log = await read_git_log_output(repo_path, since_months)
+        commits = _parse_log_output(raw_git_log.decode(errors="replace"))
     except (RuntimeError, asyncio.TimeoutError, OSError) as exc:
         logger.exception(f"Failed to clone/parse {repo_url}")
-        return RepoParseResult(
-            repo_url=repo_url,
-            contributors=[],
-            latest_commit_date=None,
-            total_commits=0,
-            bot_commit_count=0,
-            bot_contributor_count=0,
-            errors=[f"{type(exc).__name__}: {exc}"],
+        detail = f"{type(exc).__name__}: {exc}"
+
+        return (
+            RepoParseResult(
+                repo_url=repo_url,
+                contributors=[],
+                latest_commit_date=None,
+                total_commits=0,
+                bot_commit_count=0,
+                bot_contributor_count=0,
+                rate_limit_hits=1 if is_rate_limit_error_message(detail) else 0,
+                terminal_git_failure=is_terminal_git_failure_message(detail),
+                errors=[detail],
+            ),
+            None,
         )
 
     contributors, bot_commit_count, bot_contributor_count = aggregate_contributors(commits)
@@ -350,11 +410,14 @@ async def parse_repo(
     if commits:
         latest_commit_date = max(c.timestamp for c in commits)
 
-    return RepoParseResult(
-        repo_url=repo_url,
-        contributors=contributors,
-        latest_commit_date=latest_commit_date,
-        total_commits=len(commits),
-        bot_commit_count=bot_commit_count,
-        bot_contributor_count=bot_contributor_count,
+    return (
+        RepoParseResult(
+            repo_url=repo_url,
+            contributors=contributors,
+            latest_commit_date=latest_commit_date,
+            total_commits=len(commits),
+            bot_commit_count=bot_commit_count,
+            bot_contributor_count=bot_contributor_count,
+        ),
+        raw_git_log,
     )

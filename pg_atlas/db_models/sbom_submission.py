@@ -15,7 +15,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 
 from sqlalchemy import DateTime, Enum, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -63,12 +63,12 @@ class SbomSubmission(PgBase):
     error_detail: Mapped[str | None] = mapped_column(String(4096), default=None)
 
     # --- audit timestamps (UTC) ---
-    submitted_at: Mapped[datetime.datetime] = mapped_column(
+    submitted_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         init=False,
     )
-    processed_at: Mapped[datetime.datetime | None] = mapped_column(
+    processed_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=None,
         init=False,

@@ -113,3 +113,26 @@ async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) ->
     await seed()
 
     task_mock.defer_async.assert_called_once()
+
+
+async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> None:
+    from pg_atlas.procrastinate.seed_gitlog import seed_gitlog_batches
+
+    app_mock = mocker.patch("pg_atlas.procrastinate.seed_gitlog.app")
+    ctx = mocker.AsyncMock()
+    app_mock.open_async.return_value = ctx
+
+    session = mocker.AsyncMock()
+    scalar_result = mocker.Mock()
+    scalar_result.all.return_value = [1, 2, 3]
+    session.scalars = mocker.AsyncMock(return_value=scalar_result)
+    session_factory = mocker.Mock()
+    session_factory.return_value.__aenter__ = mocker.AsyncMock(return_value=session)
+    session_factory.return_value.__aexit__ = mocker.AsyncMock(return_value=None)
+    mocker.patch("pg_atlas.procrastinate.seed_gitlog.get_session_factory", return_value=session_factory)
+
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
+
+    await seed_gitlog_batches()
+
+    assert defer_mock.call_count == 1

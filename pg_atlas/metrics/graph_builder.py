@@ -18,7 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 async def build_dependency_graph(
     session: AsyncSession,
-    reference_date: datetime.date | None = None,
+    reference_date: dt.date | None = None,
 ) -> nx.DiGraph[str]:
     """
     Load all RepoVertex nodes and DependsOn edges from PostgreSQL into a NetworkX DiGraph.
@@ -64,7 +64,7 @@ async def build_dependency_graph(
     Uses ORM queries with selectin loading (JTI auto-JOIN for vertices;
     selectin batch-loads for edges and projects). No N+1 round-trips.
     """
-    ref = reference_date or datetime.date.today()
+    ref = reference_date or dt.date.today()
 
     G: nx.DiGraph[str] = nx.DiGraph()
     G.graph["source"] = "postgresql"
@@ -124,7 +124,7 @@ async def build_dependency_graph(
 # dependency graph
 async def build_full_graph(
     session: AsyncSession,
-    reference_date: datetime.date | None = None,
+    reference_date: dt.date | None = None,
 ) -> nx.DiGraph[str]:
     """
     Build combined graph: dependency layer + Project nodes.

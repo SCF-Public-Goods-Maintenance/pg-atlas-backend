@@ -1,0 +1,72 @@
+# Gitlog Queue Processing
+#
+# Processes gitlog batches from the `gitlog` queue.
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+name: Gitlog Queue Processing
+
+on:
+  schedule:
+    - cron: "23 4 */3 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: gitlog
+
+jobs:
+  process-gitlog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_CLIAUTH_NONINTERACTIVE: 1
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: GitHub auth status
+        run: gh auth status 2>&1 | tee gh-auth-status.log
+
+      - name: Configure git authentication via gh credential helper
+        run: gh auth setup-git
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Seed gitlog batches
+        run: uv run python -m pg_atlas.procrastinate.seed_gitlog
+
+      - name: Run worker — gitlog queue
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=gitlog --drain-rounds=2 --concurrency=4 2>&1 | tee gitlog-worker.log
+
+      - name: Parse worker logs
+        id: parse-logs
+        run: python .github/scripts/parse-gitlog-log.py gitlog-worker.log gh-auth-status.log
+
+      - name: Write job summary
+        run: |
+          python .github/scripts/render-template.py \
+            .github/templates/gitlog-queue-summary.md \
+            trigger="${{ github.event_name }}" \
+            run_id="${{ github.run_id }}" \
+            server_url="${{ github.server_url }}" \
+            repository="${{ github.repository }}" \
+            finished="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            gitlog_succeeded="${{ steps.parse-logs.outputs.gitlog_succeeded || '—' }}" \
+            gitlog_failed="${{ steps.parse-logs.outputs.gitlog_failed || '—' }}" \
+            gitlog_todo="${{ steps.parse-logs.outputs.gitlog_todo || '—' }}" \
+            gitlog_cancelled="${{ steps.parse-logs.outputs.gitlog_cancelled || '—' }}" \
+            warning_count="${{ steps.parse-logs.outputs.warning_count || '0' }}" \
+            error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
+            first_rate_limit_hit_after_n_repos="${{ steps.parse-logs.outputs.first_rate_limit_hit_after_n_repos || 'none' }}" \
+            total_rate_limit_hits="${{ steps.parse-logs.outputs.total_rate_limit_hits || '0' }}" \
+            terminal_failures_marked_private="${{ steps.parse-logs.outputs.terminal_failures_marked_private || 'none' }}" \
+            gh_auth_status="${{ steps.parse-logs.outputs.gh_auth_status || 'Unavailable' }}" \
+            error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
+            >> "$GITHUB_STEP_SUMMARY"

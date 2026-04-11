@@ -188,3 +188,24 @@ These conventions emerged during A8 implementation (PR #26) and apply to artifac
 - New ingested artifacts are persisted as **unwrapped SPDX JSON** bytes (inner document only).
 - Legacy stored enveloped artifacts remain supported: worker parsing still accepts `{"sbom": ...}` payloads.
 - On validation failure where envelope decoding succeeds, failed-submission artifacts are still stored in unwrapped form for consistency.
+
+## A7 Implementation Notes
+
+These conventions emerged during A7 completion and apply to gitlog parsing, queue orchestration, and audit visibility.
+
+### Gitlog queue orchestration
+
+- Shared orchestration lives in `pg_atlas/gitlog/runtime.py`; both CLI and Procrastinate task entrypoints delegate there.
+- Procrastinate integration uses a dedicated `gitlog` queue task (`process_gitlog_batch`) that accepts canonical ID batches.
+- Batch seeding is DB-driven (`seed_gitlog.py`) and uses `PG_ATLAS_GITLOG_BATCH_SIZE` for deterministic batch fan-out.
+
+### Attempt auditing and artifact replacement
+
+- Every gitlog parse attempt persists a `GitLogArtifact` row (status, warning/error detail, commit/contributor counts, artifact path).
+- Successful attempts null out historical `artifact_path` pointers for the same repo to keep a single active path while preserving historical rows.
+- Terminal clone/fetch failures are accumulated and private-marked in one post-run DB update pass.
+
+### API read surface
+
+- Gitlog audit visibility is exposed via `/gitlog/artifacts` list and `/gitlog/artifacts/{id}` detail.
+- Repo-level contributor access now has a direct endpoint `/repos/{canonical_id}/contributors`.

@@ -5,12 +5,14 @@ Task hierarchy (queue names in brackets)::
 
     process_sbom_submission  [sbom]
 
+    process_gitlog_batch  [gitlog]
+
     sync_opengrants  [opengrants]
       └─ process_project  [opengrants]
            └─ crawl_github_repo  [opengrants]
                 └─ crawl_package_deps  [package-deps]
 
-The A5 bootstrap workers are invoked sequentially per queue so that all
+The bootstrap workers are invoked sequentially per queue so that all
 ``crawl_github_repo`` tasks are complete before ``crawl_package_deps`` begins.
 This guarantees that ``Repo`` vertices and their ``Project`` associations
 exist by the time the dependency crawl needs to check them.
@@ -34,6 +36,7 @@ from sqlalchemy import select
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.repo_vertex import RepoVertex
 from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.gitlog.runtime import process_gitlog_repo_batch
 from pg_atlas.ingestion.persist import parse_sbom_and_persist_graph, strip_purl_version
 from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
@@ -75,7 +78,6 @@ from pg_atlas.procrastinate.upserts import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_RELEASE_ENTRIES = 555
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -83,6 +85,8 @@ _MAX_RELEASE_ENTRIES = 555
 
 #: Path to the manually-curated project → git URL mapping.
 _MAPPING_PATH = Path(__file__).parent / "project-git-mapping.yml"
+
+_MAX_RELEASE_ENTRIES = 555
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +157,19 @@ async def process_sbom_submission(
             submission_id,
             expected_status=status_value,
         )
+
+
+# ---------------------------------------------------------------------------
+# Task: process_gitlog_batch
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="gitlog")
+async def process_gitlog_batch(repo_ids: list[int]) -> None:
+    """Process one gitlog batch using settings-driven runtime behavior."""
+
+    logger.info(f"process_gitlog_batch: size={len(repo_ids)}")
+    await process_gitlog_repo_batch(repo_ids)
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ from httpx import AsyncClient
 async def test_repos_db_unavailable_returns_503(no_db_client: AsyncClient) -> None:
     """Repo endpoints return 503 when no database is configured."""
 
-    for path in ["/repos", "/repos/pkg:github/test/repo"]:
+    for path in ["/repos", "/repos/pkg:github/test/repo", "/repos/pkg:github/test/repo/contributors"]:
         resp = await no_db_client.get(path)
         assert resp.status_code == 503, f"{path} should return 503"
 
@@ -160,3 +160,20 @@ async def test_get_repo_has_dependents(
     assert len(data) >= 1
     source_ids = {d["canonical_id"] for d in data}
     assert seed["repo_a1"].canonical_id in source_ids
+
+
+async def test_get_repo_contributors(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /repos/{canonical_id}/contributors returns per-contributor commit stats."""
+
+    client, seed = seeded_client
+    cid = seed["repo_a1"].canonical_id
+    resp = await client.get(f"/repos/{cid}/contributors")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["total"] >= 1
+    contributor = body["items"][0]
+    assert contributor["number_of_commits"] >= 1
+    assert contributor["name"] == "Test Contributor"

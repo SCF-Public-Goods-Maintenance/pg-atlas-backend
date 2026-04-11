@@ -126,7 +126,7 @@ class EdgeConfidence(enum.Enum):
 
 
 class SubmissionStatus(enum.Enum):
-    """Processing state of an SbomSubmission record."""
+    """Processing state of an artifact-linked audit record."""
 
     pending = "pending"
     processed = "processed"

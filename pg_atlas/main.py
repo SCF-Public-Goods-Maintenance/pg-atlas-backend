@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pg_atlas.api_metadata import DESCRIPTION, VERSION, generate_route_id
 from pg_atlas.config import settings
-from pg_atlas.routers import contributors, health, ingestion, metadata, projects, repos
+from pg_atlas.routers import contributors, gitlog, health, ingestion, metadata, projects, repos
 from pg_atlas.routers.tags import TAGS_METADATA
 
 logging.basicConfig(level=settings.LOG_LEVEL)
@@ -82,3 +82,4 @@ app.include_router(metadata.router)
 app.include_router(projects.router)
 app.include_router(repos.router)
 app.include_router(contributors.router)
+app.include_router(gitlog.router)

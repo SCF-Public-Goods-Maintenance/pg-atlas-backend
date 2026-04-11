@@ -235,6 +235,7 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
     """
 
     sbom_obj, unwrapped_bytes = _decode_unwrapped_sbom(raw)
+    # TODO: check if we always want a semantic hash when calling this
     semantic_hash = _semantic_hash_from_sbom_dict(sbom_obj, raw)
     parser_input = cast(dict[Any, Any], sbom_obj)
     parser: Any = JsonLikeDictParser()
