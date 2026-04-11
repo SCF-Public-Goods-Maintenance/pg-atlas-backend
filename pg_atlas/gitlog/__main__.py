@@ -89,7 +89,9 @@ async def _resolve_repos(
             if repo is None:
                 logger.warning(f"No Repo found for URL {url} - skipping")
                 continue
+
             matched.append(repo)
+
         return matched
 
 

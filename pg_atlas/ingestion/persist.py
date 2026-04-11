@@ -1,5 +1,5 @@
 """
-A3/A8 SBOM persistence flow for PostgreSQL-backed ingestion.
+SBOM persistence flow for PostgreSQL-backed ingestion.
 
 The HTTP request thread now owns only the synchronous admission steps:
 

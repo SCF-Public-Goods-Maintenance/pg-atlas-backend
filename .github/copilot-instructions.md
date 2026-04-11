@@ -26,8 +26,9 @@ commit is created.
 ## Known Issues and PR Context
 
 As mandatory preparation for any task, use your GitHub tools to list all open _and_ closed issues
-for the current repo. Read all open issues and their comments in full. Read the closed issues in
-full only when they are relevant for the current task.
+for the current repo. Read the open and closed issues in full with all their comments when they are
+relevant for the current task. Memorize the entire issue list so you can read full issues during
+task implementation, as they become relevant.
 
 Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if
 the feature branch is associated with a PR: read the full PR including its comments to understand

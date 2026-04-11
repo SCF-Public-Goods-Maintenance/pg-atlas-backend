@@ -53,6 +53,8 @@ async def upsert_external_repo(
     If the ``canonical_id`` already belongs to a ``Repo`` (within-ecosystem),
     the existing row is returned unchanged — ``ExternalRepo`` never overwrites
     a ``Repo``.
+    FIXME: scrutinize this logic since Repo and ExternalRepo now use separate
+    canonical_id namespaces. We could be creating duplicate vertices here.
 
     Calls ``session.flush()`` so the returned object has its ``id`` populated.
     """

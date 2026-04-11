@@ -22,6 +22,7 @@ from operator import attrgetter
 from pathlib import Path
 
 from pg_atlas.gitlog.filters import is_bot
+from pg_atlas.storage.artifacts import store_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class RepoParseResult:
     total_commits: int  # parsed commits in window (before bot filtering)
     bot_commit_count: int  # commits excluded because author is a bot
     bot_contributor_count: int  # unique bot authors excluded
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list[str])
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,8 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
 
     Tries ``origin/HEAD`` first, then falls back to ``origin/main`` and
     ``origin/master``.
+
+    Store raw output as .gitlog artifact and ``GitLogArtifact`` audit record.
     """
     since_arg = f"--since={since_months} months ago"
     fmt = "--format=%aN%x00%aE%x00%aI%x00%H"
@@ -209,9 +212,16 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
         msg = f"All ref fallbacks failed for {repo_path}"
         if last_err:
             msg = f"{msg}: {last_err}"
+
         raise RuntimeError(msg)
 
-    # TODO: store raw output as artifact
+    # store raw output as .gitlog artifact
+    # the filename intentionally stays consistent to allow overwriting
+    repo_owner_name = "/".join(repo_path.parts[-2:])
+    artifact_filename = f"git-logs/{repo_owner_name}.gitlog"
+    artifact_path, content_hash = await store_artifact(stdout, artifact_filename)
+    # TODO: store GitLogArtifact audit record
+
     return _parse_log_output(stdout.decode(errors="replace"))
 
 
