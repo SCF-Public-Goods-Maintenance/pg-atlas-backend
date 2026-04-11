@@ -382,10 +382,10 @@ async def parse_sbom_and_persist_graph(
         await session.commit()
 
     except FileNotFoundError as exc:
-        logger.warning(f"Stored SBOM artifact missing for submission_id={submission_id}")
+        logger.error(f"Stored SBOM artifact missing for submission_id={submission_id}")
         await _mark_submission_failed(session, submission_id, str(exc))
     except SpdxValidationError as exc:
-        logger.warning(f"Stored SBOM artifact became invalid for submission_id={submission_id}")
+        logger.error(f"Stored SBOM artifact became invalid for submission_id={submission_id}")
         await _mark_submission_failed(session, submission_id, str(exc))
     except Exception as exc:
         logger.exception(f"SBOM worker processing failed for submission_id={submission_id}")

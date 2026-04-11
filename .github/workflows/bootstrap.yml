@@ -35,16 +35,16 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen --no-dev
 
       - name: Queue bootstrap tasks
         run: uv run python -m pg_atlas.procrastinate.seed_opengrants
 
       - name: Run worker — opengrants queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --concurrency=8 2>&1 | tee opengrants-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --drain-rounds=4 --concurrency=8 2>&1 | tee opengrants-worker.log
 
       - name: Run worker — package-deps queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --concurrency=8 2>&1 | tee package-deps-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --drain-rounds=30 --concurrency=8 2>&1 | tee package-deps-worker.log
 
       - name: Parse worker logs
         id: parse-logs

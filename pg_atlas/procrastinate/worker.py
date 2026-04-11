@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 def _queue_status_counts(queue_name: str) -> Counter[str]:
     """
-
     Return per-status job counts for one queue.
     """
     dsn = get_database_url()
@@ -67,7 +66,6 @@ def _queue_status_counts(queue_name: str) -> Counter[str]:
 
 def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
     """
-
     Return the number of jobs in *statuses* for one queue.
     """
     status_list = list(statuses)
@@ -93,7 +91,6 @@ def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
 
 def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int:
     """
-
     Requeue orphaned `doing` jobs for a queue after pruning stale workers.
 
     A `doing` job is considered orphaned when it has no associated worker row
@@ -135,7 +132,6 @@ def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int
 
 def _pending_jobs_count(queue_name: str) -> int:
     """
-
     Return the number of pending jobs in a queue.
 
     Uses the Procrastinate jobs table so the worker can decide whether another
@@ -154,7 +150,6 @@ async def process_queue(
     stale_worker_seconds: int,
 ) -> None:
     """
-
     Run the Procrastinate worker until the queue is drained (or interrupted).
 
     Args:
@@ -247,8 +242,8 @@ def main() -> None:
     parser.add_argument(
         "--drain-rounds",
         type=int,
-        default=20,
-        help="Maximum drain passes when --wait is not used (default: 20)",
+        default=2,
+        help="Maximum drain passes when --wait is not used (default: 2)",
     )
     parser.add_argument(
         "--no-recover-stale-doing",

@@ -29,10 +29,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen --no-dev
 
-      - name: Seed reprocess failed submissions
-        run: uv run python -m pg_atlas.procrastinate.seed_reprocess_sboms
+      # - name: Seed reprocess failed submissions
+      #   run: uv run python -m pg_atlas.procrastinate.seed_reprocess_sboms
 
       - name: Run worker — sbom queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=1 2>&1 | tee sbom-worker.log
