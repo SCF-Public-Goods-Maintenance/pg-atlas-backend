@@ -138,14 +138,6 @@ async def clone_or_fetch_repo(repo_url: str, clone_dir: Path, timeout: float) ->
     else:
         # Fresh clone without blobs and trees (commit graph only)
         clone_options = ["--filter=tree:0", "--no-checkout", "--no-tags"]
-        cmd: list[str]
-
-        # this block is disabled to test other auth strategies
-        # if "github.com/" in repo_url:
-        #     # Optimize GitHub cloning with authenticated client
-        #     cmd = ["gh", "repo", "clone", repo_url, str(target), "--"] + clone_options
-        # else:
-
         cmd = ["git", "clone"] + clone_options + [repo_url, str(target)]
 
         # Let git create the target directory — pre-creating it causes
