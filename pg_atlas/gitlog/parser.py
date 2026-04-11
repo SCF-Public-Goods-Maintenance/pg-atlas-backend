@@ -116,6 +116,7 @@ def _repo_url_to_path(repo_url: str) -> str:
 async def clone_or_fetch_repo(repo_url: str, clone_dir: Path, timeout: float) -> Path:
     """
     Clone a repo (blobless) or fetch updates if it already exists.
+    If GitHub url: <DESCRIBE AUTH STRATEGY>
 
     Returns the path to the local clone directory.
     """
@@ -128,27 +129,35 @@ async def clone_or_fetch_repo(repo_url: str, clone_dir: Path, timeout: float) ->
         raise ValueError(f"repo_url produces a path outside clone_dir: {repo_url}") from None
 
     if (target / ".git").is_dir():
-        # Existing clone — fetch updates
+        # Existing clone — fetch updates (needs optimization to not fetch trees and blobs)
         await _run_git(["git", "fetch", "--all"], cwd=target, timeout=timeout)
         # Update origin/HEAD to track the remote's default branch
         await _run_git(["git", "remote", "set-head", "origin", "--auto"], cwd=target, timeout=timeout)
     else:
-        # Fresh blobless clone (commit graph only, no file contents)
+        # Fresh clone without blobs and trees (commit graph only)
+        clone_options = ["--filter=tree:0", "--no-checkout"]
+        cmd: list[str]
+
+        # this block is disabled to test other auth strategies
+        # if "github.com/" in repo_url:
+        #     # Optimize GitHub cloning with authenticated client
+        #     cmd = ["gh", "repo", "clone", repo_url, str(target), "--"] + clone_options
+        # else:
+
+        cmd = ["git", "clone"] + clone_options + [repo_url, str(target)]
+
         # Let git create the target directory — pre-creating it causes
         # "destination path already exists" errors if a previous clone failed.
         target.parent.mkdir(parents=True, exist_ok=True)
-        await _run_git(
-            ["git", "clone", "--filter=blob:none", "--no-checkout", repo_url, str(target)],
-            cwd=clone_dir,
-            timeout=timeout,
-        )
+
+        await _run_git(cmd, cwd=clone_dir, timeout=timeout)
 
     return target
 
 
 async def _run_git(cmd: list[str], *, cwd: Path, timeout: float) -> bytes:
     """
-    Run a git command via ``asyncio.create_subprocess_exec``.
+    Run a git or gh command via ``asyncio.create_subprocess_exec``.
 
     Returns stdout on success. Raises ``RuntimeError`` on non-zero exit
     or ``asyncio.TimeoutError`` on timeout.
@@ -217,8 +226,8 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
 
     # store raw output as .gitlog artifact
     # the filename intentionally stays consistent to allow overwriting
-    repo_owner_name = "/".join(repo_path.parts[-2:])
-    artifact_filename = f"git-logs/{repo_owner_name}.gitlog"
+    owner_repo = "/".join(repo_path.parts[-2:])
+    artifact_filename = f"git-logs/{owner_repo}.gitlog"
     artifact_path, content_hash = await store_artifact(stdout, artifact_filename)
     # TODO: store GitLogArtifact audit record
 
