@@ -118,7 +118,7 @@ def _repo_url_to_path(repo_url: str) -> str:
 async def clone_or_fetch_repo(repo_url: str, clone_dir: Path, timeout: float) -> Path:
     """
     Clone a repo (blobless) or fetch updates if it already exists.
-    If GitHub url: <DESCRIBE AUTH STRATEGY>
+    Git authentication is set up at the environment level, not in this function.
 
     Returns the path to the local clone directory.
     """

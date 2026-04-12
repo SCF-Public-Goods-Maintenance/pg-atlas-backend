@@ -196,7 +196,7 @@ These conventions emerged during A7 completion and apply to gitlog parsing, queu
 ### Gitlog queue orchestration
 
 - Shared orchestration lives in `pg_atlas/gitlog/runtime.py`; both CLI and Procrastinate task entrypoints delegate there.
-- Procrastinate integration uses a dedicated `gitlog` queue task (`process_gitlog_batch`) that accepts canonical ID batches.
+- Procrastinate integration uses a dedicated `gitlog` queue task (`process_gitlog_batch`) that accepts repository ID batches (`list[int]`), matching the runtime entrypoint.
 - Batch seeding is DB-driven (`seed_gitlog.py`) and uses `PG_ATLAS_GITLOG_BATCH_SIZE` for deterministic batch fan-out.
 
 ### Attempt auditing and artifact replacement

@@ -221,8 +221,6 @@ async def run_gitlog_pipeline(
             summary.first_rate_limit_hit_after_n_repos = summary.repos_processed
 
         persist_result: PersistResult | None = None
-        attempt_status = SubmissionStatus.processed if not result.errors else SubmissionStatus.failed
-        error_detail = "; ".join(result.errors) if result.errors else None
         artifact_path: str | None = None
         artifact_content_hash: str | None = None
         should_null_previous_artifact_paths = False
@@ -236,20 +234,27 @@ async def run_gitlog_pipeline(
             except (OSError, RuntimeError, ValueError) as exc:
                 detail = f"Artifact storage failed: {type(exc).__name__}: {exc}"
                 result.errors.append(detail)
-                attempt_status = SubmissionStatus.failed
-                error_detail = "; ".join(result.errors)
 
-        try:
-            async with session_factory() as session:
-                db_repo = await session.get(Repo, repo.id)
-                if db_repo is None:
-                    raise ValueError(f"Repo {repo.id} no longer exists")
+        async with session_factory() as session:
+            db_repo = await session.get(Repo, repo.id)
+            if db_repo is None:
+                raise ValueError(f"Repo {repo.id} no longer exists")
 
+            try:
                 if not result.errors:
                     persist_result = await persist_repo_result(session, db_repo, result)
-                else:
-                    summary.repos_with_errors += 1
 
+                await session.commit()
+            except SQLAlchemyError as exc:
+                detail = f"DB persistence failed for {repo.repo_url}: {type(exc).__name__}: {exc}"
+                logger.exception(detail)
+                result.errors.append(detail)
+                # do not try to persist the repo result again
+                await session.rollback()
+
+            attempt_status = SubmissionStatus.processed if not result.errors else SubmissionStatus.failed
+            error_detail = "; ".join(result.errors) if result.errors else None
+            try:
                 await record_gitlog_attempt(
                     session,
                     db_repo.id,
@@ -264,13 +269,12 @@ async def run_gitlog_pipeline(
                     ),
                 )
                 await session.commit()
-        except SQLAlchemyError as exc:
-            detail = f"DB persistence failed for {repo.repo_url}: {type(exc).__name__}: {exc}"
-            logger.exception(detail)
-            summary.repos_with_errors += 1
-            result.errors.append(detail)
+            except SQLAlchemyError as audit_exc:
+                logger.exception(f"DB audit persistence failed for {repo.repo_url}: {type(audit_exc).__name__}: {audit_exc}")
+                logger.error(f"After previous errors: {error_detail}")
 
         if result.errors:
+            summary.repos_with_errors += 1
             summary.error_urls.append(repo.repo_url)
 
         if result.terminal_git_failure:

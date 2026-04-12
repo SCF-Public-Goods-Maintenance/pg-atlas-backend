@@ -86,6 +86,7 @@ async def get_gitlog_artifact(
     db: DbSession,
 ) -> GitLogArtifactDetailResponse:
     """Return one gitlog attempt record with its raw artifact content when available."""
+    # consider making this a streaming response if the artifacts become large and latency suffers
 
     row = (
         await db.execute(

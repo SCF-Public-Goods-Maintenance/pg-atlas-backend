@@ -230,6 +230,7 @@ async def get_sbom_submission(
     file has been removed from the store the ``raw_artifact`` field is ``null``
     rather than raising an error.
     """
+    # consider making this a streaming response if the artifacts become large and latency suffers
 
     row = await db.get(SbomSubmission, submission_id)
     if row is None:
