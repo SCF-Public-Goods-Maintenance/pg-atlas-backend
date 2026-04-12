@@ -37,7 +37,7 @@ async def test_metadata_returns_counts(
     assert isinstance(data["total_contributor_edges"], int)
     assert isinstance(data["active_contributors_30d"], int)
     assert isinstance(data["active_contributors_90d"], int)
-    assert isinstance(data["commits_30d"], int)
+    assert isinstance(data["active_repos_90d"], int)
 
     # Seeded data has 2 projects (1 active), 3 repos, 1 external, 3 dep edges, 1 contrib edge.
     # But other test data may exist in the DB — assert at-least counts.
@@ -49,4 +49,4 @@ async def test_metadata_returns_counts(
     assert data["total_contributor_edges"] >= 1
     assert data["active_contributors_90d"] >= 0
     assert data["active_contributors_30d"] >= 0
-    assert data["commits_30d"] >= 0
+    assert data["active_repos_90d"] >= 0

@@ -272,12 +272,12 @@ class MetadataResponse(BaseModel):
     total_projects: int
     active_projects: int
     total_repos: int
+    active_repos_90d: int
     total_external_repos: int
     total_dependency_edges: int
     total_contributor_edges: int
     active_contributors_30d: int
     active_contributors_90d: int
-    commits_30d: int
     last_updated: dt.datetime | None
 
 
