@@ -128,6 +128,8 @@ async def test_get_project_detail_includes_metadata(
     assert len(meta["scf_submissions"]) == 1
     assert meta["scf_submissions"][0]["round"] == "SCF-1"
     assert meta["description"] == "Test alpha project"
+    assert data["active_contributors_30d"] == 1
+    assert data["active_contributors_90d"] == 2
 
 
 async def test_get_project_detail_normalizes_metadata(
@@ -143,6 +145,36 @@ async def test_get_project_detail_normalizes_metadata(
     meta = resp.json()["metadata"]
     assert meta["scf_submissions"] == []
     assert meta["description"] is None
+
+
+async def test_get_project_detail_no_contributions_returns_zero_activity(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Project detail returns zero active contributor counts for projects with no contribution edges."""
+
+    client, seed = seeded_client
+    cid = seed["project_b"].canonical_id
+    resp = await client.get(f"/projects/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 0
+    assert data["active_contributors_90d"] == 0
+
+
+async def test_get_project_detail_uses_global_max_date_as_activity_anchor(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Project detail uses global max commit date as the rolling-window anchor, not request time."""
+
+    client, seed = seeded_client
+    cid = seed["project_a"].canonical_id
+    resp = await client.get(f"/projects/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 1
+    assert data["active_contributors_90d"] == 2
 
 
 async def test_get_project_not_found_with_db(

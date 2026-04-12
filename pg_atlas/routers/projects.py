@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -55,6 +56,49 @@ async def _get_project_or_404(db: AsyncSession, canonical_id: str) -> Project:
         )
 
     return project
+
+
+async def _active_contributors_for_project(db: AsyncSession, project_id: int) -> tuple[int, int]:
+    """
+    Count active contributors for a project in rolling 30d/90d windows.
+
+    Window cutoffs are anchored to the global max ``ContributedTo.last_commit_date``
+    (same freshness proxy as metadata), then filtered to repos owned by ``project_id``.
+    """
+    max_date_result = await db.execute(select(func.max(ContributedTo.last_commit_date)))
+    last_updated = max_date_result.scalar_one_or_none()
+
+    if last_updated is None:
+        return 0, 0
+
+    cutoff_30d = last_updated - dt.timedelta(days=30)
+    cutoff_90d = last_updated - dt.timedelta(days=90)
+
+    counts_result = await db.execute(
+        select(
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .select_from(ContributedTo)
+            .join(Repo, Repo.id == ContributedTo.repo_id)
+            .where(
+                Repo.project_id == project_id,
+                ContributedTo.last_commit_date >= cutoff_30d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_30d"),
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .select_from(ContributedTo)
+            .join(Repo, Repo.id == ContributedTo.repo_id)
+            .where(
+                Repo.project_id == project_id,
+                ContributedTo.last_commit_date >= cutoff_90d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_90d"),
+        )
+    )
+    counts_row = counts_result.one()
+
+    return counts_row.active_contributors_30d, counts_row.active_contributors_90d
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +169,7 @@ async def get_project(
     unknown keys from the crawler are passed through via ``extra="allow"``.
     """
     project = await _get_project_or_404(db, canonical_id)
+    active_30d, active_90d = await _active_contributors_for_project(db, project.id)
 
     return ProjectDetailResponse(
         canonical_id=project.canonical_id,
@@ -138,6 +183,8 @@ async def get_project(
         adoption_score=project.adoption_score,
         updated_at=project.updated_at,
         project_id=project.id,
+        active_contributors_30d=active_30d,
+        active_contributors_90d=active_90d,
         metadata=ProjectMetadata.model_validate(project.project_metadata or {}),
     )
 

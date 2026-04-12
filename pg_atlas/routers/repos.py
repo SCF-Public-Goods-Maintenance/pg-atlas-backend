@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated
 from urllib.parse import quote
 
@@ -87,6 +88,45 @@ async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
         )
 
     return vertex
+
+
+async def _active_contributors_for_repo(db: AsyncSession, repo_id: int) -> tuple[int, int]:
+    """
+    Count active contributors for a repo in rolling 30d/90d windows.
+
+    Window cutoffs are anchored to the global max ``ContributedTo.last_commit_date``
+    (same freshness proxy as metadata), then filtered to the selected repo.
+    """
+    max_date_result = await db.execute(select(func.max(ContributedTo.last_commit_date)))
+    last_updated = max_date_result.scalar_one_or_none()
+
+    if last_updated is None:
+        return 0, 0
+
+    cutoff_30d = last_updated - dt.timedelta(days=30)
+    cutoff_90d = last_updated - dt.timedelta(days=90)
+
+    counts_result = await db.execute(
+        select(
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .where(
+                ContributedTo.repo_id == repo_id,
+                ContributedTo.last_commit_date >= cutoff_30d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_30d"),
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .where(
+                ContributedTo.repo_id == repo_id,
+                ContributedTo.last_commit_date >= cutoff_90d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_90d"),
+        )
+    )
+    counts_row = counts_result.one()
+
+    return counts_row.active_contributors_30d, counts_row.active_contributors_90d
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +293,7 @@ async def get_repo(
     releases, and dependency counts.
     """
     repo = await _get_repo_or_404(db, canonical_id)
+    active_30d, active_90d = await _active_contributors_for_repo(db, repo.id)
 
     # Dependency counts by direction and target vertex type.
     outgoing = await _dep_counts(db, repo.id, direction="outgoing")
@@ -283,6 +324,8 @@ async def get_repo(
         contributors=contributors,
         outgoing_dep_counts=outgoing,
         incoming_dep_counts=incoming,
+        active_contributors_30d=active_30d,
+        active_contributors_90d=active_90d,
     )
 
 

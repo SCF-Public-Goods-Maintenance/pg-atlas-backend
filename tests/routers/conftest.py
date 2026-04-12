@@ -219,7 +219,12 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             email_hash=email_hash,
             name="Test Contributor",
         )
-        seed_session.add(contributor)
+        anchored_email_hash = hashlib.sha256(f"anchored-contributor-{tag}".encode()).hexdigest()
+        anchored_contributor = Contributor(
+            email_hash=anchored_email_hash,
+            name="Anchored Contributor",
+        )
+        seed_session.add_all([contributor, anchored_contributor])
         await seed_session.flush()
 
         contrib_edge = ContributedTo(
@@ -227,9 +232,16 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             repo_id=repo_a1.id,
             number_of_commits=15,
             first_commit_date=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
-            last_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
+            last_commit_date=dt.datetime(2100, 6, 1, tzinfo=dt.UTC),
         )
-        seed_session.add(contrib_edge)
+        anchored_contrib_edge = ContributedTo(
+            contributor_id=anchored_contributor.id,
+            repo_id=repo_a2.id,
+            number_of_commits=3,
+            first_commit_date=dt.datetime(2024, 12, 20, tzinfo=dt.UTC),
+            last_commit_date=dt.datetime(2100, 3, 20, tzinfo=dt.UTC),
+        )
+        seed_session.add_all([contrib_edge, anchored_contrib_edge])
 
         gitlog_artifact = GitLogArtifact(
             repo_id=repo_a1.id,
@@ -250,6 +262,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             "repo_b1": repo_b1,
             "ext_repo": ext_repo,
             "contributor": contributor,
+            "anchored_contributor": anchored_contributor,
             "gitlog_artifact": gitlog_artifact,
         }
 

@@ -86,6 +86,8 @@ async def test_get_repo_detail_with_parent_project(
     assert data["canonical_id"] == cid
     assert data["parent_project"] is not None
     assert data["parent_project"]["canonical_id"] == seed["project_a"].canonical_id
+    assert data["active_contributors_30d"] == 1
+    assert data["active_contributors_90d"] == 1
 
 
 async def test_get_repo_detail_includes_contributors(
@@ -101,6 +103,36 @@ async def test_get_repo_detail_includes_contributors(
     contribs = resp.json()["contributors"]
     assert len(contribs) >= 1
     assert any(c["name"] == "Test Contributor" for c in contribs)
+
+
+async def test_get_repo_detail_no_contributions_returns_zero_activity(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Repo detail returns zero active contributor counts when no contribution edges exist."""
+
+    client, seed = seeded_client
+    cid = seed["repo_b1"].canonical_id
+    resp = await client.get(f"/repos/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 0
+    assert data["active_contributors_90d"] == 0
+
+
+async def test_get_repo_detail_uses_global_max_date_as_activity_anchor(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Repo detail uses global max commit date as rolling-window anchor, not request time."""
+
+    client, seed = seeded_client
+    cid = seed["repo_a2"].canonical_id
+    resp = await client.get(f"/repos/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 0
+    assert data["active_contributors_90d"] == 1
 
 
 async def test_get_repo_detail_includes_dep_counts(

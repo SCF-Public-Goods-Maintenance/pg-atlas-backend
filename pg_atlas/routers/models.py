@@ -112,12 +112,14 @@ class ProjectSummary(BaseModel):
 
 class ProjectDetailResponse(ProjectSummary):
     """
-    Full project detail including validated metadata.
+    Full project detail including contributor stats and metadata.
 
     ``metadata`` is the normalised form of the ``project_metadata`` JSONB column.
     """
 
     project_id: int
+    active_contributors_30d: int
+    active_contributors_90d: int
     metadata: ProjectMetadata
 
 
@@ -187,8 +189,8 @@ class ProjectContributorSummary(ContributorSummary):
 
 class RepoDetailResponse(RepoSummary):
     """
-    Full repo detail with parent project, contributors, releases, and
-    dependency counts.
+    Full repo detail with parent project, contributors, releases, dependency counts,
+    and active contributor stats.
     """
 
     releases: list[dict[str, Any]] | None
@@ -196,6 +198,8 @@ class RepoDetailResponse(RepoSummary):
     contributors: list[ContributorSummary]
     outgoing_dep_counts: DepCounts
     incoming_dep_counts: DepCounts
+    active_contributors_30d: int
+    active_contributors_90d: int
 
 
 # ---------------------------------------------------------------------------
