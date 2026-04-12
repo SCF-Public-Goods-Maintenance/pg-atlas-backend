@@ -26,8 +26,9 @@ commit is created.
 ## Known Issues and PR Context
 
 As mandatory preparation for any task, use your GitHub tools to list all open _and_ closed issues
-for the current repo. Read all open issues and their comments in full. Read the closed issues in
-full only when they are relevant for the current task.
+for the current repo. Read the open and closed issues in full with all their comments when they are
+relevant for the current task. Memorize the entire issue list so you can read full issues during
+task implementation, as they become relevant.
 
 Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if
 the feature branch is associated with a PR: read the full PR including its comments to understand
@@ -128,7 +129,9 @@ When you have validated that a deliverable has been completed, update `implement
   `bootstrap.yml` (weekly, log-based summary), `sync-depsdev-proto.yml` (daily).
 - **A6 complete**: Active Subgraph Projection (`pg_atlas/metrics/active_subgraph.py`) fully
   implemented and validated. Registry Crawlers incorporated in graph bootstrapper.
-- A7 partly complete: Git Log Parser is done, still needs to be hooked up to Procrastinate.
+- **A7 complete**: Git Log Parser is integrated with Procrastinate (`gitlog` queue), with batch deferral,
+  per-attempt `GitLogArtifact` audit rows, terminal-failure private marking, and API read endpoints for
+  gitlog artifact list/detail.
 - **A8 complete**: SBOM post-validation processing now runs in a dedicated Procrastinate `sbom`
   queue, with parser and semantic-hash hot-path optimizations (`msgspec` +
   `JsonLikeDictParser`) and canonical unwrapped SPDX artifact storage for new submissions.

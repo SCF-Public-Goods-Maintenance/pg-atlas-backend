@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated
 from urllib.parse import quote
 
@@ -19,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from pg_atlas.db_models.base import RepoVertexType
+from pg_atlas.db_models.contributed_to import ContributedTo
+from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
@@ -28,6 +31,7 @@ from pg_atlas.routers.models import (
     DepCounts,
     PaginatedResponse,
     ProjectSummary,
+    RepoContributorSummary,
     RepoDependency,
     RepoDetailResponse,
     RepoSummary,
@@ -84,6 +88,45 @@ async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
         )
 
     return vertex
+
+
+async def _active_contributors_for_repo(db: AsyncSession, repo_id: int) -> tuple[int, int]:
+    """
+    Count active contributors for a repo in rolling 30d/90d windows.
+
+    Window cutoffs are anchored to the global max ``ContributedTo.last_commit_date``
+    (same freshness proxy as metadata), then filtered to the selected repo.
+    """
+    max_date_result = await db.execute(select(func.max(ContributedTo.last_commit_date)))
+    last_updated = max_date_result.scalar_one_or_none()
+
+    if last_updated is None:
+        return 0, 0
+
+    cutoff_30d = last_updated - dt.timedelta(days=30)
+    cutoff_90d = last_updated - dt.timedelta(days=90)
+
+    counts_result = await db.execute(
+        select(
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .where(
+                ContributedTo.repo_id == repo_id,
+                ContributedTo.last_commit_date >= cutoff_30d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_30d"),
+            select(func.count(func.distinct(ContributedTo.contributor_id)))
+            .where(
+                ContributedTo.repo_id == repo_id,
+                ContributedTo.last_commit_date >= cutoff_90d,
+            )
+            .scalar_subquery()
+            .label("active_contributors_90d"),
+        )
+    )
+    counts_row = counts_result.one()
+
+    return counts_row.active_contributors_30d, counts_row.active_contributors_90d
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +223,62 @@ async def get_repo_has_dependents(
 
 
 @router.get(
+    "/repos/{canonical_id:path}/contributors",
+    response_model=PaginatedResponse[RepoContributorSummary],
+    summary="Contributors for a repo",
+    tags=[Graph.repos, Graph.contributors, Graph.contributor_graph, Source.github],
+)
+async def get_repo_contributors(
+    canonical_id: str,
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
+    search: Annotated[str | None, Query(max_length=256)] = None,
+) -> PaginatedResponse[RepoContributorSummary]:
+    """Paginated contributors for one repo with commit-count and commit-date spans."""
+
+    repo = await _get_repo_or_404(db, canonical_id)
+
+    base = (
+        select(ContributedTo)
+        .join(Contributor, Contributor.id == ContributedTo.contributor_id)
+        .where(ContributedTo.repo_id == repo.id)
+        .options(selectinload(ContributedTo.contributor))
+    )
+    if search is not None:
+        base = base.where(Contributor.name.ilike(f"%{search}%"))
+
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    edges = (
+        (
+            await db.execute(
+                base.order_by(ContributedTo.number_of_commits.desc(), ContributedTo.contributor_id.asc())
+                .limit(pagination.limit)
+                .offset(pagination.offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return PaginatedResponse[RepoContributorSummary](
+        items=[
+            RepoContributorSummary(
+                id=edge.contributor.id,
+                name=edge.contributor.name,
+                email_hash=str(edge.contributor.email_hash),
+                number_of_commits=edge.number_of_commits,
+                first_commit_date=edge.first_commit_date,
+                last_commit_date=edge.last_commit_date,
+            )
+            for edge in edges
+        ],
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+
+
+@router.get(
     "/repos/{canonical_id:path}",
     response_model=RepoDetailResponse,
     summary="Repo detail",
@@ -194,6 +293,7 @@ async def get_repo(
     releases, and dependency counts.
     """
     repo = await _get_repo_or_404(db, canonical_id)
+    active_30d, active_90d = await _active_contributors_for_repo(db, repo.id)
 
     # Dependency counts by direction and target vertex type.
     outgoing = await _dep_counts(db, repo.id, direction="outgoing")
@@ -224,6 +324,8 @@ async def get_repo(
         contributors=contributors,
         outgoing_dep_counts=outgoing,
         incoming_dep_counts=incoming,
+        active_contributors_30d=active_30d,
+        active_contributors_90d=active_90d,
     )
 
 

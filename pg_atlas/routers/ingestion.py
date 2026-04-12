@@ -20,7 +20,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 from typing import Annotated, Any
 
@@ -65,8 +65,8 @@ class SbomSubmissionResponse(BaseModel):
     artifact_path: str
     status: SubmissionStatus
     error_detail: str | None
-    submitted_at: datetime.datetime
-    processed_at: datetime.datetime | None
+    submitted_at: dt.datetime
+    processed_at: dt.datetime | None
 
 
 class SbomSubmissionDetailResponse(SbomSubmissionResponse):
@@ -230,6 +230,7 @@ async def get_sbom_submission(
     file has been removed from the store the ``raw_artifact`` field is ``null``
     rather than raising an error.
     """
+    # consider making this a streaming response if the artifacts become large and latency suffers
 
     row = await db.get(SbomSubmission, submission_id)
     if row is None:

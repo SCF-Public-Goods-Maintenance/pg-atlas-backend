@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models import (
     DependsOn,
     ExternalRepo,
+    GitLogArtifact,
     Project,
     Repo,
     SbomSubmission,
@@ -170,3 +171,33 @@ async def test_sbom_submission_content_hash_roundtrip(db_session: AsyncSession) 
     assert result.sbom_content_hash == sha256_hex
     assert result.status is SubmissionStatus.pending
     assert result.submitted_at is not None
+
+
+async def test_gitlog_artifact_roundtrip(db_session: AsyncSession) -> None:
+    """Insert GitLogArtifact row and verify round-trip fields."""
+
+    repo = Repo(
+        canonical_id="github:test-org/gitlog-artifact-repo",
+        display_name="gitlog-artifact-repo",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+
+    row = GitLogArtifact(
+        repo_id=repo.id,
+        since_months=24,
+        artifact_path="git-logs/test-org/gitlog-artifact-repo.gitlog",
+        gitlog_content_hash="b" * 64,
+        status=SubmissionStatus.processed,
+    )
+    db_session.add(row)
+    await db_session.flush()
+
+    result = await db_session.scalar(select(GitLogArtifact).where(GitLogArtifact.id == row.id))
+    assert result is not None
+    assert result.repo_id == repo.id
+    assert result.since_months == 24
+    assert result.status is SubmissionStatus.processed
+    assert result.gitlog_content_hash == "b" * 64

@@ -30,6 +30,9 @@ services:
       - key: PG_ATLAS_DATABASE_URL
         scope: RUN_TIME
         value: "${pg-atlas-dev.DATABASE_URL}"
+      - key: PG_ATLAS_ARTIFACT_S3_ENDPOINT
+        scope: RUN_TIME
+        value: https://s3.filebase.com
 
 ingress:
   rules:
@@ -43,9 +46,6 @@ ingress:
         - regex: ".*"
       allow_methods:
         - GET
-      allow_headers:
-        - Content-Type
-        - Authorization
 
 alerts:
 - rule: DEPLOYMENT_FAILED

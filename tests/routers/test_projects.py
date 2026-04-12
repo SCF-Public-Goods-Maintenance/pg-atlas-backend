@@ -19,7 +19,7 @@ from httpx import AsyncClient
 async def test_projects_db_unavailable_returns_503(no_db_client: AsyncClient) -> None:
     """All project endpoints return 503 when no database is configured."""
 
-    for path in ["/projects", "/projects/foo", "/projects/foo/repos"]:
+    for path in ["/projects", "/projects/foo", "/projects/foo/repos", "/projects/foo/contributors"]:
         resp = await no_db_client.get(path)
         assert resp.status_code == 503, f"{path} should return 503"
 
@@ -128,6 +128,8 @@ async def test_get_project_detail_includes_metadata(
     assert len(meta["scf_submissions"]) == 1
     assert meta["scf_submissions"][0]["round"] == "SCF-1"
     assert meta["description"] == "Test alpha project"
+    assert data["active_contributors_30d"] == 1
+    assert data["active_contributors_90d"] == 2
 
 
 async def test_get_project_detail_normalizes_metadata(
@@ -143,6 +145,36 @@ async def test_get_project_detail_normalizes_metadata(
     meta = resp.json()["metadata"]
     assert meta["scf_submissions"] == []
     assert meta["description"] is None
+
+
+async def test_get_project_detail_no_contributions_returns_zero_activity(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Project detail returns zero active contributor counts for projects with no contribution edges."""
+
+    client, seed = seeded_client
+    cid = seed["project_b"].canonical_id
+    resp = await client.get(f"/projects/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 0
+    assert data["active_contributors_90d"] == 0
+
+
+async def test_get_project_detail_uses_global_max_date_as_activity_anchor(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """Project detail uses global max commit date as the rolling-window anchor, not request time."""
+
+    client, seed = seeded_client
+    cid = seed["project_a"].canonical_id
+    resp = await client.get(f"/projects/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["active_contributors_30d"] == 1
+    assert data["active_contributors_90d"] == 2
 
 
 async def test_get_project_not_found_with_db(
@@ -170,6 +202,37 @@ async def test_get_project_repos(
     repo_ids = {item["canonical_id"] for item in data["items"]}
     assert seed["repo_a1"].canonical_id in repo_ids
     assert seed["repo_a2"].canonical_id in repo_ids
+
+
+async def test_get_project_contributors(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects/{canonical_id}/contributors returns deduplicated contributor totals."""
+
+    client, seed = seeded_client
+    cid = seed["project_a"].canonical_id
+    resp = await client.get(f"/projects/{cid}/contributors")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["total"] >= 1
+    contributor = body["items"][0]
+    assert contributor["total_commits_in_project"] >= 1
+
+
+async def test_get_project_contributors_search(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects/{canonical_id}/contributors?search filters by contributor name."""
+
+    client, seed = seeded_client
+    cid = seed["project_a"].canonical_id
+    resp = await client.get(f"/projects/{cid}/contributors", params={"search": "Test Contributor"})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["total"] >= 1
+    assert all("Test Contributor" in item["name"] for item in body["items"])
 
 
 async def test_get_project_depends_on(

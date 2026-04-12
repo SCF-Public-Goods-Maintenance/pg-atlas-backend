@@ -91,7 +91,11 @@ class Settings(BaseSettings):
     GITLOG_SINCE_MONTHS: int = 24
     GITLOG_CLONE_DIR: str = "/tmp/pg-atlas-clones"
     GITLOG_CLONE_TIMEOUT: float = 120.0
-    GITLOG_CLONE_DELAY: float = 1.0
+    GITLOG_CLONE_DELAY: float = 0.0
+    GITLOG_BATCH_SIZE: int = 20
+    GITLOG_RATE_LIMIT_MAX_RETRIES: int = 4
+    GITLOG_RATE_LIMIT_INITIAL_BACKOFF_SECONDS: float = 2.0
+    GITLOG_RATE_LIMIT_MAX_BACKOFF_SECONDS: float = 60.0
 
     @model_validator(mode="after")
     def validate_filebase_settings(self) -> Settings:

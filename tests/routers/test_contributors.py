@@ -22,6 +22,9 @@ async def test_contributors_db_unavailable_returns_503(no_db_client: AsyncClient
     resp = await no_db_client.get("/contributors/1")
     assert resp.status_code == 503
 
+    list_resp = await no_db_client.get("/contributors")
+    assert list_resp.status_code == 503
+
 
 # ---------------------------------------------------------------------------
 # DB integration tests
@@ -42,6 +45,35 @@ async def test_get_contributor_detail(
     assert data["id"] == cid
     assert data["name"] == "Test Contributor"
     assert len(data["email_hash"]) == 64
+
+
+async def test_list_contributors(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /contributors returns a paginated contributor list."""
+
+    client, _ = seeded_client
+    resp = await client.get("/contributors", params={"limit": 10, "offset": 0})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["total"] >= 1
+    assert len(body["items"]) >= 1
+    assert body["items"][0]["name"]
+
+
+async def test_list_contributors_search(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /contributors?search narrows list by contributor name."""
+
+    client, _ = seeded_client
+    resp = await client.get("/contributors", params={"search": "Test Contributor"})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["total"] >= 1
+    assert all("Test Contributor" in item["name"] for item in body["items"])
 
 
 async def test_get_contributor_includes_repo_activity(

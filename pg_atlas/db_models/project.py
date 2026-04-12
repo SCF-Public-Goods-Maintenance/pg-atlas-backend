@@ -12,7 +12,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, String, func
@@ -67,7 +67,7 @@ class Project(PgBase):
     project_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, default=None)
 
     # --- audit ---
-    updated_at: Mapped[datetime.datetime] = mapped_column(
+    updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),

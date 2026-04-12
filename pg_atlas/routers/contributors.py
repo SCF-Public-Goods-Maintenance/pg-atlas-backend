@@ -9,12 +9,14 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 
 from pg_atlas.db_models.contributor import Contributor
-from pg_atlas.routers.common import DbSession
-from pg_atlas.routers.models import ContributionEntry, ContributorDetailResponse
+from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.models import ContributionEntry, ContributorDetailResponse, ContributorSummary, PaginatedResponse
 from pg_atlas.routers.tags import Graph, Source
 
 router = APIRouter()
@@ -23,6 +25,38 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/contributors",
+    response_model=PaginatedResponse[ContributorSummary],
+    summary="List contributors",
+    tags=[Graph.contributors, Graph.contributor_graph, Source.github],
+)
+async def list_contributors(
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
+    search: Annotated[str | None, Query(max_length=256)] = None,
+) -> PaginatedResponse[ContributorSummary]:
+    """Paginated contributor list with optional case-insensitive name filtering."""
+
+    base = select(Contributor)
+    if search is not None:
+        base = base.where(Contributor.name.ilike(f"%{search}%"))
+
+    count_result = await db.execute(select(func.count()).select_from(base.subquery()))
+    total = count_result.scalar_one()
+
+    contributors = (
+        (await db.execute(base.order_by(Contributor.id).limit(pagination.limit).offset(pagination.offset))).scalars().all()
+    )
+
+    return PaginatedResponse[ContributorSummary](
+        items=[ContributorSummary.model_validate(c) for c in contributors],
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.get(
