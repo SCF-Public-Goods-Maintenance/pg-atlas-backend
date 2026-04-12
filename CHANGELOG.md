@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.4.1...v0.5.0) (2026-04-12)
+
+
+### Features
+
+* **API:** add active contributors 30d + 90d to project and repo detail ([ec935de](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/ec935de3771f04c7e90038b7223665572ceb4ee1))
+* **API:** add active repos 90d metric to metadata ([45938bc](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/45938bc4d6b72fa22ec15d6f11f939e8cab343dd))
+* **gitlog:** integrate with procrastinate ([a6b1955](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/a6b1955a4b0bbfacf63d3d3e40d15b9dff8339d1))
+* **gitlog:** store raw output as .gitlog artifact ([3756cbc](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/3756cbc009cba51faa548fe92a31d2a359661272))
+* **ingestion:** queue SBOM post-validation processing ([8da2177](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/8da2177138ee6d0591fc67baad822422b7baf673))
+* restrict CORS to GET method with allow-all origins ([#29](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/29)) ([0c68236](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/0c68236fd680fa19bf9a99f3e81f61bb55b6dcbd))
+* **SBOM:** process queue in dedicated workflow ([#32](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/32)) ([9330dc0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/9330dc037f1c47b61bceef157a0e8e9546e9451b))
+* **SBOM:** reprocess targeted failed submissions ([#35](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/35)) ([1b67003](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/1b67003f6cbc882df72af28875b41de25ab7aae5))
+
+
+### Bug Fixes
+
+* **persistence:** untangle IPFS reads from Filebase S3 writes ([#39](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/39)) ([4a0da53](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/4a0da535d3a7692a729823df0e7fa17f6c891ed8))
+* **SBOM:** semantically deduplicate SBOM artifacts before persistence ([#34](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/34)) ([16ca3cb](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/16ca3cb945dbdf96597c01c1a89a4609fee7dd3e))
+* **storage:** persist SBOM artifacts in Filebase ([eefb4d3](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/eefb4d32519e5db5c36eb07cdd0c990d38cb5960))
+* **storage:** put types_aiobotocore_s3 import behind TYPE_CHECKING guard ([#33](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/33)) ([8359952](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/835995273acce78353cdbf9e210f77012870dd8f))
+
+
+### Performance Improvements
+
+* explore treeless clone with auth [WIP] ([4ba2af1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/4ba2af148560f450280978810ace5833119b9e1f))
+
+
+### Dependencies
+
+* upgrade to procrastinate&gt;=3.8.1 ([812fb91](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/812fb9175bb58e82e0c8fe6af0cf30170c7a187b))
+
 ## [0.4.1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.4.0...v0.4.1) (2026-04-05)
 
 
