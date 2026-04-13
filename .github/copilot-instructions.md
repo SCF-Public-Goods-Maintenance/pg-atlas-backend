@@ -116,7 +116,7 @@ When you start work on a new deliverable, read `.github/agent-handoff/implementa
 When you have validated that a deliverable has been completed, update `implementation-notes.md`.
 
 - **A1 complete**: CI green, DO App Platform live at
-  `https://pg-atlas-backend-h8gen.ondigitalocean.app` (`basic-xxs`, region `ams3`).
+  `https://api.pgatlas.xyz` (`basic-xxs`, region `ams3`).
 - **A2 complete**: PostgreSQL schema (`pg_atlas/db_models/`), Alembic migrations,
   artifact storage (`pg_atlas/storage/artifacts.py`). Hosted DB (`pg-atlas-dev`, PG 18)
   lives on DO App Platform; `entrypoint.sh` runs `alembic upgrade head` at startup.

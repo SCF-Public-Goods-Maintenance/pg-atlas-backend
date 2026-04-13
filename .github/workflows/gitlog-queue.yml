@@ -44,6 +44,10 @@ jobs:
 
       - name: Run worker — gitlog queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=gitlog --drain-rounds=2 --concurrency=4 2>&1 | tee gitlog-worker.log
+        env:
+          PG_ATLAS_ARTIFACT_S3_ENDPOINT: https://s3.filebase.com
+          PG_ATLAS_FILEBASE_ACCESS_KEY: ${{ secrets.FILEBASE_ACCESS_KEY }}
+          PG_ATLAS_FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
 
       - name: Parse worker logs
         id: parse-logs
