@@ -68,3 +68,58 @@ Usage::
     async with app.open_async():
         await app.configure_task("sync_opengrants").defer_async()
 """
+
+
+async def mark_stalled_jobs_failed(queue_name: str, stale_worker_seconds: int = 600) -> int:
+    """
+    Mark stalled jobs as ``failed`` for a queue.
+
+    Stalled jobs are detected via Procrastinate's heartbeat-based stalled-jobs
+    lookup and then marked failed in a single bulk update. The update mirrors
+    the state transition semantics of
+    ``finish_job_by_id_async(..., status=failed, delete_job=False)``.
+
+    Args:
+        queue_name: Queue to inspect for stalled ``doing`` jobs.
+        stale_worker_seconds: Heartbeat age threshold used by
+            ``get_stalled_jobs``.
+
+    Returns:
+        Number of jobs transitioned to ``failed``.
+    """
+    async with app.open_async():
+        stalled_jobs = await app.job_manager.get_stalled_jobs(
+            queue=queue_name,
+            seconds_since_heartbeat=float(stale_worker_seconds),
+        )
+
+        stalled_job_ids = [job.id for job in stalled_jobs if job.id is not None]
+        if not stalled_job_ids:
+            return 0
+
+        result = await app.connector.execute_query_one_async(
+            query="""
+            WITH marked AS (
+                UPDATE procrastinate_jobs
+                SET
+                    status = 'failed'::procrastinate_job_status,
+                    abort_requested = false,
+                    attempts = CASE status
+                        WHEN 'doing'::procrastinate_job_status THEN attempts + 1
+                        ELSE attempts
+                    END
+                WHERE
+                    id = ANY(%(job_ids)s::bigint[])
+                    AND status IN (
+                        'todo'::procrastinate_job_status,
+                        'doing'::procrastinate_job_status
+                    )
+                RETURNING id
+            )
+            SELECT count(*) AS failed_count
+            FROM marked
+            """,
+            job_ids=stalled_job_ids,
+        )
+
+    return int(result["failed_count"])

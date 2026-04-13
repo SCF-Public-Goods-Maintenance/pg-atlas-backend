@@ -34,7 +34,7 @@ from typing import TextIO
 
 import psycopg
 
-from pg_atlas.procrastinate.app import app, get_database_url
+from pg_atlas.procrastinate.app import app, get_database_url, mark_stalled_jobs_failed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,52 +149,6 @@ def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
     return int(row[0]) if row is not None else 0
 
 
-async def _mark_stalled_jobs_failed(queue_name: str, stale_worker_seconds: int) -> int:
-    """
-    Mark stalled jobs as ``failed`` for one queue at worker startup.
-
-    Stalled jobs are discovered via Procrastinate's heartbeat-based API and then
-    finished in bulk with failure semantics equivalent to:
-    ``finish_job_by_id_async(..., status=failed, delete_job=False)``.
-    """
-    async with app.open_async():
-        stalled_jobs = await app.job_manager.get_stalled_jobs(
-            queue=queue_name,
-            seconds_since_heartbeat=float(stale_worker_seconds),
-        )
-
-        stalled_job_ids = [job.id for job in stalled_jobs if job.id is not None]
-        if not stalled_job_ids:
-            return 0
-
-        result = await app.connector.execute_query_one_async(
-            query="""
-            WITH marked AS (
-                UPDATE procrastinate_jobs
-                SET
-                    status = 'failed'::procrastinate_job_status,
-                    abort_requested = false,
-                    attempts = CASE status
-                        WHEN 'doing'::procrastinate_job_status THEN attempts + 1
-                        ELSE attempts
-                    END
-                WHERE
-                    id = ANY(%(job_ids)s::bigint[])
-                    AND status IN (
-                        'todo'::procrastinate_job_status,
-                        'doing'::procrastinate_job_status
-                    )
-                RETURNING id
-            )
-            SELECT count(*) AS failed_count
-            FROM marked
-            """,
-            job_ids=stalled_job_ids,
-        )
-
-    return int(result["failed_count"])
-
-
 def _pending_jobs_count(queue_name: str) -> int:
     """
     Return the number of pending jobs in a queue.
@@ -228,7 +182,7 @@ async def process_queue(
     """
     logger.info(f"Starting worker: queue={queue_name} concurrency={concurrency} wait={wait}")
     status_counts_before = _queue_status_counts(queue_name)
-    failed_stalled_jobs = await _mark_stalled_jobs_failed(queue_name, stale_worker_seconds)
+    failed_stalled_jobs = await mark_stalled_jobs_failed(queue_name, stale_worker_seconds)
     if failed_stalled_jobs > 0:
         logger.warning(f"Marked {failed_stalled_jobs} stalled jobs as failed in queue {queue_name}")
 

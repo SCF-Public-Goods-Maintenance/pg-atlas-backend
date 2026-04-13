@@ -24,7 +24,7 @@ from pg_atlas.config import settings
 from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.session import get_session_factory
-from pg_atlas.procrastinate.app import app
+from pg_atlas.procrastinate.app import app, mark_stalled_jobs_failed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +42,10 @@ def _batched(items: Sequence[int], batch_size: int) -> Iterator[list[int]]:
 
 async def seed_gitlog_batches() -> None:
     """Resolve candidate repo IDs and defer one ``process_gitlog_batch`` job per batch."""
+
+    stalled_marked = await mark_stalled_jobs_failed(queue_name="gitlog")
+    if stalled_marked > 0:
+        logger.warning(f"Marked {stalled_marked} stalled jobs as failed in queue gitlog")
 
     session_factory = get_session_factory()
     async with session_factory() as session:

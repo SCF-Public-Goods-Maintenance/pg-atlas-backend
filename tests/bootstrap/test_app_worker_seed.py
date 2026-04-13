@@ -81,7 +81,7 @@ async def test_process_queue_marks_stalled_jobs_failed(mocker: pytest_mock.Mocke
     from pg_atlas.procrastinate import worker
 
     mark_mock = mocker.patch(
-        "pg_atlas.procrastinate.worker._mark_stalled_jobs_failed",
+        "pg_atlas.procrastinate.worker.mark_stalled_jobs_failed",
         new=mocker.AsyncMock(return_value=2),
     )
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
@@ -105,7 +105,7 @@ async def test_process_queue_marks_stalled_jobs_failed_with_wait(mocker: pytest_
     from pg_atlas.procrastinate import worker
 
     mark_mock = mocker.patch(
-        "pg_atlas.procrastinate.worker._mark_stalled_jobs_failed",
+        "pg_atlas.procrastinate.worker.mark_stalled_jobs_failed",
         new=mocker.AsyncMock(return_value=0),
     )
     app_mock = mocker.patch("pg_atlas.procrastinate.worker.app")
@@ -131,6 +131,10 @@ async def test_process_queue_marks_stalled_jobs_failed_with_wait(mocker: pytest_
 async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate.seed_opengrants import seed
 
+    mark_mock = mocker.patch(
+        "pg_atlas.procrastinate.seed_opengrants.mark_stalled_jobs_failed",
+        new=mocker.AsyncMock(return_value=0),
+    )
     app_mock = mocker.patch("pg_atlas.procrastinate.seed_opengrants.app")
     ctx = mocker.AsyncMock()
     app_mock.open_async.return_value = ctx
@@ -140,12 +144,17 @@ async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) ->
 
     await seed()
 
+    mark_mock.assert_awaited_once_with(queue_name="opengrants")
     task_mock.defer_async.assert_called_once()
 
 
 async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate.seed_gitlog import seed_gitlog_batches
 
+    mark_mock = mocker.patch(
+        "pg_atlas.procrastinate.seed_gitlog.mark_stalled_jobs_failed",
+        new=mocker.AsyncMock(return_value=0),
+    )
     app_mock = mocker.patch("pg_atlas.procrastinate.seed_gitlog.app")
     ctx = mocker.AsyncMock()
     app_mock.open_async.return_value = ctx
@@ -163,4 +172,5 @@ async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> 
 
     await seed_gitlog_batches()
 
+    mark_mock.assert_awaited_once_with(queue_name="gitlog")
     assert defer_mock.call_count == 1
