@@ -41,10 +41,10 @@ jobs:
         run: uv run python -m pg_atlas.procrastinate.seed_opengrants
 
       - name: Run worker — opengrants queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --drain-rounds=4 --concurrency=8 2>&1 | tee opengrants-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --drain-rounds=4 --concurrency=8 --tee=opengrants-worker.log
 
       - name: Run worker — package-deps queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --drain-rounds=30 --concurrency=8 2>&1 | tee package-deps-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --drain-rounds=30 --concurrency=8 --tee=package-deps-worker.log
 
       - name: Parse worker logs
         id: parse-logs

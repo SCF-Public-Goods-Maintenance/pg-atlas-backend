@@ -8,7 +8,9 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
+from pathlib import Path
 
 import pytest
 import pytest_mock
@@ -56,10 +58,32 @@ def test_worker_main_runs(monkeypatch: pytest.MonkeyPatch, mocker: pytest_mock.M
     run_arg.close()
 
 
-async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.MockerFixture) -> None:
+def test_run_with_optional_tee_writes_stdout_and_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from pg_atlas.procrastinate.worker import _run_with_optional_tee
+
+    tee_file = tmp_path / "worker.log"
+
+    def _emit() -> None:
+        print("stdout-line")
+        print("stderr-line", file=sys.stderr)
+
+    _run_with_optional_tee(tee_file, _emit)
+
+    captured = capsys.readouterr()
+    log_content = tee_file.read_text(encoding="utf-8")
+    assert "stdout-line" in captured.out
+    assert "stderr-line" in captured.err
+    assert "stdout-line" in log_content
+    assert "stderr-line" in log_content
+
+
+async def test_process_queue_marks_stalled_jobs_failed(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate import worker
 
-    recover_mock = mocker.patch("pg_atlas.procrastinate.worker._recover_stale_doing_jobs", return_value=2)
+    mark_mock = mocker.patch(
+        "pg_atlas.procrastinate.worker._mark_stalled_jobs_failed",
+        new=mocker.AsyncMock(return_value=2),
+    )
     mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
@@ -71,18 +95,23 @@ async def test_process_queue_recovers_stale_doing_jobs(mocker: pytest_mock.Mocke
         concurrency=4,
         wait=False,
         drain_rounds=5,
-        recover_stale_doing=True,
         stale_worker_seconds=600,
     )
 
-    recover_mock.assert_called_once_with("opengrants", 600)
+    mark_mock.assert_awaited_once_with("opengrants", 600)
 
 
-async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.MockerFixture) -> None:
+async def test_process_queue_marks_stalled_jobs_failed_with_wait(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate import worker
 
-    recover_mock = mocker.patch("pg_atlas.procrastinate.worker._recover_stale_doing_jobs")
-    mocker.patch("pg_atlas.procrastinate.worker._pending_jobs_count", side_effect=[0])
+    mark_mock = mocker.patch(
+        "pg_atlas.procrastinate.worker._mark_stalled_jobs_failed",
+        new=mocker.AsyncMock(return_value=0),
+    )
+    app_mock = mocker.patch("pg_atlas.procrastinate.worker.app")
+    ctx = mocker.AsyncMock()
+    app_mock.open_async.return_value = ctx
+    app_mock.run_worker_async = mocker.AsyncMock()
     mocker.patch(
         "pg_atlas.procrastinate.worker._queue_status_counts",
         return_value=Counter(),
@@ -91,13 +120,12 @@ async def test_process_queue_skips_recovery_when_disabled(mocker: pytest_mock.Mo
     await worker.process_queue(
         queue_name="opengrants",
         concurrency=4,
-        wait=False,
+        wait=True,
         drain_rounds=5,
-        recover_stale_doing=False,
         stale_worker_seconds=600,
     )
 
-    recover_mock.assert_not_called()
+    mark_mock.assert_awaited_once_with("opengrants", 600)
 
 
 async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) -> None:

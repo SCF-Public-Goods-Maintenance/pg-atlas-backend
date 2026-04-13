@@ -24,9 +24,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import logging
+import sys
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import TextIO
 
 import psycopg
 
@@ -37,6 +41,62 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _StreamTee(io.TextIOBase):
+    """
+    Mirror writes to an original stream and a tee file stream.
+    """
+
+    def __init__(self, primary: TextIO, tee_file: TextIO) -> None:
+        self._primary = primary
+        self._tee_file = tee_file
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data: str) -> int:
+        written = self._primary.write(data)
+        self._tee_file.write(data)
+
+        return written
+
+    def flush(self) -> None:
+        self._primary.flush()
+        self._tee_file.flush()
+
+    def isatty(self) -> bool:
+        return self._primary.isatty()
+
+    def fileno(self) -> int:
+        return self._primary.fileno()
+
+
+def _run_with_optional_tee(tee_path: Path | None, run: Callable[[], None]) -> None:
+    """
+    Run a callback while optionally mirroring stdout/stderr to a file.
+
+    The original streams remain active so output still appears in GitHub
+    Actions logs while also being persisted to ``tee_path``.
+    """
+    if tee_path is None:
+        run()
+
+        return
+
+    tee_path.parent.mkdir(parents=True, exist_ok=True)
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    with tee_path.open("w", encoding="utf-8") as tee_file:
+        sys.stdout = _StreamTee(original_stdout, tee_file)
+        sys.stderr = _StreamTee(original_stderr, tee_file)
+        try:
+            run()
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            tee_file.flush()
 
 
 def _queue_status_counts(queue_name: str) -> Counter[str]:
@@ -89,45 +149,50 @@ def _count_jobs_in_statuses(queue_name: str, statuses: Iterable[str]) -> int:
     return int(row[0]) if row is not None else 0
 
 
-def _recover_stale_doing_jobs(queue_name: str, stale_worker_seconds: int) -> int:
+async def _mark_stalled_jobs_failed(queue_name: str, stale_worker_seconds: int) -> int:
     """
-    Requeue orphaned `doing` jobs for a queue after pruning stale workers.
+    Mark stalled jobs as ``failed`` for one queue at worker startup.
 
-    A `doing` job is considered orphaned when it has no associated worker row
-    after stale-worker pruning.
+    Stalled jobs are discovered via Procrastinate's heartbeat-based API and then
+    finished in bulk with failure semantics equivalent to:
+    ``finish_job_by_id_async(..., status=failed, delete_job=False)``.
     """
-    dsn = get_database_url()
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT worker_id FROM procrastinate_prune_stalled_workers_v1(%s)", (stale_worker_seconds,))
-            pruned_rows = cur.fetchall()
-            pruned_count = len(pruned_rows)
-            if pruned_count > 0:
-                logger.warning(f"Pruned {pruned_count} stale workers older than {stale_worker_seconds} seconds")
+    async with app.open_async():
+        stalled_jobs = await app.job_manager.get_stalled_jobs(
+            queue=queue_name,
+            seconds_since_heartbeat=float(stale_worker_seconds),
+        )
 
-            cur.execute(
-                """
-                UPDATE procrastinate_jobs AS jobs
+        stalled_job_ids = [job.id for job in stalled_jobs if job.id is not None]
+        if not stalled_job_ids:
+            return 0
+
+        result = await app.connector.execute_query_one_async(
+            query="""
+            WITH marked AS (
+                UPDATE procrastinate_jobs
                 SET
-                    status = 'todo'::procrastinate_job_status,
-                    worker_id = NULL,
-                    abort_requested = false
+                    status = 'failed'::procrastinate_job_status,
+                    abort_requested = false,
+                    attempts = CASE status
+                        WHEN 'doing'::procrastinate_job_status THEN attempts + 1
+                        ELSE attempts
+                    END
                 WHERE
-                    jobs.queue_name = %s
-                    AND jobs.status = 'doing'::procrastinate_job_status
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM procrastinate_workers AS workers
-                        WHERE workers.id = jobs.worker_id
+                    id = ANY(%(job_ids)s::bigint[])
+                    AND status IN (
+                        'todo'::procrastinate_job_status,
+                        'doing'::procrastinate_job_status
                     )
-                """,
-                (queue_name,),
+                RETURNING id
             )
-            recovered_count = cur.rowcount
+            SELECT count(*) AS failed_count
+            FROM marked
+            """,
+            job_ids=stalled_job_ids,
+        )
 
-        conn.commit()
-
-    return recovered_count
+    return int(result["failed_count"])
 
 
 def _pending_jobs_count(queue_name: str) -> int:
@@ -146,7 +211,6 @@ async def process_queue(
     concurrency: int,
     wait: bool,
     drain_rounds: int,
-    recover_stale_doing: bool,
     stale_worker_seconds: int,
 ) -> None:
     """
@@ -159,13 +223,14 @@ async def process_queue(
             If ``False``, exit once no pending tasks remain.
         drain_rounds: Maximum number of non-blocking drain passes when
             ``wait`` is ``False``.
-        recover_stale_doing: Whether to requeue orphaned `doing` jobs before
-            draining rounds.
         stale_worker_seconds: Worker heartbeat staleness threshold (seconds)
-            passed to `procrastinate_prune_stalled_workers_v1`.
+            used when fetching stalled jobs.
     """
     logger.info(f"Starting worker: queue={queue_name} concurrency={concurrency} wait={wait}")
     status_counts_before = _queue_status_counts(queue_name)
+    failed_stalled_jobs = await _mark_stalled_jobs_failed(queue_name, stale_worker_seconds)
+    if failed_stalled_jobs > 0:
+        logger.warning(f"Marked {failed_stalled_jobs} stalled jobs as failed in queue {queue_name}")
 
     if wait:
         async with app.open_async():
@@ -175,11 +240,6 @@ async def process_queue(
                 wait=True,
             )
     else:
-        if recover_stale_doing:
-            recovered_jobs = _recover_stale_doing_jobs(queue_name, stale_worker_seconds)
-            if recovered_jobs > 0:
-                logger.warning(f"Recovered {recovered_jobs} orphaned doing jobs in queue {queue_name}")
-
         for round_number in range(1, drain_rounds + 1):
             pending_before = _pending_jobs_count(queue_name)
             if pending_before == 0:
@@ -246,29 +306,32 @@ def main() -> None:
         help="Maximum drain passes when --wait is not used (default: 2)",
     )
     parser.add_argument(
-        "--no-recover-stale-doing",
-        action="store_true",
-        default=False,
-        help="Disable pre-drain recovery of orphaned doing jobs",
-    )
-    parser.add_argument(
         "--stale-worker-seconds",
         type=int,
         default=600,
-        help="Heartbeat age threshold to prune stale workers (default: 600)",
+        help="Heartbeat age threshold to detect stalled jobs (default: 600)",
+    )
+    parser.add_argument(
+        "--tee",
+        type=Path,
+        default=None,
+        help="Optional path to mirror stdout/stderr logs while preserving console output",
     )
 
     args = parser.parse_args()
-    asyncio.run(
-        process_queue(
-            args.queue,
-            args.concurrency,
-            args.wait,
-            args.drain_rounds,
-            not args.no_recover_stale_doing,
-            args.stale_worker_seconds,
+
+    def _run_worker() -> None:
+        asyncio.run(
+            process_queue(
+                args.queue,
+                args.concurrency,
+                args.wait,
+                args.drain_rounds,
+                args.stale_worker_seconds,
+            )
         )
-    )
+
+    _run_with_optional_tee(args.tee, _run_worker)
 
 
 if __name__ == "__main__":
