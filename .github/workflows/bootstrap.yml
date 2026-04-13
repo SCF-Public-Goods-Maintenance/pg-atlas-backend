@@ -28,6 +28,7 @@ jobs:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
       PG_ATLAS_OPENGRANTS_KEY: ${{ secrets.OPENGRANTS_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UV_NO_GROUP: dev
 
     steps:
       - uses: actions/checkout@v6
@@ -35,7 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync --frozen --no-dev
+        run: uv sync --frozen
 
       - name: Queue bootstrap tasks
         run: uv run python -m pg_atlas.procrastinate.seed_opengrants
