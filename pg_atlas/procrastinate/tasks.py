@@ -165,11 +165,11 @@ async def process_sbom_submission(
 
 
 @app.task(queue="gitlog")
-async def process_gitlog_batch(repo_ids: list[int]) -> None:
+async def process_gitlog_batch(repo_ids: list[int], seed_run_ordinal: int = 0) -> None:
     """Process one gitlog batch using settings-driven runtime behavior."""
 
-    logger.info(f"process_gitlog_batch: size={len(repo_ids)}")
-    await process_gitlog_repo_batch(repo_ids)
+    logger.info(f"process_gitlog_batch: size={len(repo_ids)} seed_run_ordinal={seed_run_ordinal}")
+    await process_gitlog_repo_batch(repo_ids, seed_run_ordinal=seed_run_ordinal)
 
 
 # ---------------------------------------------------------------------------

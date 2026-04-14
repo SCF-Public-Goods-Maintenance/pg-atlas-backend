@@ -8,6 +8,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 import sys
 from collections import Counter
 from pathlib import Path
@@ -160,13 +161,28 @@ async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> 
     app_mock.open_async.return_value = ctx
 
     session = mocker.AsyncMock()
-    scalar_result = mocker.Mock()
-    scalar_result.all.return_value = [1, 2, 3]
-    session.scalars = mocker.AsyncMock(return_value=scalar_result)
     session_factory = mocker.Mock()
     session_factory.return_value.__aenter__ = mocker.AsyncMock(return_value=session)
     session_factory.return_value.__aexit__ = mocker.AsyncMock(return_value=None)
     mocker.patch("pg_atlas.procrastinate.seed_gitlog.get_session_factory", return_value=session_factory)
+
+    now = dt.datetime.now(dt.UTC)
+    mocker.patch(
+        "pg_atlas.procrastinate.seed_gitlog._next_seed_run_ordinal",
+        new=mocker.AsyncMock(return_value=7),
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.seed_gitlog._load_candidate_repos",
+        new=mocker.AsyncMock(return_value=[(1, now), (2, now - dt.timedelta(days=250)), (3, None)]),
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.seed_gitlog._load_last_successful_seed_runs",
+        new=mocker.AsyncMock(return_value={2: 5, 3: 1}),
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.seed_gitlog._compute_dormant_cadences",
+        return_value={2: 3, 3: 9},
+    )
 
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
@@ -174,3 +190,6 @@ async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> 
 
     mark_mock.assert_awaited_once_with(queue_name="gitlog")
     assert defer_mock.call_count == 1
+    assert defer_mock.await_count == 1
+    assert defer_mock.await_args_list[0].kwargs["seed_run_ordinal"] == 7
+    assert defer_mock.await_args_list[0].kwargs["repo_ids"] == [1]

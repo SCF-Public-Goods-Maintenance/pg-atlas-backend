@@ -298,6 +298,39 @@ async def test_persist_repo_result_updates_latest_commit_date(
     assert repo.latest_commit_date == new_date
 
 
+async def test_persist_repo_result_does_not_lower_latest_commit_date(
+    db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None
+) -> None:
+    """Persisting older parse results must not regress repo.latest_commit_date."""
+
+    initial_date = dt.datetime(2025, 12, 25, tzinfo=dt.UTC)
+    async with db_session_factory() as session:
+        repo = await create_test_repo(session)
+        repo.latest_commit_date = initial_date
+        repo_id = repo.id
+        await session.commit()
+
+    older_date = dt.datetime(2025, 6, 1, tzinfo=dt.UTC)
+    result = RepoParseResult(
+        repo_url="https://github.com/test-org/test-repo",
+        contributors=[],
+        latest_commit_date=older_date,
+        total_commits=0,
+        bot_commit_count=0,
+        bot_contributor_count=0,
+    )
+
+    async with db_session_factory() as session:
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
+        await persist_repo_result(session, repo, result)
+        await session.commit()
+
+    async with db_session_factory() as session:
+        repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
+
+    assert repo.latest_commit_date == initial_date
+
+
 async def test_persist_repo_result_multiple_contributors(
     db_session_factory: async_sessionmaker[AsyncSession], clean_gitlog_tables: None
 ) -> None:

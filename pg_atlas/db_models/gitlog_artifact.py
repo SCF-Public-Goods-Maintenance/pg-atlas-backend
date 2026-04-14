@@ -36,8 +36,8 @@ class GitLogArtifact(PgBase):
 
     id: Mapped[intpk] = mapped_column(init=False)
     repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"))
-
-    since_months: Mapped[int] = mapped_column(Integer)
+    since_months: Mapped[int]
+    seed_run_ordinal: Mapped[int] = mapped_column(Integer, default=0)
 
     artifact_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     gitlog_content_hash: Mapped[str | None] = mapped_column(HexBinary(length=32), default=None)
@@ -67,4 +67,7 @@ class GitLogArtifact(PgBase):
 
 
 idx_gitlog_artifacts_repo_id = Index("ix_gitlog_artifacts_repo_id", GitLogArtifact.repo_id)
+idx_gitlog_artifacts_repo_seed_ordinal = Index(
+    "ix_gitlog_artifacts_repo_seed_ordinal", GitLogArtifact.repo_id, GitLogArtifact.seed_run_ordinal
+)
 idx_gitlog_artifacts_submitted_at = Index("ix_gitlog_artifacts_submitted_at", GitLogArtifact.submitted_at)
