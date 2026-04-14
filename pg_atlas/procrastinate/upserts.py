@@ -189,6 +189,7 @@ async def upsert_repo(
                 vertex.repo_url = repo_url
             if adoption_stars is not None:
                 vertex.adoption_stars = adoption_stars
+            # invariant: `repo.latest_commit_date` is monotonically increasing
             if latest_commit_date is not None and (
                 vertex.latest_commit_date is None or latest_commit_date > vertex.latest_commit_date
             ):

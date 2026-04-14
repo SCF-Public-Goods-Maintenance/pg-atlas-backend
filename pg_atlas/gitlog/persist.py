@@ -140,7 +140,11 @@ async def persist_repo_result(
         else:
             persist.edges_updated += 1
 
-    repo.latest_commit_date = result.latest_commit_date
+    # invariant: `repo.latest_commit_date` is monotonically increasing
+    if result.latest_commit_date and result.latest_commit_date > (
+        repo.latest_commit_date or dt.datetime(1, 1, 1, tzinfo=dt.UTC)
+    ):
+        repo.latest_commit_date = result.latest_commit_date
 
     return persist
 
