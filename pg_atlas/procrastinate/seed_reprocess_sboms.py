@@ -24,6 +24,7 @@ from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.ingestion.queue import defer_sbom_processing
+from pg_atlas.procrastinate.app import mark_stalled_jobs_failed
 
 _N_MOST_RECENT = 7
 _ERROR_FILTER: tuple[str, ...] = ("No such file or directory",)
@@ -42,6 +43,10 @@ async def seed_reprocess_failed_sboms() -> None:
     Rows are filtered to ``status=failed`` and ``error_detail`` values that
     contain one of the configured ``_ERROR_FILTER`` tokens.
     """
+
+    stalled_marked = await mark_stalled_jobs_failed(queue_name="sbom")
+    if stalled_marked > 0:
+        logger.warning(f"Marked {stalled_marked} stalled jobs as failed in queue sbom")
 
     factory = get_session_factory()
     async with factory() as session:

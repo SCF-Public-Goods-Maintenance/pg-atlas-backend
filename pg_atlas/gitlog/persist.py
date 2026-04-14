@@ -41,6 +41,7 @@ class GitLogAttemptAudit:
 
     since_months: int
     status: SubmissionStatus
+    seed_run_ordinal: int = 0
     error_detail: str | None = None
     artifact_path: str | None = None
     artifact_content_hash: str | None = None
@@ -140,7 +141,11 @@ async def persist_repo_result(
         else:
             persist.edges_updated += 1
 
-    repo.latest_commit_date = result.latest_commit_date
+    # invariant: `repo.latest_commit_date` is monotonically increasing
+    if result.latest_commit_date and result.latest_commit_date > (
+        repo.latest_commit_date or dt.datetime(1, 1, 1, tzinfo=dt.UTC)
+    ):
+        repo.latest_commit_date = result.latest_commit_date
 
     return persist
 
@@ -161,6 +166,7 @@ async def record_gitlog_attempt(
     processed_at = dt.datetime.now(dt.UTC)
     row = GitLogArtifact(
         repo_id=repo_id,
+        seed_run_ordinal=attempt.seed_run_ordinal,
         since_months=attempt.since_months,
         artifact_path=attempt.artifact_path,
         gitlog_content_hash=attempt.artifact_content_hash,

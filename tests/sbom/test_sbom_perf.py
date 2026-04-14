@@ -78,6 +78,7 @@ async def test_handle_sbom_submission_latency_py_stellar_sdk_baseline() -> None:
 async def test_handle_sbom_submission_latency_regression_guardrail() -> None:
     """
     Ensure average latency stays within 1.2x of optimized baseline latency.
+    Pay attention: could you have caused this test to fail? If not: ignore.
     """
 
     raw_body = (FIXTURES / "py-stellar-sdk-a9b110.spdx.json").read_bytes()

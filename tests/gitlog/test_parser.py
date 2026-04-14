@@ -24,6 +24,7 @@ from pg_atlas.gitlog.parser import (
     normalize_email,
     parse_git_log,
     parse_repo,
+    parse_repo_with_raw_output,
 )
 
 # ---------------------------------------------------------------------------
@@ -111,7 +112,7 @@ async def test_fetch_existing_repo(mock_git_subprocess: Callable[..., AsyncMock]
 async def test_clone_repo_timeout(tmp_clone_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Timeout during clone raises asyncio.TimeoutError."""
 
-    async def _timeout_create(*args, **kwargs):
+    async def _timeout_create(*args: object, **kwargs: object) -> MagicMock:
         proc = MagicMock()
 
         async def _communicate():
@@ -407,8 +408,31 @@ async def test_parse_repo_success(
     assert result.bot_commit_count == 2
     assert result.bot_contributor_count == 1
     assert result.total_commits == 6
-    assert result.latest_commit_date is not None
+    assert result.latest_commit_date == dt.datetime(2025, 8, 1, 14, 0, tzinfo=dt.UTC)
     assert result.errors == []
+
+
+async def test_parse_repo_with_raw_output_sets_latest_to_max_commit_timestamp(
+    mock_git_subprocess: Callable[..., AsyncMock], tmp_clone_dir: Path, sample_git_log_output: str
+) -> None:
+    """Cross-check parser output: latest_commit_date equals max commit timestamp in git log."""
+
+    mock_git_subprocess(
+        side_effect=[
+            (b"", 0),
+            (sample_git_log_output.encode(), 0),
+        ]
+    )
+
+    result, raw_output = await parse_repo_with_raw_output(
+        "https://github.com/org/repo.git",
+        tmp_clone_dir,
+        since_months=24,
+        timeout=30.0,
+    )
+
+    assert raw_output == sample_git_log_output.encode()
+    assert result.latest_commit_date == dt.datetime(2025, 8, 1, 14, 0, tzinfo=dt.UTC)
 
 
 async def test_parse_repo_clone_failure(mock_git_subprocess: Callable[..., AsyncMock], tmp_clone_dir: Path) -> None:

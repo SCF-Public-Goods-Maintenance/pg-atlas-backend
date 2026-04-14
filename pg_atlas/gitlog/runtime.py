@@ -190,6 +190,7 @@ async def run_gitlog_pipeline(
     initial_backoff_seconds: float,
     max_backoff_seconds: float,
     mark_terminal_failures_private: bool,
+    seed_run_ordinal: int = 0,
 ) -> GitLogRunSummary:
     """
     Execute gitlog parsing/persistence for a list of repos.
@@ -260,6 +261,7 @@ async def run_gitlog_pipeline(
                     db_repo.id,
                     GitLogAttemptAudit(
                         since_months=since_months,
+                        seed_run_ordinal=seed_run_ordinal,
                         status=attempt_status,
                         error_detail=error_detail,
                         artifact_path=artifact_path,
@@ -327,7 +329,7 @@ Git log parsing complete:
     return summary
 
 
-async def process_gitlog_repo_batch(repo_ids: list[int]) -> GitLogRunSummary:
+async def process_gitlog_repo_batch(repo_ids: list[int], seed_run_ordinal: int = 0) -> GitLogRunSummary:
     """
     Process one batch of repo IDs using settings-driven worker behavior.
 
@@ -361,4 +363,5 @@ async def process_gitlog_repo_batch(repo_ids: list[int]) -> GitLogRunSummary:
         initial_backoff_seconds=settings.GITLOG_RATE_LIMIT_INITIAL_BACKOFF_SECONDS,
         max_backoff_seconds=settings.GITLOG_RATE_LIMIT_MAX_BACKOFF_SECONDS,
         mark_terminal_failures_private=True,
+        seed_run_ordinal=seed_run_ordinal,
     )

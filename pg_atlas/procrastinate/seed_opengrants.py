@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from pg_atlas.procrastinate.app import app
+from pg_atlas.procrastinate.app import app, mark_stalled_jobs_failed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 async def seed() -> None:
     """Defer the root ``sync_opengrants`` task and exit."""
+
+    stalled_marked = await mark_stalled_jobs_failed(queue_name="opengrants")
+    if stalled_marked > 0:
+        logger.warning(f"Marked {stalled_marked} stalled jobs as failed in queue opengrants")
 
     async with app.open_async():
         from pg_atlas.procrastinate.tasks import sync_opengrants
