@@ -116,7 +116,7 @@ async def test_process_gitlog_batch_calls_runtime(mocker: Any) -> None:
 
     await process_gitlog_batch([11, 12, 13])
 
-    runtime_mock.assert_awaited_once_with([11, 12, 13])
+    runtime_mock.assert_awaited_once_with([11, 12, 13], seed_run_ordinal=0)
 
 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:
