@@ -11,8 +11,8 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-from typing import Annotated
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import cast, func, select
@@ -180,9 +180,9 @@ async def list_projects(
     if round is not None:
         # JSONB containment: metadata->'scf_submissions' @> '[{"round": "..."}]'
         base = base.where(
-            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(
-                cast(json.dumps([{"round": round}]), JSONB)
-            )
+            Project.project_metadata["scf_submissions"]
+            .astext.cast(JSONB)
+            .op("@>")(cast(json.dumps([{"round": round}]), JSONB))
         )
 
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
