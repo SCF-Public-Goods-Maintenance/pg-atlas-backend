@@ -78,6 +78,34 @@ def test_run_with_optional_tee_writes_stdout_and_stderr(tmp_path: Path, capsys: 
     assert "stderr-line" in log_content
 
 
+def test_run_with_optional_tee_routes_existing_logging_handlers_to_file(tmp_path: Path) -> None:
+    import logging
+
+    from pg_atlas.procrastinate.worker import _run_with_optional_tee
+
+    logger = logging.getLogger("test_run_with_optional_tee_routes_existing_logging_handlers_to_file")
+    old_propagate = logger.propagate
+    logger.propagate = False
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    tee_file = tmp_path / "worker.log"
+    try:
+
+        def _emit() -> None:
+            logger.info("logging-line")
+
+        _run_with_optional_tee(tee_file, _emit)
+    finally:
+        logger.propagate = old_propagate
+        logger.removeHandler(handler)
+        handler.close()
+
+    assert handler.stream is sys.stderr
+    assert "logging-line" in tee_file.read_text(encoding="utf-8")
+
+
 async def test_process_queue_marks_stalled_jobs_failed(mocker: pytest_mock.MockerFixture) -> None:
     from pg_atlas.procrastinate import worker
 
