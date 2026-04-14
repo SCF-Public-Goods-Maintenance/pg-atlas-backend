@@ -209,3 +209,49 @@ async def test_get_repo_contributors(
     contributor = body["items"][0]
     assert contributor["number_of_commits"] >= 1
     assert contributor["name"] == "Test Contributor"
+
+
+# ---------------------------------------------------------------------------
+# Sort tests
+# ---------------------------------------------------------------------------
+
+
+async def test_list_repos_sort_by_display_name(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /repos?sort=display_name:asc returns items in alphabetical order."""
+
+    client, seed = seeded_client
+    tag = seed["repo_a1"].canonical_id.split("-")[-1]
+    resp = await client.get("/repos", params={"sort": "display_name:asc", "search": tag})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    names = [item["display_name"] for item in data["items"]]
+    assert names == sorted(names)
+
+
+async def test_list_repos_sort_by_adoption_stars_desc(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /repos?sort=adoption_stars:desc puts higher star counts first."""
+
+    client, seed = seeded_client
+    # Search for seeded repos belonging to project_a's org.
+    tag = seed["repo_a1"].canonical_id.split("-")[-1]
+    resp = await client.get("/repos", params={"sort": "adoption_stars:desc", "search": tag})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    stars = [item["adoption_stars"] for item in data["items"] if item["adoption_stars"] is not None]
+    assert stars == sorted(stars, reverse=True)
+
+
+async def test_list_repos_sort_invalid_field_returns_422(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /repos?sort=nonexistent_field:asc returns 422."""
+
+    client, _ = seeded_client
+    resp = await client.get("/repos", params={"sort": "nonexistent_field:asc"})
+    assert resp.status_code == 422

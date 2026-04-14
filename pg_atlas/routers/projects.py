@@ -14,8 +14,10 @@ import datetime as dt
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
 from pg_atlas.db_models.contributed_to import ContributedTo
@@ -23,7 +25,7 @@ from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
-from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
 from pg_atlas.routers.models import (
     PaginatedResponse,
     ProjectContributorSummary,
@@ -36,6 +38,17 @@ from pg_atlas.routers.models import (
 from pg_atlas.routers.tags import Graph, Source
 
 router = APIRouter()
+
+# Whitelist of sortable fields for GET /projects.
+_PROJECT_SORT_FIELDS: dict[str, InstrumentedAttribute] = {  # type: ignore[type-arg]
+    "display_name": Project.display_name,
+    "activity_status": Project.activity_status,
+    "criticality_score": Project.criticality_score,
+    "pony_factor": Project.pony_factor,
+    "adoption_score": Project.adoption_score,
+    "updated_at": Project.updated_at,
+    "category": Project.category,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -118,14 +131,36 @@ async def list_projects(
     project_type: ProjectType | None = None,
     activity_status: ActivityStatus | None = None,
     search: Annotated[str | None, Query(max_length=256)] = None,
+    sort: Annotated[
+        str | None,
+        Query(
+            max_length=512,
+            description="Comma-separated field:direction pairs, e.g. 'criticality_score:desc,display_name:asc'.",
+        ),
+    ] = None,
+    category: Annotated[
+        str | None,
+        Query(max_length=128, description="Filter by project category (exact match)."),
+    ] = None,
+    round: Annotated[
+        str | None,
+        Query(
+            max_length=64,
+            alias="round",
+            description="Filter to projects that participated in a specific SCF round (e.g. 'SCF-1').",
+        ),
+    ] = None,
 ) -> PaginatedResponse[ProjectSummary]:
     """
-    Paginated list of SCF-funded projects with optional filters.
+    Paginated list of SCF-funded projects with optional filters and sorting.
 
     - **project_type**: filter by `public-good` or `scf-project`.
     - **activity_status**: filter by lifecycle status (`live`, `in-dev`, etc.).
     - **search**: case-insensitive substring match on `display_name`.
-    - Results are ordered by `canonical_id` for deterministic pagination.
+    - **sort**: comma-separated `field:direction` pairs for server-side ordering.
+    - **category**: filter by exact project category string.
+    - **round**: filter to projects with an SCF submission in the given round.
+    - Default order is `canonical_id` for deterministic pagination.
     """
     base = select(Project)
 
@@ -138,10 +173,23 @@ async def list_projects(
     if search is not None:
         base = base.where(Project.display_name.ilike(f"%{search}%"))
 
+    if category is not None:
+        base = base.where(Project.category == category)
+
+    if round is not None:
+        # JSONB containment: metadata->'scf_submissions' @> '[{"round": "..."}]'
+        base = base.where(
+            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(
+                cast(f'[{{"round": "{round}"}}]', JSONB)
+            )
+        )
+
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
-    rows_result = await db.execute(base.order_by(Project.canonical_id).limit(pagination.limit).offset(pagination.offset))
+    order_clauses = parse_sort_params(sort, _PROJECT_SORT_FIELDS, Project.canonical_id)
+
+    rows_result = await db.execute(base.order_by(*order_clauses).limit(pagination.limit).offset(pagination.offset))
     projects = rows_result.scalars().all()
 
     return PaginatedResponse[ProjectSummary](

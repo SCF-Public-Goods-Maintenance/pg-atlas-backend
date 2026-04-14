@@ -17,7 +17,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import InstrumentedAttribute, selectinload
 
 from pg_atlas.db_models.base import RepoVertexType
 from pg_atlas.db_models.contributed_to import ContributedTo
@@ -25,7 +25,7 @@ from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
-from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
 from pg_atlas.routers.models import (
     ContributorSummary,
     DepCounts,
@@ -39,6 +39,18 @@ from pg_atlas.routers.models import (
 from pg_atlas.routers.tags import Graph, Source
 
 router = APIRouter()
+
+# Whitelist of sortable fields for GET /repos.
+_REPO_SORT_FIELDS: dict[str, InstrumentedAttribute] = {  # type: ignore[type-arg]
+    "display_name": Repo.display_name,
+    "criticality_score": Repo.criticality_score,
+    "pony_factor": Repo.pony_factor,
+    "adoption_stars": Repo.adoption_stars,
+    "adoption_forks": Repo.adoption_forks,
+    "adoption_downloads": Repo.adoption_downloads,
+    "latest_commit_date": Repo.latest_commit_date,
+    "updated_at": Repo.updated_at,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -145,13 +157,21 @@ async def list_repos(
     pagination: Annotated[PaginationParams, Depends()],
     project_id: int | None = None,
     search: Annotated[str | None, Query(max_length=256)] = None,
+    sort: Annotated[
+        str | None,
+        Query(
+            max_length=512,
+            description="Comma-separated field:direction pairs, e.g. 'adoption_stars:desc,display_name:asc'.",
+        ),
+    ] = None,
 ) -> PaginatedResponse[RepoSummary]:
     """
-    Paginated list of in-ecosystem repos with optional filters.
+    Paginated list of in-ecosystem repos with optional filters and sorting.
 
     - **project_id**: filter to repos belonging to a specific project.
     - **search**: case-insensitive substring match on `display_name`.
-    - Results are ordered by `canonical_id` for deterministic pagination.
+    - **sort**: comma-separated `field:direction` pairs for server-side ordering.
+    - Default order is `canonical_id` for deterministic pagination.
     """
     base = select(Repo)
 
@@ -164,7 +184,9 @@ async def list_repos(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
-    rows_result = await db.execute(base.order_by(Repo.canonical_id).limit(pagination.limit).offset(pagination.offset))
+    order_clauses = parse_sort_params(sort, _REPO_SORT_FIELDS, Repo.canonical_id)
+
+    rows_result = await db.execute(base.order_by(*order_clauses).limit(pagination.limit).offset(pagination.offset))
     repos = rows_result.scalars().all()
 
     return PaginatedResponse[RepoSummary](
