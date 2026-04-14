@@ -179,9 +179,7 @@ async def list_projects(
     if round is not None:
         # JSONB containment: metadata->'scf_submissions' @> '[{"round": "..."}]'
         base = base.where(
-            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(
-                cast(f'[{{"round": "{round}"}}]', JSONB)
-            )
+            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(cast(f'[{{"round": "{round}"}}]', JSONB))
         )
 
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
