@@ -41,7 +41,7 @@ from pg_atlas.routers.tags import Graph, Source
 router = APIRouter()
 
 # Whitelist of sortable fields for GET /repos.
-_REPO_SORT_FIELDS: dict[str, InstrumentedAttribute] = {  # type: ignore[type-arg]
+_REPO_SORT_FIELDS: dict[str, InstrumentedAttribute] = {
     "display_name": Repo.display_name,
     "criticality_score": Repo.criticality_score,
     "pony_factor": Repo.pony_factor,

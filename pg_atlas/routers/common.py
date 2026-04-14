@@ -67,9 +67,9 @@ type alias.  Use as a parameter annotation on any endpoint that needs the DB::
 
 def parse_sort_params(
     sort: str | None,
-    allowed_fields: dict[str, InstrumentedAttribute],  # type: ignore[type-arg]
-    tiebreaker: InstrumentedAttribute,  # type: ignore[type-arg]
-) -> list[UnaryExpression]:  # type: ignore[type-arg]
+    allowed_fields: dict[str, InstrumentedAttribute],
+    tiebreaker: InstrumentedAttribute,
+) -> list[UnaryExpression]:
     """
     Parse a comma-separated ``field:direction`` sort string into ORDER BY clauses.
 
@@ -101,7 +101,7 @@ def parse_sort_params(
     if not sort:
         return [asc(tiebreaker)]
 
-    clauses: list[UnaryExpression] = []  # type: ignore[type-arg]
+    clauses: list[UnaryExpression] = []
 
     for part in sort.split(","):
         part = part.strip()

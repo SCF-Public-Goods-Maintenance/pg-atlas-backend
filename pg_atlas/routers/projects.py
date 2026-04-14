@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import Annotated
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import cast, func, select
@@ -40,7 +41,7 @@ from pg_atlas.routers.tags import Graph, Source
 router = APIRouter()
 
 # Whitelist of sortable fields for GET /projects.
-_PROJECT_SORT_FIELDS: dict[str, InstrumentedAttribute] = {  # type: ignore[type-arg]
+_PROJECT_SORT_FIELDS: dict[str, InstrumentedAttribute] = {
     "display_name": Project.display_name,
     "activity_status": Project.activity_status,
     "criticality_score": Project.criticality_score,
@@ -179,7 +180,9 @@ async def list_projects(
     if round is not None:
         # JSONB containment: metadata->'scf_submissions' @> '[{"round": "..."}]'
         base = base.where(
-            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(cast(f'[{{"round": "{round}"}}]', JSONB))
+            Project.project_metadata["scf_submissions"].astext.cast(JSONB).op("@>")(
+                cast(json.dumps([{"round": round}]), JSONB)
+            )
         )
 
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
