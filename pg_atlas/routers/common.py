@@ -146,7 +146,7 @@ def parse_sort_params(
         else:
             col_type = None
             is_nullable = True
-            
+
         if is_nullable and col_type in (int, float):
             clauses.append(nulls_last(dir_fn(col)))
         else:
