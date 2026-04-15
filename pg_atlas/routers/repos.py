@@ -11,7 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -41,7 +41,7 @@ from pg_atlas.routers.tags import Graph, Source
 router = APIRouter()
 
 # Whitelist of sortable fields for GET /repos.
-_REPO_SORT_FIELDS: dict[str, InstrumentedAttribute] = {
+_REPO_SORT_FIELDS: dict[str, InstrumentedAttribute[Any]] = {
     "display_name": Repo.display_name,
     "criticality_score": Repo.criticality_score,
     "pony_factor": Repo.pony_factor,

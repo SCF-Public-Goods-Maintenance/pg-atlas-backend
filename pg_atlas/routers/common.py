@@ -15,12 +15,12 @@ from __future__ import annotations
 # ``AsyncSession | None`` path (e.g. ingestion's POST) can import from one place.
 __all__ = ["DbSession", "PaginationParams", "maybe_db_session", "parse_sort_params", "require_session"]
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy import UnaryExpression, asc, case, desc, nulls_last
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.orm import ColumnProperty, InstrumentedAttribute
 
 from pg_atlas.db_models.base import ActivityStatus
 from pg_atlas.db_models.session import maybe_db_session
@@ -67,9 +67,9 @@ type alias.  Use as a parameter annotation on any endpoint that needs the DB::
 
 def parse_sort_params(
     sort: str | None,
-    allowed_fields: dict[str, InstrumentedAttribute],
-    tiebreaker: InstrumentedAttribute,
-) -> list[UnaryExpression]:
+    allowed_fields: dict[str, InstrumentedAttribute[Any]],
+    tiebreaker: InstrumentedAttribute[Any],
+) -> list[UnaryExpression[Any]]:
     """
     Parse a comma-separated ``field:direction`` sort string into ORDER BY clauses.
 
@@ -101,7 +101,7 @@ def parse_sort_params(
     if not sort:
         return [asc(tiebreaker)]
 
-    clauses: list[UnaryExpression] = []
+    clauses: list[UnaryExpression[Any]] = []
 
     for part in sort.split(","):
         part = part.strip()
@@ -138,8 +138,15 @@ def parse_sort_params(
             continue
 
         # Nullable metric columns: NULLS LAST to prevent nulls burying real data.
-        col_type = getattr(col.property.columns[0].type, "python_type", None) if hasattr(col, "property") else None
-        is_nullable = getattr(col.property.columns[0], "nullable", True) if hasattr(col, "property") else True
+        col_prop = getattr(col, "property", None)
+        if isinstance(col_prop, ColumnProperty) and col_prop.columns:
+            col_obj = col_prop.columns[0]
+            col_type = getattr(col_obj.type, "python_type", None)
+            is_nullable = getattr(col_obj, "nullable", True)
+        else:
+            col_type = None
+            is_nullable = True
+            
         if is_nullable and col_type in (int, float):
             clauses.append(nulls_last(dir_fn(col)))
         else:

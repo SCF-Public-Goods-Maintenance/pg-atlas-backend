@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import cast, func, select
@@ -41,7 +41,7 @@ from pg_atlas.routers.tags import Graph, Source
 router = APIRouter()
 
 # Whitelist of sortable fields for GET /projects.
-_PROJECT_SORT_FIELDS: dict[str, InstrumentedAttribute] = {
+_PROJECT_SORT_FIELDS: dict[str, InstrumentedAttribute[Any]] = {
     "display_name": Project.display_name,
     "activity_status": Project.activity_status,
     "criticality_score": Project.criticality_score,
