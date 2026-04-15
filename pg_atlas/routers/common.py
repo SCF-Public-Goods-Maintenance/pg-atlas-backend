@@ -26,12 +26,12 @@ from pg_atlas.db_models.base import ActivityStatus
 from pg_atlas.db_models.session import maybe_db_session
 
 # Canonical lifecycle ordering for activity_status sorts.
-# Lower values sort first in ascending order.
+# Higher values sort first in descending order.
 _ACTIVITY_STATUS_ORDER = {
-    ActivityStatus.live: 0,
-    ActivityStatus.in_dev: 1,
+    ActivityStatus.live: 4,
+    ActivityStatus.in_dev: 3,
     ActivityStatus.discontinued: 2,
-    ActivityStatus.non_responsive: 3,
+    ActivityStatus.non_responsive: 1,
 }
 
 
@@ -132,9 +132,9 @@ def parse_sort_params(
             status_expr = case(
                 _ACTIVITY_STATUS_ORDER,
                 value=col,
-                else_=99,
+                else_=None,
             )
-            clauses.append(dir_fn(status_expr))
+            clauses.append(nulls_last(dir_fn(status_expr)))
             continue
 
         # Nullable metric columns: NULLS LAST to prevent nulls burying real data.
