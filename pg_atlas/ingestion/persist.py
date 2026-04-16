@@ -41,9 +41,10 @@ import datetime as dt
 import hashlib
 import logging
 from collections.abc import Sequence
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
+from spdx_tools.spdx.model import Package
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,17 +94,17 @@ def canonical_id_for_github_repo(repository: str) -> str:
     return f"pkg:github/{repository}"
 
 
-def _purl_from_external_refs(pkg: Any) -> str | None:
+def _purl_from_external_refs(pkg: Package) -> str | None:
     """
     Extract the first PURL locator from an SPDX package's ``external_references``.
 
     Returns the locator string if any external reference has a type that
     contains ``"purl"`` (case-insensitive), otherwise ``None``.
     """
-    for ref in getattr(pkg, "external_references", []):
-        ref_type = str(getattr(ref, "reference_type", "")).lower()
+    for ref in pkg.external_references:
+        ref_type = str(ref.reference_type).lower()
         if "purl" in ref_type:
-            return cast(str, ref.locator)
+            return str(ref.locator)
 
     return None
 
@@ -124,7 +125,7 @@ def strip_purl_version(purl: str) -> str:
     return purl
 
 
-def canonical_id_for_spdx_package(pkg: Any) -> str:
+def canonical_id_for_spdx_package(pkg: Package) -> str:
     """
     Derive a stable, version-less canonical ID for an SPDX 2.3 package.
 
@@ -142,17 +143,17 @@ def canonical_id_for_spdx_package(pkg: Any) -> str:
     if purl:
         return strip_purl_version(purl)
 
-    return cast(str, pkg.name).lower()
+    return pkg.name.lower()
 
 
-def _version_for_spdx_package(pkg: Any) -> str:
+def _version_for_spdx_package(pkg: Package) -> str:
     """
     Return the version string for an SPDX package, or ``""`` if unavailable.
 
     spdx-tools represents absent or non-assertable values as ``None``,
     ``"NOASSERTION"``, or ``"NONE"``; all are normalised to ``""``.
     """
-    version = getattr(pkg, "version", None)
+    version = pkg.version
     if version is None:
         return ""
 
@@ -163,17 +164,16 @@ def _version_for_spdx_package(pkg: Any) -> str:
     return v
 
 
-def _repo_url_for_spdx_package(pkg: Any) -> str | None:
+def _repo_url_for_spdx_package(pkg: Package) -> str | None:
     """
     Return the download URL for an SPDX package if it looks like an actual URL.
 
     Returns ``None`` for ``"NOASSERTION"`` / ``"NONE"`` entries.
     """
-    loc = getattr(pkg, "download_location", None)
-    if loc is None:
+    loc_str = str(pkg.download_location)
+    if loc_str.upper() in ("NOASSERTION", "NONE"):
         return None
 
-    loc_str = str(loc)
     if loc_str.startswith(("http", "git+")):
         return loc_str
 
