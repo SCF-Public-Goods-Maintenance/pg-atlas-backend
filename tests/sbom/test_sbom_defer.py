@@ -11,6 +11,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.ingestion.queue import defer_sbom_processing
 
@@ -36,7 +38,7 @@ class _FakeApp:
         return _FakeOpenAsyncContext()
 
 
-async def test_defer_sbom_processing_locks_by_repository_claim(monkeypatch: object) -> None:
+async def test_defer_sbom_processing_locks_by_repository_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     Queue locking must key on repository claim rather than submission id.
     """
