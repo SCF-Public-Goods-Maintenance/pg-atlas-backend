@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +30,14 @@ from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.ingestion.persist import (
+    _plan_sbom_edges,
     canonical_id_for_github_repo,
     canonical_id_for_spdx_package,
     handle_sbom_submission,
     parse_sbom_and_persist_graph,
     strip_purl_version,
 )
-from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
+from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
@@ -114,7 +116,7 @@ def test_canonical_id_for_spdx_package_from_purl() -> None:
         name = "requests"
         external_references = [FakeRef()]
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "pkg:pypi/requests"
+    assert canonical_id_for_spdx_package(FakePkg()) == "pkg:pypi/requests"  # pyright: ignore[reportArgumentType]
 
 
 def test_canonical_id_for_spdx_package_fallback() -> None:
@@ -124,7 +126,36 @@ def test_canonical_id_for_spdx_package_fallback() -> None:
         name = "MyPackage"
         external_references: list[Any] = []
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "mypackage"
+    assert canonical_id_for_spdx_package(FakePkg()) == "mypackage"  # pyright: ignore[reportArgumentType]
+
+
+def test_plan_sbom_edges_deduplicates_repeated_nested_relationships() -> None:
+    """
+    Repeated nested SPDX relationships should collapse to one planned edge.
+    """
+
+    parsed = parse_and_validate_spdx((FIXTURES / "graph_relationships.spdx.json").read_bytes())
+    duplicated = replace(
+        parsed,
+        dependency_relationships=parsed.dependency_relationships + (parsed.dependency_relationships[-1],),
+    )
+
+    root_edge_targets, nested_edges = _plan_sbom_edges(
+        duplicated,
+        submitting_repo_id=1,
+        spdx_id_to_vertex_id={
+            "SPDXRef-github-test-org-test-repo-main-abc123": 1,
+            "SPDXRef-dep-a": 2,
+            "SPDXRef-dep-b": 3,
+        },
+        vertex_versions={
+            2: "1.0.0",
+            3: "2.0.0",
+        },
+    )
+
+    assert root_edge_targets == {2: "1.0.0"}
+    assert nested_edges == [(2, 3, "2.0.0")]
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +185,7 @@ async def test_handle_sbom_submission_valid(
     assert sub.status == SubmissionStatus.pending
     assert sub.actor_claim == claims["actor"]
     assert sub.processed_at is None
-    defer_mock.assert_awaited_once_with(sub.id)
+    defer_mock.assert_awaited_once_with(sub.id, repository_claim=claims["repository"])
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
     repo = await db_session.scalar(select(Repo).where(Repo.canonical_id == repo_cid))
@@ -216,7 +247,7 @@ async def test_handle_sbom_submission_github_dep_graph(
     assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, raw, claims)
     await parse_sbom_and_persist_graph(db_session, submission.id)
-    defer_mock.assert_awaited_once_with(submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
 
     # Submitting repo → Repo vertex, NOT ExternalRepo
     repo_cid = canonical_id_for_github_repo(claims["repository"])
@@ -243,8 +274,9 @@ async def test_handle_sbom_submission_duplicate_edges(
 ) -> None:
     """
     See how `handle_sbom_submission` handles duplicate PURLs within a single SBOM.
-    It deduplicates after parsing and stores the last seen version identifier
-    on the `depends_on` edge.
+    It deduplicates after parsing, maps the described root package onto the
+    submitting ``Repo`` vertex, and stores the last seen version identifier on
+    the ``depends_on`` edge.
     """
     claims = _unique_claims()
     long_sbom = (FIXTURES / "py-stellar-sdk-a9b110.spdx.json").read_bytes()
@@ -256,14 +288,14 @@ async def test_handle_sbom_submission_duplicate_edges(
     assert result.package_count == 109
     submission = await _submission_for_payload(db_session, long_sbom, claims)
     await parse_sbom_and_persist_graph(db_session, submission.id)
-    defer_mock.assert_awaited_once_with(submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
 
     repo_cid = canonical_id_for_github_repo(claims["repository"])
     repo = await db_session.scalar(select(Repo).where(Repo.canonical_id == repo_cid))
     assert repo, f"The Repo {repo_cid} was not created properly"
 
     edges = (await db_session.scalars(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).all()
-    assert len(edges) == 106
+    assert len(edges) == 105
 
     dependency_versions = {dep.out_node.canonical_id: dep.version_range for dep in edges}
     assert dependency_versions["pkg:pypi/sphinx"] == "8.2.3"
@@ -322,7 +354,7 @@ async def test_handle_sbom_submission_stores_unwrapped_spdx_artifact(
 
     assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, wrapped, claims)
-    defer_mock.assert_awaited_once_with(submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
 
     stored = await read_artifact(submission.artifact_path)
     stored_json = json.loads(stored)
@@ -330,3 +362,151 @@ async def test_handle_sbom_submission_stores_unwrapped_spdx_artifact(
     assert isinstance(stored_json, dict)
     assert "sbom" not in stored_json
     assert stored_json["spdxVersion"] == "SPDX-2.3"
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_parse_sbom_and_persist_graph_preserves_spdx_relationships(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    SPDX ``DEPENDS_ON`` relationships should persist as graph edges when present.
+    """
+
+    claims = {
+        "repository": "test-org/test-repo",
+        "actor": "test-user",
+    }
+    raw = (FIXTURES / "graph_relationships.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+
+    repo_cid = canonical_id_for_github_repo(claims["repository"])
+    repo = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalar_one()
+    dep_a = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-a"))).scalar_one()
+    dep_b = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-b"))).scalar_one()
+
+    repo_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == repo.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    dep_a_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == dep_a.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert [edge.out_vertex_id for edge in repo_edges] == [dep_a.id]
+    assert [edge.out_vertex_id for edge in dep_a_edges] == [dep_b.id]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_parse_sbom_and_persist_graph_reprocessing_keeps_one_nested_edge(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    Reprocessing the same graph-shaped SPDX keeps one nested ``DependsOn`` row.
+    """
+
+    claims = {
+        "repository": "test-org/test-repo",
+        "actor": "test-user",
+    }
+    raw = (FIXTURES / "graph_relationships.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+
+    submission.status = SubmissionStatus.pending
+    submission.processed_at = None
+    await db_session.commit()
+
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+
+    repo_cid = canonical_id_for_github_repo(claims["repository"])
+    repo = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalar_one()
+    dep_a = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-a"))).scalar_one()
+    dep_b = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-b"))).scalar_one()
+
+    repo_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == repo.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    dep_a_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == dep_a.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    nested_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(
+                    DependsOn.in_vertex_id == dep_a.id,
+                    DependsOn.out_vertex_id == dep_b.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert [edge.out_vertex_id for edge in repo_edges] == [dep_a.id]
+    assert [edge.out_vertex_id for edge in dep_a_edges] == [dep_b.id]
+    assert len(nested_edges) == 1
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_parse_sbom_and_persist_graph_falls_back_to_flat_edges_without_relationships(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    Relationship-free SPDXs keep the submitter-to-packages fallback.
+    """
+
+    claims = _unique_claims()
+    raw = (FIXTURES / "valid.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+
+    repo_cid = canonical_id_for_github_repo(claims["repository"])
+    repo = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalar_one()
+    repo_edges = (await db_session.execute(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).scalars().all()
+
+    assert len(repo_edges) == 2

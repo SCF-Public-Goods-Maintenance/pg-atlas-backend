@@ -1,0 +1,72 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "creationInfo": {
+    "created": "2026-04-15T00:00:00Z",
+    "creators": ["Tool: pg-atlas-test"]
+  },
+  "name": "graph-shaped-sbom",
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://example.com/pg-atlas-graph-sbom-abc123",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-github-test-org-test-repo-main-abc123",
+      "name": "com.github.test-org/test-repo",
+      "downloadLocation": "https://github.com/test-org/test-repo",
+      "filesAnalyzed": false,
+      "versionInfo": "main",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/test-org/test-repo@main"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-dep-a",
+      "name": "dep-a",
+      "downloadLocation": "https://pypi.org/project/dep-a/1.0.0/",
+      "filesAnalyzed": false,
+      "versionInfo": "1.0.0",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/dep-a@1.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-dep-b",
+      "name": "dep-b",
+      "downloadLocation": "https://pypi.org/project/dep-b/2.0.0/",
+      "filesAnalyzed": false,
+      "versionInfo": "2.0.0",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/dep-b@2.0.0"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-github-test-org-test-repo-main-abc123",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-test-org-test-repo-main-abc123",
+      "relatedSpdxElement": "SPDXRef-dep-a",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-dep-a",
+      "relatedSpdxElement": "SPDXRef-dep-b",
+      "relationshipType": "DEPENDS_ON"
+    }
+  ]
+}

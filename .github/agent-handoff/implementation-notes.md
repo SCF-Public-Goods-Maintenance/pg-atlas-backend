@@ -209,3 +209,40 @@ These conventions emerged during A7 completion and apply to gitlog parsing, queu
 
 - Gitlog audit visibility is exposed via `/gitlog/artifacts` list and `/gitlog/artifacts/{id}` detail.
 - Repo-level contributor access now has a direct endpoint `/repos/{canonical_id}/contributors`.
+
+## A9 / PR #56 Interactive Replay Notes
+
+These conventions emerged while validating SBOM queue behavior locally with real artifacts and apply to future ingestion-performance investigations.
+
+### Local replay procedure for SBOM queue (interactive)
+
+- Start by inspecting candidate submissions through SQLAlchemy (equivalent to `psql -P pager=off`):
+  `SELECT id, repository_claim, status, submitted_at, processed_at FROM sbom_submissions WHERE id >= 187 ORDER BY id`.
+- Always set `PG_ATLAS_IPFS_GATEWAY_URL` in the shell for replay runs (do not store in tracked files); ask the user to provide its value through your input tool.
+- Build a replay workload from known `processed` and `failed` rows by cloning their `(repository_claim, actor_claim, sbom_content_hash, artifact_path)` into new `pending` rows.
+- Enqueue each clone using `defer_sbom_processing(submission_id, repository_claim=...)`.
+- Run the worker with the same settings as CI queue jobs from `sbom-queue.yml`.
+- Measure outcomes from both DB and logs:
+  - DB: status transitions for cloned IDs (`processed` / `failed` / still `pending`).
+  - Logs: deadlock traces (`DeadlockDetectedError`), per-job durations, and total elapsed worker runtime.
+
+### SBOM flattening impact measurement method
+
+- For each replay candidate, compare:
+  - **Flat model**: unique non-self package canonical IDs (`repo -> dep` only).
+  - **Structured model**: root targets plus nested SPDX-derived edges (`root -> dep`, `dep -> dep`).
+- Use real artifacts from `sbom_submissions.id >= 187` and compute counts from parsed SPDX relationships.
+- Observed examples (real submissions):
+  - `id=191` (`theahaco/scaffold-stellar`): flat root edges `1903` vs structured root `593` + nested `3055`.
+  - `id=188` (`theahaco/scaffold-stellar-frontend`): flat root `1080` vs structured root `296` + nested `1794`.
+  - `id=190` (`theahaco/registry-ui`): flat root `638` vs structured root `137` + nested `1335`.
+- Interpretation: removing flattening sharply reduces root fan-out inflation while preserving transitive topology as nested edges.
+
+### Concurrency/locking findings from local replay
+
+- Baseline (pre-optimization): cloned submissions `854-860` produced multiple deadlocks under `--concurrency=4` and left several replay rows failed.
+- Nested edge optimization alone (bulk `INSERT .. ON CONFLICT` for nested `DependsOn`) reduced query count but did not remove deadlocks by itself.
+- Additional deterministic+deduplicated dependency vertex upsert ordering in `persist.py` materially improved behavior:
+  - clean replay set `893-899` processed targeted queued rows without deadlocks;
+  - final log showed `elapsed_s=19.17` for two drain rounds including background failed-artifact retries.
+- Practical guidance: when investigating SBOM worker concurrency, optimize both nested edge writes and external-repo upsert ordering; the latter can dominate deadlock behavior.

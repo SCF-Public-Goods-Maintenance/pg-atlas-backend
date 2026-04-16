@@ -18,12 +18,13 @@ The worker path then owns the heavy graph mutation steps:
 5.  Re-read the stored artifact and re-validate it.
 6.  Upsert the submitting ``Repo`` vertex (canonical_id derived from the OIDC
     ``repository`` claim as ``pkg:github/owner/repo``).
-7.  Upsert each declared package as an ``ExternalRepo`` vertex (self-references
-    that resolve to the same canonical_id as the submitting repo are skipped).
+7.  Upsert each declared package as an ``ExternalRepo`` vertex when needed and
+    map SPDX package ids to graph vertices.
     TODO: after A5 we need to check for Project membership; some vertices will
     become ``Repo`` instead of ``ExternalRepo``.
-8.  Bulk-replace all ``DependsOn`` edges from the submitting repo with the
-    current SBOM's dependency set (delete-then-insert for idempotency).
+8.  Bulk-replace outgoing ``DependsOn`` edges from the submitting repo and
+    upsert any nested package-to-package ``DEPENDS_ON`` edges present in the
+    SPDX relationships.
 9.  Mark the ``SbomSubmission`` as ``processed`` and commit.
 
 If any request-thread or worker step fails, the relevant ``SbomSubmission`` row
@@ -39,10 +40,13 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import logging
-from typing import Any, cast
+from collections.abc import Sequence
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
+from spdx_tools.spdx.model import Package
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
 
@@ -57,6 +61,15 @@ from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_v
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
+
+
+class _DependsOnUpsertRow(TypedDict):
+    """Typed payload for one nested ``DependsOn`` upsert row."""
+
+    in_vertex_id: int
+    out_vertex_id: int
+    version_range: str | None
+    confidence: EdgeConfidence
 
 
 class SbomQueueingError(RuntimeError):
@@ -81,17 +94,17 @@ def canonical_id_for_github_repo(repository: str) -> str:
     return f"pkg:github/{repository}"
 
 
-def _purl_from_external_refs(pkg: Any) -> str | None:
+def _purl_from_external_refs(pkg: Package) -> str | None:
     """
     Extract the first PURL locator from an SPDX package's ``external_references``.
 
     Returns the locator string if any external reference has a type that
     contains ``"purl"`` (case-insensitive), otherwise ``None``.
     """
-    for ref in getattr(pkg, "external_references", []):
-        ref_type = str(getattr(ref, "reference_type", "")).lower()
+    for ref in pkg.external_references:
+        ref_type = str(ref.reference_type).lower()
         if "purl" in ref_type:
-            return cast(str, ref.locator)
+            return str(ref.locator)
 
     return None
 
@@ -112,7 +125,7 @@ def strip_purl_version(purl: str) -> str:
     return purl
 
 
-def canonical_id_for_spdx_package(pkg: Any) -> str:
+def canonical_id_for_spdx_package(pkg: Package) -> str:
     """
     Derive a stable, version-less canonical ID for an SPDX 2.3 package.
 
@@ -130,17 +143,17 @@ def canonical_id_for_spdx_package(pkg: Any) -> str:
     if purl:
         return strip_purl_version(purl)
 
-    return cast(str, pkg.name).lower()
+    return pkg.name.lower()
 
 
-def _version_for_spdx_package(pkg: Any) -> str:
+def _version_for_spdx_package(pkg: Package) -> str:
     """
     Return the version string for an SPDX package, or ``""`` if unavailable.
 
     spdx-tools represents absent or non-assertable values as ``None``,
     ``"NOASSERTION"``, or ``"NONE"``; all are normalised to ``""``.
     """
-    version = getattr(pkg, "version", None)
+    version = pkg.version
     if version is None:
         return ""
 
@@ -151,17 +164,16 @@ def _version_for_spdx_package(pkg: Any) -> str:
     return v
 
 
-def _repo_url_for_spdx_package(pkg: Any) -> str | None:
+def _repo_url_for_spdx_package(pkg: Package) -> str | None:
     """
     Return the download URL for an SPDX package if it looks like an actual URL.
 
     Returns ``None`` for ``"NOASSERTION"`` / ``"NONE"`` entries.
     """
-    loc = getattr(pkg, "download_location", None)
-    if loc is None:
+    loc_str = str(pkg.download_location)
+    if loc_str.upper() in ("NOASSERTION", "NONE"):
         return None
 
-    loc_str = str(loc)
     if loc_str.startswith(("http", "git+")):
         return loc_str
 
@@ -210,13 +222,13 @@ async def _upsert_repo(
     return repo
 
 
-async def _replace_depends_on_edges(
+async def _replace_root_depends_on_edges(
     session: AsyncSession,
     source_id: int,
     dep_vertex_ids: dict[int, str],
 ) -> None:
     """
-    Bulk-replace all ``DependsOn`` edges originating from ``source_id``.
+    Bulk-replace all root ``DependsOn`` edges originating from ``source_id``.
 
     Deletes every existing outgoing edge for the submitting repo and
     re-inserts the full set declared in the current SBOM.  This is
@@ -240,6 +252,144 @@ async def _replace_depends_on_edges(
         session.add(edge)
 
     await session.flush()
+
+
+async def _upsert_depends_on_edges(
+    session: AsyncSession,
+    edges: Sequence[tuple[int, int, str]],
+) -> None:
+    """
+    Insert or update nested ``DependsOn`` edges with deterministic lock order.
+
+    Nested SPDX edges are persisted with one PostgreSQL upsert statement rather
+    than one ORM round trip per edge. The batch is deduplicated and sorted by
+    the composite key so concurrent SBOM ingests acquire row locks in a stable
+    order.
+    """
+
+    if not edges:
+        return
+
+    deduped_rows: dict[tuple[int, int], _DependsOnUpsertRow] = {}
+    for source_id, target_id, version_range in edges:
+        deduped_rows[(source_id, target_id)] = {
+            "in_vertex_id": source_id,
+            "out_vertex_id": target_id,
+            "version_range": version_range or None,
+            "confidence": EdgeConfidence.verified_sbom,
+        }
+
+    ordered_rows = [deduped_rows[key] for key in sorted(deduped_rows)]
+    insert_stmt = pg_insert(DependsOn).values(ordered_rows)
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        index_elements=[DependsOn.in_vertex_id, DependsOn.out_vertex_id],
+        set_={
+            "version_range": insert_stmt.excluded.version_range,
+            "confidence": insert_stmt.excluded.confidence,
+        },
+    )
+
+    await session.execute(upsert_stmt)
+
+    await session.flush()
+
+
+async def _upsert_sbom_vertices(
+    session: AsyncSession,
+    sbom: ParsedSbom,
+    submitting_canonical_id: str,
+    submitting_repo: Repo,
+) -> tuple[dict[str, int], dict[int, str]]:
+    """
+    Upsert package vertices and map SPDX ids to graph vertex ids.
+
+    Non-root package vertices are deduplicated by canonical id and upserted in
+    canonical-id order. This reduces redundant updates and keeps row-lock
+    acquisition stable across concurrent SBOM ingests.
+    """
+
+    spdx_id_to_vertex_id: dict[str, int] = {}
+    vertex_versions: dict[int, str] = {}
+
+    canonical_inputs: dict[str, tuple[str, str, str | None]] = {}
+    canonical_spdx_ids: dict[str, list[str]] = {}
+
+    for pkg in sbom.document.packages:
+        pkg_canonical_id = canonical_id_for_spdx_package(pkg)
+        pkg_spdx_id = pkg.spdx_id
+        if pkg_canonical_id == submitting_canonical_id:
+            spdx_id_to_vertex_id[pkg_spdx_id] = submitting_repo.id
+            continue
+
+        version = _version_for_spdx_package(pkg)
+        repo_url = _repo_url_for_spdx_package(pkg)
+        canonical_inputs[pkg_canonical_id] = (str(pkg.name), version, repo_url)
+        canonical_spdx_ids.setdefault(pkg_canonical_id, []).append(pkg_spdx_id)
+
+    for canonical_id in sorted(canonical_inputs):
+        display_name, version, repo_url = canonical_inputs[canonical_id]
+
+        try:
+            dep_vertex = await _upsert_external_repo(
+                session,
+                canonical_id=canonical_id,
+                display_name=display_name,
+                latest_version=version,
+                repo_url=repo_url,
+            )
+        except ValueError:
+            existing = await get_vertex(session, canonical_id)
+            if existing is None:
+                continue
+
+            dep_vertex = existing
+
+        for pkg_spdx_id in canonical_spdx_ids[canonical_id]:
+            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
+
+        vertex_versions[dep_vertex.id] = version
+
+    for root_spdx_id in sbom.root_spdx_ids:
+        spdx_id_to_vertex_id[root_spdx_id] = submitting_repo.id
+
+    return spdx_id_to_vertex_id, vertex_versions
+
+
+def _plan_sbom_edges(
+    sbom: ParsedSbom,
+    submitting_repo_id: int,
+    spdx_id_to_vertex_id: dict[str, int],
+    vertex_versions: dict[int, str],
+) -> tuple[dict[int, str], list[tuple[int, int, str]]]:
+    """
+    Return root replacement edges and nested relationship edges for one SBOM.
+    """
+
+    if not sbom.dependency_relationships:
+        return vertex_versions, []
+
+    root_edge_targets: dict[int, str] = {}
+    nested_edge_targets: dict[tuple[int, int], str] = {}
+
+    for relationship in sbom.dependency_relationships:
+        source_vertex_id = spdx_id_to_vertex_id.get(relationship.source_spdx_id)
+        target_vertex_id = spdx_id_to_vertex_id.get(relationship.target_spdx_id)
+        if source_vertex_id is None or target_vertex_id is None or source_vertex_id == target_vertex_id:
+            continue
+
+        version_range = vertex_versions.get(target_vertex_id, "")
+        if relationship.source_spdx_id in sbom.root_spdx_ids or source_vertex_id == submitting_repo_id:
+            root_edge_targets[target_vertex_id] = version_range
+            continue
+
+        nested_edge_targets[(source_vertex_id, target_vertex_id)] = version_range
+
+    nested_edges = [
+        (source_vertex_id, target_vertex_id, nested_edge_targets[(source_vertex_id, target_vertex_id)])
+        for source_vertex_id, target_vertex_id in sorted(nested_edge_targets)
+    ]
+
+    return root_edge_targets, nested_edges
 
 
 async def _mark_submission_failed(
@@ -310,40 +460,29 @@ async def _persist_sbom_graph(
         repo_url=f"https://github.com/{repository}",
     )
 
-    dep_vertex_ids: dict[int, str] = {}
-    for pkg in sbom.document.packages:
-        pkg_canonical_id = canonical_id_for_spdx_package(pkg)
-        if pkg_canonical_id == submitting_canonical_id:
-            logger.debug(f"Skipping self-referential package {pkg_canonical_id}")
-            continue
-
-        version = _version_for_spdx_package(pkg)
-        repo_url = _repo_url_for_spdx_package(pkg)
-
-        try:
-            dep_vertex = await _upsert_external_repo(
-                session,
-                canonical_id=pkg_canonical_id,
-                display_name=str(pkg.name),
-                latest_version=version,
-                repo_url=repo_url,
-            )
-        except ValueError:
-            existing = await get_vertex(session, pkg_canonical_id)
-            if existing is None:
-                continue
-
-            dep_vertex = existing
-
-        dep_vertex_ids[dep_vertex.id] = version
-
-    await _replace_depends_on_edges(session, submitting_repo.id, dep_vertex_ids)
-
-    logger.info(
-        f"SBOM graph applied: repository={repository} actor={actor} packages={sbom.package_count} deps={len(dep_vertex_ids)}"
+    spdx_id_to_vertex_id, vertex_versions = await _upsert_sbom_vertices(
+        session,
+        sbom,
+        submitting_canonical_id,
+        submitting_repo,
+    )
+    root_edge_targets, nested_edges = _plan_sbom_edges(
+        sbom,
+        submitting_repo.id,
+        spdx_id_to_vertex_id,
+        vertex_versions,
     )
 
-    return len(dep_vertex_ids)
+    await _replace_root_depends_on_edges(session, submitting_repo.id, root_edge_targets)
+    await _upsert_depends_on_edges(session, nested_edges)
+
+    logger.info(
+        "SBOM graph applied: "
+        f"repository={repository} actor={actor} packages={sbom.package_count} "
+        f"root_edges={len(root_edge_targets)} nested_edges={len(nested_edges)}"
+    )
+
+    return len(root_edge_targets) + len(nested_edges)
 
 
 async def parse_sbom_and_persist_graph(
@@ -565,10 +704,15 @@ async def handle_sbom_submission(
     await session.refresh(submission)
 
     try:
-        await defer_sbom_processing(submission.id)
+        enqueued = await defer_sbom_processing(submission.id, repository_claim=repository)
     except Exception as exc:
         await _mark_submission_failed(session, submission.id, str(exc))
         raise SbomQueueingError(f"Could not enqueue SBOM submission {submission.id}") from exc
+
+    if not enqueued:
+        logger.info(
+            f"SBOM submission accepted behind existing repo-scoped lock: submission_id={submission.id} repository={repository}"
+        )
 
     return SbomAcceptedResponse(
         message="queued",

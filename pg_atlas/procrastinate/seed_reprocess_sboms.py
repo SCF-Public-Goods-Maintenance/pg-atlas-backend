@@ -52,18 +52,19 @@ async def seed_reprocess_failed_sboms() -> None:
     async with factory() as session:
         error_conditions = tuple(SbomSubmission.error_detail.ilike(f"%{token}%") for token in _ERROR_FILTER)
         stmt = (
-            select(SbomSubmission.id)
+            select(SbomSubmission.id, SbomSubmission.repository_claim)
             .where(SbomSubmission.status == SubmissionStatus.failed)
             .where(or_(*error_conditions))
             .order_by(SbomSubmission.submitted_at.desc())
             .limit(_N_MOST_RECENT)
         )
-        submission_ids = (await session.scalars(stmt)).all()
+        submission_rows = (await session.execute(stmt)).all()
 
     deferred = 0
-    for submission_id in submission_ids:
+    for submission_id, repository_claim in submission_rows:
         enqueued = await defer_sbom_processing(
             submission_id=submission_id,
+            repository_claim=repository_claim,
             expected_status=SubmissionStatus.failed,
         )
         if enqueued:
@@ -71,7 +72,7 @@ async def seed_reprocess_failed_sboms() -> None:
 
     logger.info(
         "seed_reprocess_sboms completed: "
-        f"selected={len(submission_ids)} deferred={deferred} "
+        f"selected={len(submission_rows)} deferred={deferred} "
         f"status={SubmissionStatus.failed.value}"
     )
 
