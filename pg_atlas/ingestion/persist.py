@@ -40,10 +40,12 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import logging
-from typing import Any, cast
+from collections.abc import Sequence
+from typing import Any, TypedDict, cast
 
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
 
@@ -58,6 +60,15 @@ from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_v
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
+
+
+class _DependsOnUpsertRow(TypedDict):
+    """Typed payload for one nested ``DependsOn`` upsert row."""
+
+    in_vertex_id: int
+    out_vertex_id: int
+    version_range: str | None
+    confidence: EdgeConfidence
 
 
 class SbomQueueingError(RuntimeError):
@@ -243,34 +254,42 @@ async def _replace_root_depends_on_edges(
     await session.flush()
 
 
-async def _upsert_depends_on_edge(
+async def _upsert_depends_on_edges(
     session: AsyncSession,
-    source_id: int,
-    target_id: int,
-    version_range: str,
+    edges: Sequence[tuple[int, int, str]],
 ) -> None:
     """
-    Insert or update one ``DependsOn`` edge with ``verified_sbom`` confidence.
+    Insert or update nested ``DependsOn`` edges with deterministic lock order.
+
+    Nested SPDX edges are persisted with one PostgreSQL upsert statement rather
+    than one ORM round trip per edge. The batch is deduplicated and sorted by
+    the composite key so concurrent SBOM ingests acquire row locks in a stable
+    order.
     """
 
-    edge = await session.get(
-        DependsOn,
-        {
+    if not edges:
+        return
+
+    deduped_rows: dict[tuple[int, int], _DependsOnUpsertRow] = {}
+    for source_id, target_id, version_range in edges:
+        deduped_rows[(source_id, target_id)] = {
             "in_vertex_id": source_id,
             "out_vertex_id": target_id,
+            "version_range": version_range or None,
+            "confidence": EdgeConfidence.verified_sbom,
+        }
+
+    ordered_rows = [deduped_rows[key] for key in sorted(deduped_rows)]
+    insert_stmt = pg_insert(DependsOn).values(ordered_rows)
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        index_elements=[DependsOn.in_vertex_id, DependsOn.out_vertex_id],
+        set_={
+            "version_range": insert_stmt.excluded.version_range,
+            "confidence": insert_stmt.excluded.confidence,
         },
     )
-    if edge is None:
-        edge = DependsOn(
-            in_vertex_id=source_id,
-            out_vertex_id=target_id,
-            version_range=version_range or None,
-            confidence=EdgeConfidence.verified_sbom,
-        )
-        session.add(edge)
-    else:
-        edge.version_range = version_range or None
-        edge.confidence = EdgeConfidence.verified_sbom
+
+    await session.execute(upsert_stmt)
 
     await session.flush()
 
@@ -324,7 +343,7 @@ async def _upsert_sbom_vertices(
 
 def _plan_sbom_edges(
     sbom: ParsedSbom,
-    submitting_repo: Repo,
+    submitting_repo_id: int,
     spdx_id_to_vertex_id: dict[str, int],
     vertex_versions: dict[int, str],
 ) -> tuple[dict[int, str], list[tuple[int, int, str]]]:
@@ -336,7 +355,7 @@ def _plan_sbom_edges(
         return vertex_versions, []
 
     root_edge_targets: dict[int, str] = {}
-    nested_edges: list[tuple[int, int, str]] = []
+    nested_edge_targets: dict[tuple[int, int], str] = {}
 
     for relationship in sbom.dependency_relationships:
         source_vertex_id = spdx_id_to_vertex_id.get(relationship.source_spdx_id)
@@ -345,11 +364,16 @@ def _plan_sbom_edges(
             continue
 
         version_range = vertex_versions.get(target_vertex_id, "")
-        if relationship.source_spdx_id in sbom.root_spdx_ids or source_vertex_id == submitting_repo.id:
+        if relationship.source_spdx_id in sbom.root_spdx_ids or source_vertex_id == submitting_repo_id:
             root_edge_targets[target_vertex_id] = version_range
             continue
 
-        nested_edges.append((source_vertex_id, target_vertex_id, version_range))
+        nested_edge_targets[(source_vertex_id, target_vertex_id)] = version_range
+
+    nested_edges = [
+        (source_vertex_id, target_vertex_id, nested_edge_targets[(source_vertex_id, target_vertex_id)])
+        for source_vertex_id, target_vertex_id in sorted(nested_edge_targets)
+    ]
 
     return root_edge_targets, nested_edges
 
@@ -430,20 +454,13 @@ async def _persist_sbom_graph(
     )
     root_edge_targets, nested_edges = _plan_sbom_edges(
         sbom,
-        submitting_repo,
+        submitting_repo.id,
         spdx_id_to_vertex_id,
         vertex_versions,
     )
 
     await _replace_root_depends_on_edges(session, submitting_repo.id, root_edge_targets)
-
-    for source_vertex_id, target_vertex_id, version_range in nested_edges:
-        await _upsert_depends_on_edge(
-            session,
-            source_id=source_vertex_id,
-            target_id=target_vertex_id,
-            version_range=version_range,
-        )
+    await _upsert_depends_on_edges(session, nested_edges)
 
     logger.info(
         "SBOM graph applied: "

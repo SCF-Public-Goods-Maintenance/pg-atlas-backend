@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +30,14 @@ from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.ingestion.persist import (
+    _plan_sbom_edges,
     canonical_id_for_github_repo,
     canonical_id_for_spdx_package,
     handle_sbom_submission,
     parse_sbom_and_persist_graph,
     strip_purl_version,
 )
-from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash
+from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
@@ -64,6 +66,35 @@ def _unique_claims(owner: str = "test-org") -> dict[str, Any]:
     """Return claims with a unique per-invocation repository name to avoid DB conflicts."""
     suffix = uuid.uuid4().hex[:8]
     return {"repository": f"{owner}/test-repo-{suffix}", "actor": "test-user"}
+
+
+def test_plan_sbom_edges_deduplicates_repeated_nested_relationships() -> None:
+    """
+    Repeated nested SPDX relationships should collapse to one planned edge.
+    """
+
+    parsed = parse_and_validate_spdx((FIXTURES / "graph_relationships.spdx.json").read_bytes())
+    duplicated = replace(
+        parsed,
+        dependency_relationships=parsed.dependency_relationships + (parsed.dependency_relationships[-1],),
+    )
+
+    root_edge_targets, nested_edges = _plan_sbom_edges(
+        duplicated,
+        submitting_repo_id=1,
+        spdx_id_to_vertex_id={
+            "SPDXRef-github-test-org-test-repo-main-abc123": 1,
+            "SPDXRef-dep-a": 2,
+            "SPDXRef-dep-b": 3,
+        },
+        vertex_versions={
+            2: "1.0.0",
+            3: "2.0.0",
+        },
+    )
+
+    assert root_edge_targets == {2: "1.0.0"}
+    assert nested_edges == [(2, 3, "2.0.0")]
 
 
 async def _submission_for_payload(
@@ -382,6 +413,76 @@ async def test_parse_sbom_and_persist_graph_preserves_spdx_relationships(
 
     assert [edge.out_vertex_id for edge in repo_edges] == [dep_a.id]
     assert [edge.out_vertex_id for edge in dep_a_edges] == [dep_b.id]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+async def test_parse_sbom_and_persist_graph_reprocessing_keeps_one_nested_edge(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    Reprocessing the same graph-shaped SPDX keeps one nested ``DependsOn`` row.
+    """
+
+    claims = {
+        "repository": "test-org/test-repo",
+        "actor": "test-user",
+    }
+    raw = (FIXTURES / "graph_relationships.spdx.json").read_bytes()
+    defer_mock = mocker.AsyncMock()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+
+    submission.status = SubmissionStatus.pending
+    submission.processed_at = None
+    await db_session.commit()
+
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+
+    repo_cid = canonical_id_for_github_repo(claims["repository"])
+    repo = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalar_one()
+    dep_a = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-a"))).scalar_one()
+    dep_b = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == "pkg:pypi/dep-b"))).scalar_one()
+
+    repo_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == repo.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    dep_a_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(DependsOn.in_vertex_id == dep_a.id).order_by(DependsOn.out_vertex_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    nested_edges = (
+        (
+            await db_session.execute(
+                select(DependsOn).where(
+                    DependsOn.in_vertex_id == dep_a.id,
+                    DependsOn.out_vertex_id == dep_b.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert [edge.out_vertex_id for edge in repo_edges] == [dep_a.id]
+    assert [edge.out_vertex_id for edge in dep_a_edges] == [dep_b.id]
+    assert len(nested_edges) == 1
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
