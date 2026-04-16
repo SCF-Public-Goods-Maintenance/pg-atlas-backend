@@ -35,6 +35,7 @@ from sqlalchemy import select
 
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.repo_vertex import RepoVertex
+from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.gitlog.runtime import process_gitlog_repo_batch
 from pg_atlas.ingestion.persist import parse_sbom_and_persist_graph, strip_purl_version
@@ -143,7 +144,10 @@ async def process_sbom_submission(
     Process one SBOM submission from the post-validation queue.
 
     By default this task processes rows in ``pending`` status. Callers may
-    explicitly select another status value (for reprocessing flows).
+    explicitly select another status value (for reprocessing flows). When a
+    repo-scoped lock caused later same-repo submissions to be accepted behind
+    an already-queued job, this task chains the next matching submission after
+    finishing the current one.
     """
 
     status_value = SubmissionStatus(expected_status)
@@ -152,11 +156,40 @@ async def process_sbom_submission(
 
     factory = get_session_factory()
     async with factory() as session:
+        submission = await session.get(SbomSubmission, submission_id)
+        repository_claim = submission.repository_claim if submission is not None else None
+
         await parse_sbom_and_persist_graph(
             session,
             submission_id,
             expected_status=status_value,
         )
+
+        if repository_claim is None:
+            return
+
+        next_submission = await session.scalar(
+            select(SbomSubmission)
+            .where(SbomSubmission.repository_claim == repository_claim)
+            .where(SbomSubmission.status == status_value)
+            .where(SbomSubmission.id != submission_id)
+            .order_by(SbomSubmission.submitted_at.asc(), SbomSubmission.id.asc())
+            .limit(1)
+        )
+        if next_submission is None:
+            return
+
+        enqueued = await defer_with_lock(
+            process_sbom_submission,
+            queueing_lock=f"sbom:{repository_claim}",
+            submission_id=next_submission.id,
+            expected_status=status_value.value,
+        )
+        if enqueued:
+            logger.info(
+                "process_sbom_submission chained next same-repo submission: "
+                f"submission_id={submission_id} next_submission_id={next_submission.id} repository_claim={repository_claim}"
+            )
 
 
 # ---------------------------------------------------------------------------

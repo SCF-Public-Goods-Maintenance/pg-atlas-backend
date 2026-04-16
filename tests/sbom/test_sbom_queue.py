@@ -219,6 +219,47 @@ async def test_process_sbom_submission_marks_pending_row_processed(
     assert {e.out_node.canonical_id for e in edges_for_repo} == {"httpx", "requests"}
 
 
+async def test_process_sbom_submission_chains_next_pending_submission_for_same_repo(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+    mocker: Any,
+) -> None:
+    """
+    Processing one pending submission queues the next same-repo pending row.
+    """
+
+    first_raw_body = (FIXTURES / "valid.spdx.json").read_bytes()
+    second_raw_body = (FIXTURES / "github_dep_graph.spdx.json").read_bytes()
+    first_submission = await _create_submission(db_session, first_raw_body)
+    second_submission = await _create_submission(db_session, second_raw_body)
+    first_submission_id = first_submission.id
+    second_submission_id = second_submission.id
+
+    defer_with_lock_mock = mocker.AsyncMock(return_value=True)
+    mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=defer_with_lock_mock)
+
+    await process_sbom_submission(submission_id=first_submission_id)
+
+    db_session.expire_all()
+    updated_first = await db_session.get(SbomSubmission, first_submission_id)
+    updated_second = await db_session.get(SbomSubmission, second_submission_id)
+    assert updated_first is not None
+    assert updated_second is not None
+    assert updated_first.status == SubmissionStatus.processed
+    assert updated_first.processed_at is not None
+    assert updated_second.status == SubmissionStatus.pending
+    assert updated_second.processed_at is None
+
+    defer_with_lock_mock.assert_awaited_once()
+    assert defer_with_lock_mock.await_args.args[0] is process_sbom_submission
+    assert defer_with_lock_mock.await_args.kwargs == {
+        "queueing_lock": f"sbom:{MOCK_OIDC_CLAIMS['repository']}",
+        "submission_id": second_submission_id,
+        "expected_status": SubmissionStatus.pending.value,
+    }
+
+
 async def test_process_sbom_submission_accepts_legacy_enveloped_artifact(
     db_session: AsyncSession,
     cleanup_db_rows_for_queue_tests: None,
@@ -432,10 +473,10 @@ async def test_ingest_then_worker_persists_dependency_graph(
     """
 
     client, _ = db_authenticated_client
-    captured_submission_ids: list[int] = []
+    captured_defer_calls: list[tuple[int, str]] = []
 
-    async def _capture_defer(submission_id: int) -> None:
-        captured_submission_ids.append(submission_id)
+    async def _capture_defer(submission_id: int, repository_claim: str) -> None:
+        captured_defer_calls.append((submission_id, repository_claim))
 
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=_capture_defer)
 
@@ -447,14 +488,15 @@ async def test_ingest_then_worker_persists_dependency_graph(
     )
 
     assert response.status_code == 202
-    assert captured_submission_ids
+    assert captured_defer_calls
 
-    await process_sbom_submission(submission_id=captured_submission_ids[0])
+    await process_sbom_submission(submission_id=captured_defer_calls[0][0])
 
-    submission = await db_session.get(SbomSubmission, captured_submission_ids[0])
+    submission = await db_session.get(SbomSubmission, captured_defer_calls[0][0])
 
     assert submission is not None
     assert submission.status == SubmissionStatus.processed
+    assert captured_defer_calls[0][1] == MOCK_OIDC_CLAIMS["repository"]
 
     expected_repo = "pkg:github/test-org/test-repo"
     repo_row = (await db_session.execute(select(Repo).where(Repo.canonical_id == expected_repo))).scalars().first()

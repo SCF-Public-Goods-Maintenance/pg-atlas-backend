@@ -18,7 +18,7 @@ from operator import attrgetter
 from typing import Any, cast
 
 import msgspec
-from spdx_tools.spdx.model import Document
+from spdx_tools.spdx.model import Document, RelationshipType
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
 
@@ -81,6 +81,18 @@ class ParsedSbom:
     package_count: int
     unwrapped_bytes: bytes
     semantic_hash: str
+    dependency_relationships: tuple[SpdxDependencyRelationship, ...]
+    root_spdx_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class SpdxDependencyRelationship:
+    """
+    One SPDX ``DEPENDS_ON`` edge expressed as SPDX element ids.
+    """
+
+    source_spdx_id: str
+    target_spdx_id: str
 
 
 class _SbomPackageKey(msgspec.Struct):
@@ -206,6 +218,45 @@ def _semantic_hash_from_sbom_dict(sbom_obj: dict[str, object], raw_fallback: byt
     return hashlib.sha256(canonical_bytes).hexdigest()
 
 
+def _extract_dependency_relationships(document: Document) -> tuple[SpdxDependencyRelationship, ...]:
+    """
+    Return all SPDX ``DEPENDS_ON`` relationships in document order.
+    """
+
+    relationships: list[SpdxDependencyRelationship] = []
+    for relationship in document.relationships:
+        if relationship.relationship_type != RelationshipType.DEPENDS_ON:
+            continue
+
+        if not isinstance(relationship.related_spdx_element_id, str):
+            continue
+
+        relationships.append(
+            SpdxDependencyRelationship(
+                source_spdx_id=relationship.spdx_element_id,
+                target_spdx_id=relationship.related_spdx_element_id,
+            )
+        )
+
+    return tuple(relationships)
+
+
+def _extract_root_spdx_ids(document: Document) -> frozenset[str]:
+    """
+    Return the SPDX ids described by the document.
+    """
+
+    root_spdx_ids = frozenset(
+        relationship.related_spdx_element_id
+        for relationship in document.relationships
+        if relationship.relationship_type == RelationshipType.DESCRIBES
+        and relationship.spdx_element_id == "SPDXRef-DOCUMENT"
+        and isinstance(relationship.related_spdx_element_id, str)
+    )
+
+    return root_spdx_ids
+
+
 def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
     """
     Parse and validate a raw SPDX 2.3 JSON payload.
@@ -252,11 +303,15 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
         ) from exc
 
     package_count = len(document.packages)
+    dependency_relationships = _extract_dependency_relationships(document)
+    root_spdx_ids = _extract_root_spdx_ids(document)
     logger.info(
         "SPDX document parsed OK: "
         f"name={document.creation_info.name!r} "
         f"spdx_version={document.creation_info.spdx_version} "
-        f"packages={package_count}"
+        f"packages={package_count} "
+        f"depends_on={len(dependency_relationships)} "
+        f"roots={len(root_spdx_ids)}"
     )
 
     return ParsedSbom(
@@ -264,6 +319,8 @@ def parse_and_validate_spdx(raw: bytes) -> ParsedSbom:
         package_count=package_count,
         unwrapped_bytes=unwrapped_bytes,
         semantic_hash=semantic_hash,
+        dependency_relationships=dependency_relationships,
+        root_spdx_ids=root_spdx_ids,
     )
 
 

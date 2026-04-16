@@ -72,3 +72,22 @@ jobs:
             error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
             >> "$GITHUB_STEP_SUMMARY"
+
+  metrics:
+    runs-on: ubuntu-latest
+    needs: crawl
+    timeout-minutes: 60
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      UV_NO_GROUP: dev
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Materialize A9 criticality
+        run: uv run python -m pg_atlas.metrics.materialize

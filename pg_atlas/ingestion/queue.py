@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 async def defer_sbom_processing(
     submission_id: int,
+    repository_claim: str,
     expected_status: SubmissionStatus = SubmissionStatus.pending,
 ) -> bool:
     """
@@ -28,6 +29,7 @@ async def defer_sbom_processing(
     Args:
         submission_id: Primary key of the ``SbomSubmission`` audit row whose
             stored artifact should be processed by the background worker.
+        repository_claim: The OIDC repository claim for the submission.
         expected_status: Submission status the worker must require before
             processing this row.
 
@@ -39,7 +41,7 @@ async def defer_sbom_processing(
     from pg_atlas.procrastinate.app import app
     from pg_atlas.procrastinate.tasks import defer_with_lock, process_sbom_submission
 
-    queueing_lock = f"sbom:{expected_status.value}:{submission_id}"
+    queueing_lock = f"sbom:{repository_claim}"
 
     async with app.open_async():
         enqueued = await defer_with_lock(
@@ -50,10 +52,14 @@ async def defer_sbom_processing(
         )
 
     if enqueued:
-        logger.info(f"Deferred SBOM processing job: submission_id={submission_id} expected_status={expected_status.value}")
+        logger.info(
+            "Deferred SBOM processing job: "
+            f"submission_id={submission_id} repository_claim={repository_claim} expected_status={expected_status.value}"
+        )
     else:
         logger.info(
-            f"Skipping duplicate SBOM defer request: submission_id={submission_id} expected_status={expected_status.value}"
+            "Skipping duplicate SBOM defer request: "
+            f"submission_id={submission_id} repository_claim={repository_claim} expected_status={expected_status.value}"
         )
 
     return enqueued
