@@ -24,16 +24,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import io
 import logging
-import sys
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TextIO, TypeAlias
 
 import psycopg
 
+from pg_atlas.instruments.tee import run_with_tee
 from pg_atlas.procrastinate.app import app, get_database_url, mark_stalled_jobs_failed
 
 logging.basicConfig(
@@ -41,112 +39,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-class _StreamTee(io.TextIOBase):
-    """
-    Mirror writes to an original stream and a tee file stream.
-    """
-
-    def __init__(self, primary: TextIO | io.TextIOBase, tee_file: TextIO | io.TextIOBase) -> None:
-        self._primary = primary
-        self._tee_file = tee_file
-
-    def writable(self) -> bool:
-        return self._primary.writable()
-
-    def write(self, data: str) -> int:
-        written = self._primary.write(data)
-        self._tee_file.write(data)
-
-        return written
-
-    def flush(self) -> None:
-        self._primary.flush()
-
-        try:
-            self._tee_file.flush()
-        except ValueError:
-            pass
-
-    def isatty(self) -> bool:
-        return self._primary.isatty()
-
-    def fileno(self) -> int:
-        return self._primary.fileno()
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._primary, name)
-
-
-StreamHandlerText: TypeAlias = logging.StreamHandler[io.TextIOBase]
-StreamHandlerPatch: TypeAlias = tuple[StreamHandlerText, io.TextIOBase]
-
-
-def _iter_loggers() -> Iterator[logging.Logger]:
-    yield logging.root
-
-    for logger in logging.root.manager.loggerDict.values():
-        if isinstance(logger, logging.Logger):
-            yield logger
-
-
-def _patch_stream_handlers(original_stream: object, replacement: io.TextIOBase) -> list[StreamHandlerPatch]:
-    patched: list[StreamHandlerPatch] = []
-
-    for logger in _iter_loggers():
-        for handler in logger.handlers:
-            if not isinstance(handler, logging.StreamHandler):
-                continue
-
-            if handler.stream is original_stream:  # pyright: ignore[reportUnknownMemberType]
-                patched.append(
-                    (handler, handler.stream)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-                )
-                handler.stream = replacement
-
-    return patched
-
-
-def _restore_stream_handlers(patched_handlers: list[StreamHandlerPatch]) -> None:
-    for handler, original_stream in patched_handlers:
-        handler.stream = original_stream
-
-
-def _run_with_optional_tee(tee_path: Path | None, run: Callable[[], None]) -> None:
-    """
-    Run a callback while optionally mirroring stdout/stderr to a file.
-
-    The original streams remain active so output still appears in GitHub
-    Actions logs while also being persisted to ``tee_path``.
-    """
-    if tee_path is None:
-        run()
-
-        return
-
-    tee_path.parent.mkdir(parents=True, exist_ok=True)
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-
-    with tee_path.open("w", encoding="utf-8") as tee_file:
-        stdout_wrapper = _StreamTee(original_stdout, tee_file)
-        stderr_wrapper = _StreamTee(original_stderr, tee_file)
-
-        sys.stdout = stdout_wrapper
-        sys.stderr = stderr_wrapper
-
-        patched_handlers: list[StreamHandlerPatch] = []
-        patched_handlers.extend(_patch_stream_handlers(original_stdout, stdout_wrapper))
-        patched_handlers.extend(_patch_stream_handlers(original_stderr, stderr_wrapper))
-
-        try:
-            run()
-        finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            _restore_stream_handlers(patched_handlers)
-            tee_file.flush()
 
 
 def _queue_status_counts(queue_name: str) -> Counter[str]:
@@ -335,7 +227,7 @@ def main() -> None:
             )
         )
 
-    _run_with_optional_tee(args.tee, _run_worker)
+    run_with_tee(args.tee, _run_worker)
 
 
 if __name__ == "__main__":

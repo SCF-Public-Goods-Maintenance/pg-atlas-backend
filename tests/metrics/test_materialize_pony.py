@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models import ContributedTo, Contributor, GitLogArtifact, Project, Repo
@@ -35,6 +36,8 @@ class SeededPonyFixture:
     repo_a2_id: int
     repo_b1_id: int
     repo_g1_id: int
+    seed_run_ordinal_lower: int
+    seed_run_ordinal_upper: int
 
 
 @pytest.fixture
@@ -67,6 +70,25 @@ async def _seed_pony_component(session: AsyncSession) -> SeededPonyFixture:
     """
 
     suffix = uuid4().hex[:8]
+
+    # Choose ordinals above any existing data so MAX() resolution is predictable.
+    current_max: int = int(await session.scalar(select(func.max(GitLogArtifact.seed_run_ordinal))) or 0)
+    ordinal_lower = current_max + 1
+    ordinal_upper = current_max + 2
+
+    # Guard: verify that neither ordinal is already in use.
+    existing = (
+        await session.execute(
+            select(GitLogArtifact.seed_run_ordinal)
+            .where(GitLogArtifact.seed_run_ordinal.in_([ordinal_lower, ordinal_upper]))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise RuntimeError(
+            f"seed_run_ordinal collision: ordinal {existing} is already in use. "
+            "Cannot seed test data without causing downstream assertion failures."
+        )
 
     alpha_project = Project(
         canonical_id=f"daoip-5:stellar:project:alpha-{suffix}",
@@ -197,19 +219,19 @@ async def _seed_pony_component(session: AsyncSession) -> SeededPonyFixture:
             GitLogArtifact(
                 repo_id=repo_a1.id,
                 since_months=12,
-                seed_run_ordinal=1,
+                seed_run_ordinal=ordinal_lower,
                 status=SubmissionStatus.processed,
             ),
             GitLogArtifact(
                 repo_id=repo_g1.id,
                 since_months=12,
-                seed_run_ordinal=1,
+                seed_run_ordinal=ordinal_lower,
                 status=SubmissionStatus.processed,
             ),
             GitLogArtifact(
                 repo_id=repo_b1.id,
                 since_months=12,
-                seed_run_ordinal=2,
+                seed_run_ordinal=ordinal_upper,
                 status=SubmissionStatus.processed,
             ),
         ]
@@ -225,6 +247,8 @@ async def _seed_pony_component(session: AsyncSession) -> SeededPonyFixture:
         repo_a2_id=repo_a2.id,
         repo_b1_id=repo_b1.id,
         repo_g1_id=repo_g1.id,
+        seed_run_ordinal_lower=ordinal_lower,
+        seed_run_ordinal_upper=ordinal_upper,
     )
 
 
@@ -319,7 +343,7 @@ async def test_materialize_pony_factor_scores_latest_seed_run_limits_updates(
 
     stats = await materialize_pony_factor_scores(rollback_db_session, latest_seed_run=True)
 
-    assert stats.resolved_seed_run_ordinal == 2
+    assert stats.resolved_seed_run_ordinal == seeded.seed_run_ordinal_upper
     assert stats.repo_rows_updated == 1
     assert stats.project_rows_updated == 1
 
@@ -349,9 +373,9 @@ async def test_materialize_pony_factor_scores_explicit_seed_run_recomputes_affec
 
     seeded = await _seed_pony_component(rollback_db_session)
 
-    stats = await materialize_pony_factor_scores(rollback_db_session, seed_run_ordinal=1)
+    stats = await materialize_pony_factor_scores(rollback_db_session, seed_run_ordinal=seeded.seed_run_ordinal_lower)
 
-    assert stats.resolved_seed_run_ordinal == 1
+    assert stats.resolved_seed_run_ordinal == seeded.seed_run_ordinal_lower
     assert stats.repo_rows_updated == 2
     assert stats.project_rows_updated == 2
 

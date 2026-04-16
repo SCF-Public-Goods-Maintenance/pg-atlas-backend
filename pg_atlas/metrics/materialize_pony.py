@@ -6,6 +6,7 @@ Usage::
     uv run python -m pg_atlas.metrics.materialize_pony
     uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run
     uv run python -m pg_atlas.metrics.materialize_pony --seed-run-ordinal 7
+    uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run --tee=pony.log
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -19,6 +20,7 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +31,13 @@ from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.instruments.tee import run_with_tee
 from pg_atlas.metrics.pony_factor import compute_pony_factor
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -62,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--seed-run-ordinal",
         type=int,
         help="Recompute only repos included in the given gitlog seed run ordinal and their projects.",
+    )
+    parser.add_argument(
+        "--tee",
+        type=Path,
+        default=None,
+        help="Optional path to mirror stdout/stderr logs while preserving console output.",
     )
 
     return parser
@@ -261,17 +274,10 @@ async def materialize_pony_factor_scores(
     return stats
 
 
-async def main() -> None:
+async def _async_main(args: argparse.Namespace) -> None:
     """
     Run one offline pony-factor materialization pass and commit the results.
     """
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    )
-
-    args = _build_parser().parse_args()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -291,5 +297,18 @@ async def main() -> None:
     )
 
 
+def main() -> None:
+    """
+    Parse CLI arguments and run the materialization pass.
+    """
+
+    args = _build_parser().parse_args()
+
+    def _run() -> None:
+        asyncio.run(_async_main(args))
+
+    run_with_tee(args.tee, _run)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

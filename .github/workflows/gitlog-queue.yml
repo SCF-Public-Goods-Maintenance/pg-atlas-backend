@@ -51,11 +51,15 @@ jobs:
           PG_ATLAS_FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
 
       - name: Materialize pony factor
-        run: uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run
+        run: uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run --tee=pony.log
 
       - name: Parse worker logs
         id: parse-logs
         run: python .github/scripts/parse-gitlog-log.py gitlog-worker.log gh-auth-status.log
+
+      - name: Parse pony factor logs
+        id: parse-pony
+        run: python .github/scripts/parse-materialize-pony-log.py pony.log
 
       - name: Write job summary
         run: |
@@ -77,4 +81,8 @@ jobs:
             terminal_failures_marked_private="${{ steps.parse-logs.outputs.terminal_failures_marked_private || 'none' }}" \
             gh_auth_status="${{ steps.parse-logs.outputs.gh_auth_status || 'Unavailable' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
+            pony_repo_rows_updated="${{ steps.parse-pony.outputs.pony_repo_rows_updated || '—' }}" \
+            pony_project_rows_updated="${{ steps.parse-pony.outputs.pony_project_rows_updated || '—' }}" \
+            pony_resolved_seed_run_ordinal="${{ steps.parse-pony.outputs.pony_resolved_seed_run_ordinal || '—' }}" \
+            pony_duration_seconds="${{ steps.parse-pony.outputs.pony_duration_seconds || '—' }}" \
             >> "$GITHUB_STEP_SUMMARY"

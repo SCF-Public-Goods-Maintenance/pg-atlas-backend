@@ -39,11 +39,15 @@ jobs:
         run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=4 --tee=sbom-worker.log
 
       - name: Materialize criticality
-        run: uv run python -m pg_atlas.metrics.materialize_criticality
+        run: uv run python -m pg_atlas.metrics.materialize_criticality --tee=criticality.log
 
       - name: Parse worker logs
         id: parse-logs
         run: python .github/scripts/parse-sbom-log.py sbom-worker.log
+
+      - name: Parse criticality logs
+        id: parse-criticality
+        run: python .github/scripts/parse-materialize-criticality-log.py criticality.log
 
       - name: Write job summary
         run: |
@@ -62,4 +66,7 @@ jobs:
             error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
             spdx_details="${{ steps.parse-logs.outputs.spdx_details || 'No records details available.' }}" \
+            criticality_dep_nodes_seen="${{ steps.parse-criticality.outputs.criticality_dep_nodes_seen || '—' }}" \
+            criticality_active_nodes_scored="${{ steps.parse-criticality.outputs.criticality_active_nodes_scored || '—' }}" \
+            criticality_duration_seconds="${{ steps.parse-criticality.outputs.criticality_duration_seconds || '—' }}" \
             >> "$GITHUB_STEP_SUMMARY"

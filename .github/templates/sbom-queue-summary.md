@@ -16,3 +16,9 @@
 ### Parsed SPDX Documents
 
 {spdx_details}
+
+### Criticality Materialization
+
+| Dep nodes seen | Active nodes scored | Duration (s) |
+| -------------: | ------------------: | -----------: |
+| {criticality_dep_nodes_seen} | {criticality_active_nodes_scored} | {criticality_duration_seconds} |
