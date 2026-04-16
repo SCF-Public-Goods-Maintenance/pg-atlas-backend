@@ -105,6 +105,8 @@ These rules MUST be enforced manually. No ruff rules are available to enforce th
 
 ## GitHub Actions
 
+- When you add a non-trivial step to a workflow (e.g. a metrics materialization or data-processing command), tee its output to a log file, parse the most pertinent fields, and incorporate them into the job summary so viewers can see at a glance what ran and what the outcome was.
+- **Never use shell `tee` (`cmd 2>&1 | tee file`)**; it swallows the exit code and makes failing steps appear green. Use `--tee=<file>` flags backed by `pg_atlas.instruments.tee.run_with_tee` instead.
 - The `gh` CLI is available as a fallback when the GitHub MCP gives a 403.
 - The SBOM action (`SCF-Public-Goods-Maintenance/pg-atlas-sbom-action`) is used by this repo too —
   it runs in CI on push to main.
