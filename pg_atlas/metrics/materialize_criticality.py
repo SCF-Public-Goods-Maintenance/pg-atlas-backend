@@ -16,7 +16,7 @@ test transaction.
 
 Usage::
 
-    uv run python -m pg_atlas.metrics.materialize
+    uv run python -m pg_atlas.metrics.materialize_criticality
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0

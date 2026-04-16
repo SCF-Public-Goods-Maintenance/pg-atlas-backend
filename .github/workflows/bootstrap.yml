@@ -89,5 +89,5 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Materialize A9 criticality
-        run: uv run python -m pg_atlas.metrics.materialize
+      - name: Materialize criticality
+        run: uv run python -m pg_atlas.metrics.materialize_criticality

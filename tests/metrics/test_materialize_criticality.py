@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models import DependsOn, ExternalRepo, Project, Repo
 from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, Visibility
-from pg_atlas.metrics.materialize import CriticalityMaterializationStats, materialize_criticality_scores
+from pg_atlas.metrics.materialize_criticality import CriticalityMaterializationStats, materialize_criticality_scores
 
 
 @dataclass(frozen=True)

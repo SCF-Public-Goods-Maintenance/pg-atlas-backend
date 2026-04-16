@@ -38,8 +38,8 @@ jobs:
       - name: Run worker — sbom queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=sbom --concurrency=4 --tee=sbom-worker.log
 
-      - name: Materialize A9 criticality
-        run: uv run python -m pg_atlas.metrics.materialize
+      - name: Materialize criticality
+        run: uv run python -m pg_atlas.metrics.materialize_criticality
 
       - name: Parse worker logs
         id: parse-logs
