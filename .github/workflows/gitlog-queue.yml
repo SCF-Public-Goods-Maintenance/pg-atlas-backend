@@ -50,6 +50,9 @@ jobs:
           PG_ATLAS_FILEBASE_ACCESS_KEY: ${{ secrets.FILEBASE_ACCESS_KEY }}
           PG_ATLAS_FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
 
+      - name: Materialize pony factor
+        run: uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run
+
       - name: Parse worker logs
         id: parse-logs
         run: python .github/scripts/parse-gitlog-log.py gitlog-worker.log gh-auth-status.log
