@@ -158,6 +158,35 @@ def test_canonical_id_for_spdx_package_fallback() -> None:
     assert canonical_id_for_spdx_package(FakePkg()) == "mypackage"
 
 
+def test_plan_sbom_edges_deduplicates_repeated_nested_relationships() -> None:
+    """
+    Repeated nested SPDX relationships should collapse to one planned edge.
+    """
+
+    parsed = parse_and_validate_spdx((FIXTURES / "graph_relationships.spdx.json").read_bytes())
+    duplicated = replace(
+        parsed,
+        dependency_relationships=parsed.dependency_relationships + (parsed.dependency_relationships[-1],),
+    )
+
+    root_edge_targets, nested_edges = _plan_sbom_edges(
+        duplicated,
+        submitting_repo_id=1,
+        spdx_id_to_vertex_id={
+            "SPDXRef-github-test-org-test-repo-main-abc123": 1,
+            "SPDXRef-dep-a": 2,
+            "SPDXRef-dep-b": 3,
+        },
+        vertex_versions={
+            2: "1.0.0",
+            3: "2.0.0",
+        },
+    )
+
+    assert root_edge_targets == {2: "1.0.0"}
+    assert nested_edges == [(2, 3, "2.0.0")]
+
+
 # ---------------------------------------------------------------------------
 # DB integration tests
 # ---------------------------------------------------------------------------

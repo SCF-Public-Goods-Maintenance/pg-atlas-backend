@@ -302,10 +302,17 @@ async def _upsert_sbom_vertices(
 ) -> tuple[dict[str, int], dict[int, str]]:
     """
     Upsert package vertices and map SPDX ids to graph vertex ids.
+
+    Non-root package vertices are deduplicated by canonical id and upserted in
+    canonical-id order. This reduces redundant updates and keeps row-lock
+    acquisition stable across concurrent SBOM ingests.
     """
 
     spdx_id_to_vertex_id: dict[str, int] = {}
     vertex_versions: dict[int, str] = {}
+
+    canonical_inputs: dict[str, tuple[str, str, str | None]] = {}
+    canonical_spdx_ids: dict[str, list[str]] = {}
 
     for pkg in sbom.document.packages:
         pkg_canonical_id = canonical_id_for_spdx_package(pkg)
@@ -316,23 +323,30 @@ async def _upsert_sbom_vertices(
 
         version = _version_for_spdx_package(pkg)
         repo_url = _repo_url_for_spdx_package(pkg)
+        canonical_inputs[pkg_canonical_id] = (str(pkg.name), version, repo_url)
+        canonical_spdx_ids.setdefault(pkg_canonical_id, []).append(pkg_spdx_id)
+
+    for canonical_id in sorted(canonical_inputs):
+        display_name, version, repo_url = canonical_inputs[canonical_id]
 
         try:
             dep_vertex = await _upsert_external_repo(
                 session,
-                canonical_id=pkg_canonical_id,
-                display_name=str(pkg.name),
+                canonical_id=canonical_id,
+                display_name=display_name,
                 latest_version=version,
                 repo_url=repo_url,
             )
         except ValueError:
-            existing = await get_vertex(session, pkg_canonical_id)
+            existing = await get_vertex(session, canonical_id)
             if existing is None:
                 continue
 
             dep_vertex = existing
 
-        spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
+        for pkg_spdx_id in canonical_spdx_ids[canonical_id]:
+            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
+
         vertex_versions[dep_vertex.id] = version
 
     for root_spdx_id in sbom.root_spdx_ids:
