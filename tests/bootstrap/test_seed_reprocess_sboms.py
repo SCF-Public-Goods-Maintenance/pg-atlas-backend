@@ -43,9 +43,12 @@ async def test_seed_reprocess_sboms_defers_recent_failed_matches(
     )
 
     session = mocker.AsyncMock()
-    scalar_result = mocker.Mock()
-    scalar_result.all.return_value = [42, 41]
-    session.scalars = mocker.AsyncMock(return_value=scalar_result)
+    execute_result = mocker.Mock()
+    execute_result.all.return_value = [
+        (42, "test-org/test-repo-42"),
+        (41, "test-org/test-repo-41"),
+    ]
+    session.execute = mocker.AsyncMock(return_value=execute_result)
 
     session_context = mocker.AsyncMock()
     session_context.__aenter__.return_value = session
@@ -66,7 +69,7 @@ async def test_seed_reprocess_sboms_defers_recent_failed_matches(
 
     mark_mock.assert_awaited_once_with(queue_name="sbom")
 
-    stmt = session.scalars.call_args.args[0]
+    stmt = session.execute.call_args.args[0]
     sql = str(
         stmt.compile(
             dialect=postgresql.dialect(),
@@ -83,10 +86,12 @@ async def test_seed_reprocess_sboms_defers_recent_failed_matches(
     second_call = defer_mock.await_args_list[1]
     assert first_call.kwargs == {
         "submission_id": 42,
+        "repository_claim": "test-org/test-repo-42",
         "expected_status": SubmissionStatus.failed,
     }
     assert second_call.kwargs == {
         "submission_id": 41,
+        "repository_claim": "test-org/test-repo-41",
         "expected_status": SubmissionStatus.failed,
     }
 
@@ -100,9 +105,9 @@ async def test_seed_reprocess_sboms_skips_defer_when_no_matches(
     )
 
     session = mocker.AsyncMock()
-    scalar_result = mocker.Mock()
-    scalar_result.all.return_value = []
-    session.scalars = mocker.AsyncMock(return_value=scalar_result)
+    execute_result = mocker.Mock()
+    execute_result.all.return_value = []
+    session.execute = mocker.AsyncMock(return_value=execute_result)
 
     session_context = mocker.AsyncMock()
     session_context.__aenter__.return_value = session

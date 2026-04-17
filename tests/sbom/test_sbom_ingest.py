@@ -262,7 +262,7 @@ async def test_valid_sbom_with_db_queues_processing(
     assert len(submissions) == 1
     submission = submissions[0]
     assert submission.status == SubmissionStatus.pending
-    defer_mock.assert_awaited_once_with(submission.id)
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=MOCK_OIDC_CLAIMS["repository"])
 
 
 async def test_duplicate_sbom_does_not_enqueue_again(
@@ -367,6 +367,38 @@ async def test_valid_sbom_returns_503_when_queue_defer_fails(
     assert added_submission.status == SubmissionStatus.failed
     assert added_submission.error_detail is not None
     assert "queue unavailable" in added_submission.error_detail
+
+
+async def test_valid_sbom_stays_pending_when_repo_lock_is_already_queued(
+    authenticated_db_client: tuple[AsyncClient, AsyncSession],
+    cleanup_db_rows_for_authenticated_client_tests: None,
+    mocker: Any,
+) -> None:
+    """
+    Lock collisions keep the new submission pending behind the existing repo job.
+    """
+
+    client, session = authenticated_db_client
+    defer_mock = mocker.AsyncMock(return_value=False)
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+
+    valid_sbom = (FIXTURES / "valid.spdx.json").read_bytes()
+    response = await client.post(
+        "/ingest/sbom",
+        content=valid_sbom,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["message"] == "queued"
+
+    submission = (await session.execute(select(SbomSubmission).order_by(SbomSubmission.id.desc()))).scalars().first()
+    assert submission is not None
+    assert submission.status == SubmissionStatus.pending
+    assert submission.error_detail is None
+
+    defer_mock.assert_awaited_once_with(submission.id, repository_claim=MOCK_OIDC_CLAIMS["repository"])
 
 
 async def test_no_db_fallback_does_not_enqueue_processing(

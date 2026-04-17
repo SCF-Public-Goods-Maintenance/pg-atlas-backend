@@ -72,3 +72,52 @@ jobs:
             error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
             >> "$GITHUB_STEP_SUMMARY"
+
+  metrics:
+    runs-on: ubuntu-latest
+    needs: crawl
+    timeout-minutes: 60
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      UV_NO_GROUP: dev
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Materialize criticality
+        run: uv run python -m pg_atlas.metrics.materialize_criticality --tee=criticality.log
+
+      - name: Parse criticality logs
+        id: parse-criticality
+        run: python .github/scripts/parse-materialize-criticality-log.py criticality.log
+
+      - name: Materialize adoption
+        run: uv run python -m pg_atlas.metrics.materialize_adoption --tee=adoption.log
+
+      - name: Parse adoption logs
+        id: parse-adoption
+        run: python .github/scripts/parse-materialize-adoption-log.py adoption.log
+
+      - name: Write job summary
+        run: |
+          python .github/scripts/render-template.py \
+            .github/templates/bootstrap-metrics-summary.md \
+            trigger="${{ github.event_name }}" \
+            run_id="${{ github.run_id }}" \
+            server_url="${{ github.server_url }}" \
+            repository="${{ github.repository }}" \
+            finished="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            criticality_dep_nodes_seen="${{ steps.parse-criticality.outputs.criticality_dep_nodes_seen || '—' }}" \
+            criticality_active_nodes_scored="${{ steps.parse-criticality.outputs.criticality_active_nodes_scored || '—' }}" \
+            criticality_duration_seconds="${{ steps.parse-criticality.outputs.criticality_duration_seconds || '—' }}" \
+            adoption_repos_seen="${{ steps.parse-adoption.outputs.adoption_repos_seen || '—' }}" \
+            adoption_repo_composites_computed="${{ steps.parse-adoption.outputs.adoption_repo_composites_computed || '—' }}" \
+            adoption_projects_seen="${{ steps.parse-adoption.outputs.adoption_projects_seen || '—' }}" \
+            adoption_projects_scored="${{ steps.parse-adoption.outputs.adoption_projects_scored || '—' }}" \
+            adoption_duration_seconds="${{ steps.parse-adoption.outputs.adoption_duration_seconds || '—' }}" \
+            >> "$GITHUB_STEP_SUMMARY"

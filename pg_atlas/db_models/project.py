@@ -13,9 +13,10 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, String, func
+from sqlalchemy import DateTime, Enum, Numeric, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,7 +60,7 @@ class Project(PgBase):
     # --- materialized metrics (computed by background pipeline, null until first run) ---
     pony_factor: Mapped[int | None] = mapped_column(default=None)
     criticality_score: Mapped[int | None] = mapped_column(default=None)
-    adoption_score: Mapped[float | None] = mapped_column(default=None)
+    adoption_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2, asdecimal=True), default=None)
 
     # --- flexible metadata (anything to display but not traverse/query) ---
     # NB: 'metadata' is reserved by SQLAlchemy DeclarativeBase; the Python attribute

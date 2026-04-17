@@ -13,7 +13,15 @@
 - **First rate-limit hit after N repos**: {first_rate_limit_hit_after_n_repos}
 - **Total rate-limit hits**: {total_rate_limit_hits}
 
+### Worker errors
+
 {error_detail}
+
+### Pony factor materialization
+
+| Repos updated | Projects updated | Seed run ordinal | Duration (s) |
+| ------------: | ---------------: | ---------------: | -----------: |
+| {pony_repo_rows_updated} | {pony_project_rows_updated} | {pony_resolved_seed_run_ordinal} | {pony_duration_seconds} |
 
 ### gh auth status
 

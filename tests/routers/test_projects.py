@@ -132,6 +132,23 @@ async def test_get_project_detail_includes_metadata(
     assert data["active_contributors_90d"] == 2
 
 
+async def test_get_project_detail_serializes_adoption_score_as_json_number(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """
+    GET /projects/{canonical_id} should expose adoption_score as a JSON number.
+    """
+
+    client, seed = seeded_client
+    cid = seed["project_a"].canonical_id
+    resp = await client.get(f"/projects/{cid}")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert isinstance(data["adoption_score"], float)
+    assert data["adoption_score"] == 12.5
+
+
 async def test_get_project_detail_normalizes_metadata(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
