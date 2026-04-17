@@ -53,18 +53,10 @@ from pg_atlas.procrastinate.depsdev import (
 from pg_atlas.procrastinate.github import (
     GitHubRepoMetadata,
     PackageReference,
-)
-from pg_atlas.procrastinate.github import (
-    detect_packages_from_repo as _detect_packages_from_repo,
-)
-from pg_atlas.procrastinate.github import (
-    get_single_repo as _get_single_repo,
-)
-from pg_atlas.procrastinate.github import (
-    latest_version_from_repo as _latest_version_from_repo,
-)
-from pg_atlas.procrastinate.github import (
-    list_org_repos as _list_org_repos,
+    detect_packages_from_repo,
+    get_single_repo,
+    latest_version_from_repo,
+    list_org_repos,
 )
 from pg_atlas.procrastinate.opengrants import fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
@@ -302,10 +294,10 @@ async def process_project(
     repos_to_crawl: list[GitHubRepoMetadata] = []
     if owner:
         if extended_universe or not git_repo_url:
-            repos_to_crawl = _list_org_repos(owner)
+            repos_to_crawl = list_org_repos(owner)
         else:
             repo_name = git_repo_url.rstrip("/").rsplit("/", 1)[-1]
-            repos_to_crawl = _get_single_repo(owner, repo_name)
+            repos_to_crawl = get_single_repo(owner, repo_name)
             logger.info(f"Restricting {git_owner_url} crawl to {repo_name} only.")
 
     # ----- deps.dev GetProjectBatch -----
@@ -417,7 +409,7 @@ async def crawl_github_repo(
 
     package_refs = [PackageReference.from_payload(pkg) for pkg in packages]
     if not package_refs:
-        package_refs = _detect_packages_from_repo(owner, repo)
+        package_refs = detect_packages_from_repo(owner, repo)
         logger.info(f"Detected {len(package_refs)} packages in {owner}/{repo}")
 
     # Deps.dev project package versions can include many entries per package
@@ -463,7 +455,7 @@ async def crawl_github_repo(
         # Use the latest version from package releases.
         latest_version = releases[-1].get("version", "")
     else:
-        latest_version = _latest_version_from_repo(owner, repo)
+        latest_version = latest_version_from_repo(owner, repo)
 
     # ----- Upsert the Repo vertex (pkg:github/owner/repo) -----
     repo_canonical_id = f"pkg:github/{owner}/{repo}"

@@ -106,7 +106,7 @@ class DepsDevPackageInfo:
     name: str
     purl: str
     default_version: str
-    versions: list[DepsDevVersionInfo] = field(default_factory=list)
+    versions: list[DepsDevVersionInfo] = field(default_factory=list[DepsDevVersionInfo])
 
 
 @dataclass
@@ -127,7 +127,7 @@ class DepsDevProjectInfo:
     forks_count: int
     license: str
     description: str
-    package_versions: list[ProjectPackageVersion] = field(default_factory=list)
+    package_versions: list[ProjectPackageVersion] = field(default_factory=list[ProjectPackageVersion])
 
 
 # ---------------------------------------------------------------------------

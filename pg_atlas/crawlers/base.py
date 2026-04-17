@@ -75,7 +75,7 @@ class CrawlResult:
     vertices_upserted: int = 0
     edges_created: int = 0
     edges_skipped: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list[str])
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +126,7 @@ async def _upsert_vertex(
             await session.flush()
     except IntegrityError:
         session.expunge(ext)
-        ext = await get_vertex(session, canonical_id)  # type: ignore[assignment]
-
+        ext = await get_vertex(session, canonical_id)
     return ext
 
 
