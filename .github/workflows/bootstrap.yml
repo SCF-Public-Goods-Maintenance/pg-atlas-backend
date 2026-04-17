@@ -96,6 +96,13 @@ jobs:
         id: parse-criticality
         run: python .github/scripts/parse-materialize-criticality-log.py criticality.log
 
+      - name: Materialize adoption
+        run: uv run python -m pg_atlas.metrics.materialize_adoption --tee=adoption.log
+
+      - name: Parse adoption logs
+        id: parse-adoption
+        run: python .github/scripts/parse-materialize-adoption-log.py adoption.log
+
       - name: Write job summary
         run: |
           python .github/scripts/render-template.py \
@@ -108,4 +115,9 @@ jobs:
             criticality_dep_nodes_seen="${{ steps.parse-criticality.outputs.criticality_dep_nodes_seen || '—' }}" \
             criticality_active_nodes_scored="${{ steps.parse-criticality.outputs.criticality_active_nodes_scored || '—' }}" \
             criticality_duration_seconds="${{ steps.parse-criticality.outputs.criticality_duration_seconds || '—' }}" \
+            adoption_repos_seen="${{ steps.parse-adoption.outputs.adoption_repos_seen || '—' }}" \
+            adoption_repo_composites_computed="${{ steps.parse-adoption.outputs.adoption_repo_composites_computed || '—' }}" \
+            adoption_projects_seen="${{ steps.parse-adoption.outputs.adoption_projects_seen || '—' }}" \
+            adoption_projects_scored="${{ steps.parse-adoption.outputs.adoption_projects_scored || '—' }}" \
+            adoption_duration_seconds="${{ steps.parse-adoption.outputs.adoption_duration_seconds || '—' }}" \
             >> "$GITHUB_STEP_SUMMARY"

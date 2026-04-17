@@ -20,6 +20,7 @@ import datetime as dt
 import hashlib
 import uuid
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -138,6 +139,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             activity_status=ActivityStatus.live,
             category="infrastructure",
             git_owner_url="https://github.com/alpha-org",
+            adoption_score=Decimal("12.50"),
             project_metadata={
                 "scf_submissions": [{"round": "SCF-1", "title": "Alpha funding"}],
                 "description": "Test alpha project",

@@ -109,3 +109,36 @@ Gitlog terminal failures marked private: https://github.com/org/private-repo
     assert "total_rate_limit_hits=5" in stdout
     assert "terminal_failures_marked_private=https://github.com/org/private-repo" in stdout
     assert "gh_auth_status=gh auth status: logged in" in stdout
+
+
+def test_parse_adoption_log(tmp_path: Path) -> None:
+    log_content = (
+        "2026-07-17 10:05:00,123 INFO     __main__: materialize_adoption_scores: "
+        "repos_seen=144 repo_composites_computed=144 projects_seen=611 "
+        "projects_scored=26 duration_seconds=0.158\n"
+        "2026-07-17 10:05:00,456 INFO     __main__: project adoption materialization finished: "
+        "repos_seen=144 repo_composites_computed=144 projects_seen=611 "
+        "projects_scored=26 duration_seconds=0.158\n"
+    )
+    log_file = tmp_path / "adoption.log"
+    log_file.write_text(log_content)
+
+    script_path = Path(__file__).parent.parent.parent / ".github" / "scripts" / "parse-materialize-adoption-log.py"
+
+    env = os.environ.copy()
+    env.pop("GITHUB_OUTPUT", None)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), str(log_file)],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+
+    stdout = result.stdout
+    assert "adoption_repos_seen=144" in stdout
+    assert "adoption_repo_composites_computed=144" in stdout
+    assert "adoption_projects_seen=611" in stdout
+    assert "adoption_projects_scored=26" in stdout
+    assert "adoption_duration_seconds=0.158" in stdout

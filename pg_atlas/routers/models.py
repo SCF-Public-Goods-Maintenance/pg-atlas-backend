@@ -11,9 +11,10 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Generic, TypeVar
+from decimal import Decimal
+from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PlainSerializer
 
 from pg_atlas.db_models.base import (
     ActivityStatus,
@@ -25,6 +26,14 @@ from pg_atlas.db_models.base import (
 )
 
 T = TypeVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Serializer overrides
+# ---------------------------------------------------------------------------
+
+
+FloatDecimal = Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +115,7 @@ class ProjectSummary(BaseModel):
     git_owner_url: str | None
     pony_factor: int | None
     criticality_score: int | None
-    adoption_score: float | None
+    adoption_score: FloatDecimal | None
     updated_at: dt.datetime
 
 
