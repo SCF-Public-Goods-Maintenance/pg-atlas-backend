@@ -55,7 +55,7 @@ whichever is being built; stubs for later deliverables are marked `# TODO A<n>:`
 - **mypy** in strict mode (`disallow_untyped_defs`, `explicit_package_bases`, `ignore_missing_imports`).
 - **basedpyright** in strict mode. Run diagnostics and fix problems for every file you touch. Strict
   really is strict, also for test files. Check for `types-*` packages on PyPI. Write missing `.pyi`
-  stubs. Wrap fetched JSON in Pydantic models. Never cast. Only suppress warnings if you have
+  stubs. Wrap fetched JSON in msgspec or Pydantic models. Never cast. Only suppress warnings if you have
   exhausted these options.
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Translate all `pytest` commands to the `runTests` tool equivalent, and run them with the tool.

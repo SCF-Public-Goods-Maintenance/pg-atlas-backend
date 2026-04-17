@@ -13,13 +13,81 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
+import tomllib
 from dataclasses import dataclass
 from threading import Lock
+from typing import Any
 
-import msgspec
 from github import Auth, Github, GithubException
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+_MANIFEST_SEARCH_TERMS = [
+    "path:Cargo.toml",
+    "path:package.json",
+    "path:pyproject.toml",
+    "path:setup.py",
+    "path:setup.cfg",
+    "path:pom.xml",
+    "path:go.mod",
+    "path:Gemfile",
+    "path:pubspec.yaml",
+    "path:composer.json",
+    "path:.gemspec",
+]
+
+
+class _NpmManifest(BaseModel):
+    """
+    Typed subset of package.json fields used for package detection.
+    """
+
+    name: str | None = None
+    private: bool | None = None
+
+
+class _ComposerManifest(BaseModel):
+    """
+    Typed subset of composer.json fields used for package detection.
+    """
+
+    name: str | None = None
+
+
+class _CargoPackageSection(BaseModel):
+    """
+    Typed subset of Cargo.toml [package] section.
+    """
+
+    name: str | None = None
+
+
+class _CargoManifest(BaseModel):
+    """
+    Typed subset of Cargo.toml used for package detection.
+    """
+
+    package: _CargoPackageSection | None = None
+
+
+class _PyProjectSection(BaseModel):
+    """
+    Typed subset of pyproject.toml [project] section.
+    """
+
+    name: str | None = None
+
+
+class _PyProjectManifest(BaseModel):
+    """
+    Typed subset of pyproject.toml used for package detection.
+    """
+
+    project: _PyProjectSection | None = None
+
 
 # Module-level singletons
 _gh_client: Github | None = None
@@ -169,55 +237,178 @@ def get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
 
 def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:
     """
-    Detect published packages by inspecting repo root for manifest files.
+    Detect published packages by searching for manifests in the repository.
 
-    Returns a list of ``{system, name}`` dicts.
+    Uses GitHub code search so monorepo manifests in nested directories are
+    detected.
     """
     gh = get_github_client()
-    packages: list[PackageReference] = []
+    repo_path = f"{owner}/{repo_name}"
+    package_refs: list[PackageReference] = []
+    seen_keys: set[tuple[str, str]] = set()
 
     try:
-        repo = gh.get_repo(f"{owner}/{repo_name}")
-        contents = repo.get_contents("")
+        repo = gh.get_repo(repo_path)
+    except GithubException as exc:
+        logger.warning(f"Failed to access repo for package detection {repo_path}: {exc}")
 
-        if not isinstance(contents, list):
-            contents = [contents]
+        return []
 
-        filenames = {c.name for c in contents}
+    search_terms = " OR ".join(_MANIFEST_SEARCH_TERMS)
+    query = f"repo:{repo_path} ({search_terms}) -path:test -path:tests -path:example -path:examples"
 
-        if "Cargo.toml" in filenames:
-            packages.append(PackageReference(system="CARGO", name=repo_name))
+    try:
+        search_results = gh.search_code(query=query)
+        for index, result in enumerate(search_results):
+            # Guard against unexpectedly-large repositories.
+            if index >= 200:
+                break
 
-        if "package.json" in filenames:
-            # Try to read the actual package name from package.json.
+            path_obj = getattr(result, "path", None)
+            path = path_obj if isinstance(path_obj, str) else ""
+            if not path:
+                continue
+
+            system = _system_from_manifest_path(path)
+            if system is None:
+                continue
+
             try:
-                pj = repo.get_contents("package.json")
-                pkg_data = msgspec.json.decode(pj.decoded_content, type=dict[str, object])  # type: ignore[union-attr]
-                npm_name_obj = pkg_data.get("name")
-                npm_name = npm_name_obj if isinstance(npm_name_obj, str) else repo_name
-                packages.append(PackageReference(system="NPM", name=npm_name))
+                manifest_text = _read_manifest_text(repo, path)
+            except GithubException as exc:
+                logger.warning(f"Failed to read manifest {path} in {repo_path}: {exc}")
+                continue
 
-            except GithubException, msgspec.DecodeError, msgspec.ValidationError, AttributeError, TypeError:
-                packages.append(PackageReference(system="NPM", name=repo_name))
+            package_name = _extract_package_name(system, path, manifest_text, owner, repo_name)
 
-        if "pyproject.toml" in filenames or "setup.py" in filenames or "setup.cfg" in filenames:
-            packages.append(PackageReference(system="PYPI", name=repo_name))
+            if package_name is None:
+                continue
 
-        if "pom.xml" in filenames:
-            packages.append(PackageReference(system="MAVEN", name=repo_name))
+            key = (system, package_name)
+            if key in seen_keys:
+                continue
 
-        if "go.mod" in filenames:
-            packages.append(PackageReference(system="GO", name=f"github.com/{owner}/{repo_name}"))
-
-        if f"{repo_name}.gemspec" in filenames or "Gemfile" in filenames:
-            packages.append(PackageReference(system="RUBYGEMS", name=repo_name))
+            seen_keys.add(key)
+            package_refs.append(PackageReference(system=system, name=package_name))
 
     except GithubException as exc:
-        logger.warning(f"Failed to detect packages in {owner}/{repo_name}: {exc}")
+        logger.warning(f"GitHub code search unavailable for {repo_path}: {exc}")
+        return []
 
-    # Keep the same shape produced by get_project_package_versions():
-    # {"system": "...", "name": "..."} plus optional keys.
-    return packages
+    if not package_refs:
+        logger.info(f"detect_packages_from_repo: {repo_path} packages={{}}")
+        return []
+
+    counts_by_system: dict[str, int] = {}
+    for package_ref in package_refs:
+        counts_by_system[package_ref.system] = counts_by_system.get(package_ref.system, 0) + 1
+
+    logger.info(f"detect_packages_from_repo: {repo_path} packages={counts_by_system}")
+
+    return package_refs
+
+
+def _system_from_manifest_path(path: str) -> str | None:
+    """
+    Resolve a package system from one manifest path.
+    """
+
+    lowered = path.lower()
+
+    if lowered.endswith("cargo.toml"):
+        return "CARGO"
+    if lowered.endswith("package.json"):
+        return "NPM"
+    if lowered.endswith("pyproject.toml") or lowered.endswith("setup.py") or lowered.endswith("setup.cfg"):
+        return "PYPI"
+    if lowered.endswith("pom.xml"):
+        return "MAVEN"
+    if lowered.endswith("go.mod"):
+        return "GO"
+    if lowered.endswith("gemfile") or lowered.endswith(".gemspec"):
+        return "RUBYGEMS"
+    if lowered.endswith("pubspec.yaml"):
+        return "DART"
+    if lowered.endswith("composer.json"):
+        return "COMPOSER"
+
+    return None
+
+
+def _read_manifest_text(repo: Any, path: str) -> str:
+    """
+    Read one manifest file from GitHub and decode it to UTF-8 text.
+    """
+
+    content = repo.get_contents(path)
+    raw = getattr(content, "decoded_content", b"")
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+
+    return ""
+
+
+def _extract_package_name(system: str, path: str, manifest_text: str, owner: str, repo_name: str) -> str | None:
+    """
+    Extract one package name from manifest content for a given ecosystem.
+    """
+
+    if system == "NPM":
+        try:
+            npm_manifest = _NpmManifest.model_validate_json(manifest_text)
+        except ValidationError:
+            return repo_name
+
+        if npm_manifest.private is True:
+            return None
+
+        return npm_manifest.name if npm_manifest.name else repo_name
+
+    if system == "COMPOSER":
+        try:
+            composer_manifest = _ComposerManifest.model_validate_json(manifest_text)
+        except ValidationError:
+            return None
+
+        return composer_manifest.name if composer_manifest.name else None
+
+    if system == "DART":
+        match = re.search(r"^name\s*:\s*([A-Za-z0-9_.-]+)\s*$", manifest_text, flags=re.MULTILINE)
+        if match is not None:
+            return match.group(1)
+
+        return repo_name
+
+    if system == "GO":
+        match = re.search(r"^module\s+(.+)$", manifest_text, flags=re.MULTILINE)
+        if match is not None:
+            return match.group(1).strip()
+
+        return f"github.com/{owner}/{repo_name}"
+
+    if system == "CARGO":
+        try:
+            cargo_manifest = _CargoManifest.model_validate(tomllib.loads(manifest_text))
+        except tomllib.TOMLDecodeError, ValidationError:
+            return repo_name
+
+        if cargo_manifest.package is not None and cargo_manifest.package.name:
+            return cargo_manifest.package.name
+
+        return repo_name
+
+    if system == "PYPI" and path.endswith("pyproject.toml"):
+        try:
+            pyproject_manifest = _PyProjectManifest.model_validate(tomllib.loads(manifest_text))
+        except tomllib.TOMLDecodeError, ValidationError:
+            return repo_name
+
+        if pyproject_manifest.project is not None and pyproject_manifest.project.name:
+            return pyproject_manifest.project.name
+
+        return repo_name
+
+    return repo_name
 
 
 def latest_version_from_repo(owner: str, repo_name: str) -> str:

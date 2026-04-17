@@ -31,11 +31,13 @@ from pg_atlas.procrastinate.opengrants import ScfProject
 try:
     from pg_atlas.procrastinate.tasks import (
         GitHubRepoMetadata,
+        PackageReference,
         _defer_with_lock,
         _load_git_mapping,
         _purl_type_for_system,
         crawl_github_repo,
         crawl_package_deps,
+        crawl_package_registry,
         process_gitlog_batch,
         process_project,
         sync_opengrants,
@@ -121,7 +123,7 @@ async def test_process_gitlog_batch_calls_runtime(mocker: Any) -> None:
 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:
     mocker.patch(
-        "pg_atlas.procrastinate.tasks._list_org_repos",
+        "pg_atlas.procrastinate.tasks.list_org_repos",
         return_value=[
             GitHubRepoMetadata(
                 name="repo",
@@ -355,7 +357,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
 
 async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
     upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=42))
-    list_repos_mock = mocker.patch("pg_atlas.procrastinate.tasks._list_org_repos")
+    list_repos_mock = mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos")
     crawl_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
 
     await process_project(
@@ -372,3 +374,103 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
     assert upsert_mock.call_args.kwargs["category"] == "Education & Community"
     list_repos_mock.assert_not_called()
     crawl_mock.assert_not_called()
+
+
+async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_flutter(mocker: Any) -> None:
+    """Ensure Flutter package detection defers and executes DART registry crawl."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system="DART", name="stellar_flutter_sdk")],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
+
+    fake_result = mocker.Mock(packages_processed=1, errors=[])
+    fake_crawler = mocker.Mock()
+    fake_crawler.crawl_and_persist = mocker.AsyncMock(return_value=fake_result)
+    build_crawler_mock = mocker.patch("pg_atlas.procrastinate.tasks.build_registry_crawler", return_value=fake_crawler)
+
+    async def _defer_side_effect(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+        if task is crawl_package_registry:
+            await crawl_package_registry(**kwargs)
+
+        return True
+
+    defer_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks._defer_with_lock",
+        new=mocker.AsyncMock(side_effect=_defer_side_effect),
+    )
+
+    await crawl_github_repo(
+        owner="Soneso",
+        repo="stellar_flutter_sdk",
+        project_id=1,
+        packages=[],
+        adoption_stars=123,
+        adoption_forks=44,
+    )
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == "DART"
+    assert registry_defer_calls[0].kwargs["package_names"] == ["stellar_flutter_sdk"]
+
+    build_crawler_mock.assert_called_once()
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(
+        package_names=["stellar_flutter_sdk"],
+        source_repo_canonical_id="pkg:github/Soneso/stellar_flutter_sdk",
+    )
+
+
+async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: Any) -> None:
+    """Ensure Composer package detection defers and executes COMPOSER registry crawl."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system="COMPOSER", name="soneso/stellar-php-sdk")],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
+
+    fake_result = mocker.Mock(packages_processed=1, errors=[])
+    fake_crawler = mocker.Mock()
+    fake_crawler.crawl_and_persist = mocker.AsyncMock(return_value=fake_result)
+    build_crawler_mock = mocker.patch("pg_atlas.procrastinate.tasks.build_registry_crawler", return_value=fake_crawler)
+
+    async def _defer_side_effect(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+        if task is crawl_package_registry:
+            await crawl_package_registry(**kwargs)
+
+        return True
+
+    defer_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks._defer_with_lock",
+        new=mocker.AsyncMock(side_effect=_defer_side_effect),
+    )
+
+    await crawl_github_repo(
+        owner="Soneso",
+        repo="stellar-php-sdk",
+        project_id=1,
+        packages=[],
+        adoption_stars=123,
+        adoption_forks=44,
+    )
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == "COMPOSER"
+    assert registry_defer_calls[0].kwargs["package_names"] == ["soneso/stellar-php-sdk"]
+
+    build_crawler_mock.assert_called_once()
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(
+        package_names=["soneso/stellar-php-sdk"],
+        source_repo_canonical_id="pkg:github/Soneso/stellar-php-sdk",
+    )

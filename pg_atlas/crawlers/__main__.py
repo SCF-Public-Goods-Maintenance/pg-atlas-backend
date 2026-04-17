@@ -17,9 +17,10 @@ import asyncio
 import logging
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from pg_atlas.config import settings
+from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
+from pg_atlas.db_models.session import get_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     """Parse arguments, configure the crawler, and run the crawl."""
     parser = argparse.ArgumentParser(description="PG Atlas registry crawler")
-    parser.add_argument("registry", choices=["pubdev", "packagist"])
+    parser.add_argument("registry", choices=["pubdev", "packagist", "dart", "composer", "flutter", "php"])
     parser.add_argument("packages", nargs="+", help="Package names to crawl")
     args = parser.parse_args()
 
@@ -37,32 +38,30 @@ async def main() -> None:
         logger.error("PG_ATLAS_DATABASE_URL is required for crawling")
         raise SystemExit(1)
 
-    # Import crawlers here to avoid circular imports at module level
-    from pg_atlas.crawlers.packagist import PackagistCrawler
-    from pg_atlas.crawlers.pubdev import PubDevCrawler
+    session_factory = get_session_factory()
+    normalized_system = normalize_registry_system(args.registry)
+    if normalized_system is None:
+        logger.error(f"Unsupported registry argument: {args.registry}")
+        raise SystemExit(2)
 
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    try:
-        session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-            engine,
-            expire_on_commit=False,
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+        follow_redirects=True,
+        headers={"User-Agent": "pg-atlas-crawler/0.1"},
+    ) as client:
+        crawler = build_registry_crawler(
+            normalized_system,
+            client=client,
+            session_factory=session_factory,
+            rate_limit=settings.CRAWLER_RATE_LIMIT,
+            max_retries=settings.CRAWLER_MAX_RETRIES,
         )
 
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
-            follow_redirects=True,
-            headers={"User-Agent": "pg-atlas-crawler/0.1"},
-        ) as client:
-            crawler_cls = PubDevCrawler if args.registry == "pubdev" else PackagistCrawler
-            crawler = crawler_cls(
-                client=client,
-                session_factory=session_factory,
-                rate_limit=settings.CRAWLER_RATE_LIMIT,
-                max_retries=settings.CRAWLER_MAX_RETRIES,
-            )
-            result = await crawler.crawl_and_persist(args.packages)
-    finally:
-        await engine.dispose()
+        if crawler is None:
+            logger.error(f"No crawler available for system: {normalized_system}")
+            raise SystemExit(2)
+
+        result = await crawler.crawl_and_persist(args.packages)
 
     logger.info(
         f"Crawl complete: {result.packages_processed} packages, {result.vertices_upserted} vertices, "

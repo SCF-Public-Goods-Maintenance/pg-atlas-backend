@@ -10,12 +10,12 @@ Task hierarchy (queue names in brackets)::
     sync_opengrants  [opengrants]
       └─ process_project  [opengrants]
            └─ crawl_github_repo  [opengrants]
-                └─ crawl_package_deps  [package-deps]
+                 ├─ crawl_package_deps  [package-deps]
+                 └─ crawl_package_registry  [registry-crawl]
 
-The bootstrap workers are invoked sequentially per queue so that all
-``crawl_github_repo`` tasks are complete before ``crawl_package_deps`` begins.
-This guarantees that ``Repo`` vertices and their ``Project`` associations
-exist by the time the dependency crawl needs to check them.
+The bootstrap workers run ``package-deps`` and ``registry-crawl`` after
+``opengrants`` has drained so that all ``Repo`` vertices and ``Project``
+associations exist by the time downstream crawls execute.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -33,6 +33,8 @@ import yaml
 from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import select
 
+from pg_atlas.config import settings
+from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.repo_vertex import RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
@@ -70,6 +72,9 @@ from pg_atlas.procrastinate.upserts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+REGISTRY_CRAWL_SYSTEMS = frozenset({"DART", "COMPOSER"})
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +521,96 @@ async def crawl_github_repo(
             source_repo_canonical_id=repo_canonical_id,
         )
 
+    registry_packages_by_system: dict[str, set[str]] = {}
+    unsupported_registry_purls: dict[str, set[str]] = {}
+
+    for pkg in packages_to_process:
+        normalized_system = normalize_registry_system(pkg.system)
+        if normalized_system is None:
+            purl = _purl_for_package(pkg.system, pkg.name)
+            unsupported_registry_purls.setdefault(pkg.system.upper(), set()).add(purl)
+            continue
+
+        registry_packages_by_system.setdefault(normalized_system, set()).add(pkg.name)
+
+    deferred_registry_tasks = 0
+    for system, package_names in registry_packages_by_system.items():
+        if system not in REGISTRY_CRAWL_SYSTEMS:
+            continue
+
+        enqueued = await _defer_with_lock(
+            crawl_package_registry,
+            queueing_lock=f"registry:{repo_canonical_id}:{system}",
+            system=system,
+            package_names=sorted(package_names),
+            source_repo_canonical_id=repo_canonical_id,
+        )
+        if enqueued:
+            deferred_registry_tasks += 1
+
+    for system, purls in sorted(unsupported_registry_purls.items()):
+        joined_purls = " ".join(sorted(purls))
+        logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
+
     logger.info(
         f"crawl_github_repo: {owner}/{repo} - {len(packages_to_process)} packages, "
-        f"deferred {len(packages_to_process)} crawl_package_deps tasks"
+        f"deferred {len(packages_to_process)} crawl_package_deps tasks, "
+        f"deferred {deferred_registry_tasks} crawl_package_registry tasks"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task: crawl_package_registry
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="registry-crawl")
+async def crawl_package_registry(
+    system: str,
+    package_names: list[str],
+    source_repo_canonical_id: str,
+) -> None:
+    """
+    Crawl direct registry signals and persist package-level download metadata.
+
+    This task is intentionally separate from deps.dev dependency crawling.
+    It fetches package signals from source registries and records per-package
+    download counts under the source repo metadata map.
+    """
+
+    normalized_system = normalize_registry_system(system)
+    if normalized_system is None:
+        logger.warning(f"crawl_package_registry: unsupported system={system}")
+
+        return
+
+    session_factory = get_session_factory()
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+        follow_redirects=True,
+        headers={"User-Agent": "pg-atlas-crawler/0.1"},
+    ) as client:
+        crawler = build_registry_crawler(
+            normalized_system,
+            client=client,
+            session_factory=session_factory,
+            rate_limit=settings.CRAWLER_RATE_LIMIT,
+            max_retries=settings.CRAWLER_MAX_RETRIES,
+        )
+
+        if crawler is None:
+            logger.warning(f"crawl_package_registry: no crawler available for system={normalized_system}")
+
+            return
+
+        result = await crawler.crawl_and_persist(
+            package_names=package_names,
+            source_repo_canonical_id=source_repo_canonical_id,
+        )
+
+    logger.info(
+        f"crawl_package_registry: system={normalized_system} packages={len(package_names)} "
+        f"processed={result.packages_processed} errors={len(result.errors)}"
     )
 
 
@@ -663,6 +755,20 @@ def _purl_type_for_system(system: str) -> str | None:
         "GO": "golang",
         "RUBYGEMS": "gem",
         "NUGET": "nuget",
+        "DART": "pub",
+        "COMPOSER": "composer",
     }
 
     return _map.get(system.upper())
+
+
+def _purl_for_package(system: str, name: str) -> str:
+    """
+    Build a best-effort PURL for one system/package pair.
+    """
+
+    purl_type = _purl_type_for_system(system)
+    if purl_type is None:
+        return name
+
+    return f"pkg:{purl_type}/{name}"

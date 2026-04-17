@@ -34,8 +34,10 @@ from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.instruments.tee import run_with_tee
 from pg_atlas.metrics.adoption import (
     RepoAdoptionSignals,
+    aggregate_repo_downloads,
     compute_project_adoption_scores,
     compute_repo_adoption_composites,
+    downloads_by_purl_from_metadata,
 )
 
 logging.basicConfig(
@@ -70,16 +72,22 @@ async def materialize_adoption_scores(session: AsyncSession) -> AdoptionMaterial
     started_at = time.perf_counter()
 
     repos = (await session.execute(select(Repo).order_by(Repo.id))).scalars().all()
-    repo_snapshots = [
-        RepoAdoptionSignals(
-            canonical_id=repo.canonical_id,
-            project_id=repo.project_id,
-            adoption_downloads=repo.adoption_downloads,
-            adoption_stars=repo.adoption_stars,
-            adoption_forks=repo.adoption_forks,
+    repo_snapshots: list[RepoAdoptionSignals] = []
+    for repo in repos:
+        downloads_by_purl = downloads_by_purl_from_metadata(repo.repo_metadata, repo_canonical_id=repo.canonical_id)
+        aggregated_downloads = aggregate_repo_downloads(downloads_by_purl)
+        repo.adoption_downloads = aggregated_downloads
+
+        repo_snapshots.append(
+            RepoAdoptionSignals(
+                canonical_id=repo.canonical_id,
+                project_id=repo.project_id,
+                adoption_downloads=aggregated_downloads,
+                adoption_stars=repo.adoption_stars,
+                adoption_forks=repo.adoption_forks,
+            )
         )
-        for repo in repos
-    ]
+
     repo_composites = compute_repo_adoption_composites(repo_snapshots)
     project_scores = compute_project_adoption_scores(repo_snapshots, repo_composites)
 

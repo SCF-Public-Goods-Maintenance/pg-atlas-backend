@@ -19,17 +19,21 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TYPE_CHECKING
+from typing import Final
+
+from pydantic import StrictInt, TypeAdapter, ValidationError
 
 from pg_atlas.metrics.criticality import compute_percentile_ranks
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-
 PERCENTILE_QUANTUM = Decimal("0.01")
+ADOPTION_DOWNLOADS_BY_PURL_KEY = "adoption_downloads_by_purl"
+_DOWNLOADS_BY_PURL_ADAPTER: Final[TypeAdapter[dict[str, int]]] = TypeAdapter(dict[str, StrictInt])
+
+logger = logging.getLogger(__name__)
 
 
 def _quantize_score(value: Decimal) -> Decimal:
@@ -51,6 +55,76 @@ class RepoAdoptionSignals:
     adoption_downloads: int | None = None
     adoption_stars: int | None = None
     adoption_forks: int | None = None
+
+
+def aggregate_repo_downloads(
+    adoption_downloads_by_purl: Mapping[str, int] | None,
+) -> int | None:
+    """
+    Resolve one repo's effective downloads from per-PURL metadata only.
+
+    Materialization persists this sum into ``Repo.adoption_downloads`` so
+    percentile ranking runs on reduced scalar values.
+    """
+
+    if not adoption_downloads_by_purl:
+        return None
+
+    return sum(adoption_downloads_by_purl.values())
+
+
+def downloads_by_purl_from_metadata(
+    repo_metadata: Mapping[str, object] | None,
+    *,
+    repo_canonical_id: str | None = None,
+) -> dict[str, int] | None:
+    """
+    Extract and validate the per-PURL downloads map from repo metadata.
+
+    Invalid shapes are skipped and logged instead of silently ignored.
+    """
+
+    if repo_metadata is None:
+        return None
+
+    raw_downloads_by_purl = repo_metadata.get(ADOPTION_DOWNLOADS_BY_PURL_KEY)
+    if raw_downloads_by_purl is None:
+        return None
+
+    try:
+        parsed_downloads_by_purl = _DOWNLOADS_BY_PURL_ADAPTER.validate_python(raw_downloads_by_purl)
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid %s for repo %s: validation_errors=%d",
+            ADOPTION_DOWNLOADS_BY_PURL_KEY,
+            repo_canonical_id or "<unknown>",
+            exc.error_count(),
+        )
+        return None
+
+    return parsed_downloads_by_purl if parsed_downloads_by_purl else None
+
+
+def merge_download_into_repo_metadata(
+    repo_metadata: Mapping[str, object] | None,
+    package_purl: str,
+    downloads: int,
+    *,
+    repo_canonical_id: str | None = None,
+) -> dict[str, object]:
+    """
+    Upsert one package download count into repo metadata.
+
+    The ``adoption_downloads_by_purl`` map is the crawler write target; scalar
+    reduction happens later during adoption materialization.
+    """
+
+    metadata: dict[str, object] = dict(repo_metadata or {})
+    existing_by_purl = downloads_by_purl_from_metadata(metadata, repo_canonical_id=repo_canonical_id) or {}
+    existing_by_purl[package_purl] = downloads
+    metadata[ADOPTION_DOWNLOADS_BY_PURL_KEY] = existing_by_purl
+
+    return metadata
 
 
 def compute_repo_adoption_composites(repos: Sequence[RepoAdoptionSignals]) -> dict[str, Decimal]:

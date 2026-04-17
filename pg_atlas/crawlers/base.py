@@ -27,6 +27,7 @@ from pg_atlas.db_models.base import EdgeConfidence
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import get_vertex
+from pg_atlas.metrics.adoption import merge_download_into_repo_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,12 @@ async def _upsert_vertex(
             await session.flush()
     except IntegrityError:
         session.expunge(ext)
-        ext = await get_vertex(session, canonical_id)
+        existing = await get_vertex(session, canonical_id)
+        if existing is not None:
+            return existing
+
+        raise
+
     return ext
 
 
@@ -271,7 +277,11 @@ class RegistryCrawler(ABC):
             raise last_exc
         raise RuntimeError(f"Exhausted retries for {url}")
 
-    async def crawl_and_persist(self, package_names: list[str]) -> CrawlResult:
+    async def crawl_and_persist(
+        self,
+        package_names: list[str],
+        source_repo_canonical_id: str | None = None,
+    ) -> CrawlResult:
         """
         Crawl a list of packages and persist vertices/edges to the database.
 
@@ -284,7 +294,12 @@ class RegistryCrawler(ABC):
         for i, package_name in enumerate(package_names):
             async with self.session_factory() as session:
                 try:
-                    await self._process_package(session, package_name, result)
+                    await self._process_package(
+                        session,
+                        package_name,
+                        result,
+                        source_repo_canonical_id=source_repo_canonical_id,
+                    )
                     await session.commit()
                     result.packages_processed += 1
                 except Exception as exc:
@@ -303,6 +318,7 @@ class RegistryCrawler(ABC):
         session: AsyncSession,
         package_name: str,
         result: CrawlResult,
+        source_repo_canonical_id: str | None,
     ) -> None:
         """
         Fetch, upsert, and create edges for a single package.
@@ -321,15 +337,17 @@ class RegistryCrawler(ABC):
         )
         result.vertices_upserted += 1
 
-        # Write adoption data only if this is a Repo (Rule 1)
-        if isinstance(vertex, Repo):
-            if crawled.downloads is not None:
-                vertex.adoption_downloads = crawled.downloads
-            if crawled.stars is not None:
-                vertex.adoption_stars = crawled.stars
-            if crawled.metadata:
-                vertex.repo_metadata = crawled.metadata
-            await session.flush()
+        if source_repo_canonical_id and crawled.downloads is not None:
+            source_repo = await session.scalar(select(Repo).where(Repo.canonical_id == source_repo_canonical_id))
+
+            if source_repo is not None:
+                source_repo.repo_metadata = merge_download_into_repo_metadata(
+                    source_repo.repo_metadata,
+                    package_purl=crawled.canonical_id,
+                    downloads=crawled.downloads,
+                    repo_canonical_id=source_repo.canonical_id,
+                )
+                await session.flush()
 
         # Forward dependencies: this package depends on each dep
         for dep in crawled.dependencies:

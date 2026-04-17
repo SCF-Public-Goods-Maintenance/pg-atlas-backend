@@ -33,6 +33,16 @@ class SeededAdoptionFixture:
     empty_project_id: int
 
 
+@dataclass(frozen=True)
+class SeededMonorepoDownloadsFixture:
+    """
+    Hold seeded IDs for monorepo download aggregation tests.
+    """
+
+    project_id: int
+    repo_id: int
+
+
 @pytest.fixture
 async def rollback_db_session(db_session: AsyncSession) -> AsyncGenerator[AsyncSession, None]:
     """
@@ -113,6 +123,11 @@ async def _seed_adoption_fixture(session: AsyncSession) -> SeededAdoptionFixture
                 project_id=project_a.id,
                 adoption_stars=20,
                 adoption_downloads=100,
+                repo_metadata={
+                    "adoption_downloads_by_purl": {
+                        f"pkg:pypi/adoption-a2-{suffix}": 100,
+                    }
+                },
             ),
             Repo(
                 canonical_id=f"pkg:github/test/adoption-b1-{suffix}",
@@ -122,6 +137,11 @@ async def _seed_adoption_fixture(session: AsyncSession) -> SeededAdoptionFixture
                 project_id=project_b.id,
                 adoption_forks=6,
                 adoption_downloads=300,
+                repo_metadata={
+                    "adoption_downloads_by_purl": {
+                        f"pkg:pypi/adoption-b1-{suffix}": 300,
+                    }
+                },
             ),
             Repo(
                 canonical_id=f"pkg:github/test/adoption-c1-{suffix}",
@@ -158,6 +178,42 @@ async def _get_project(session: AsyncSession, project_id: int) -> Project:
     assert project is not None
 
     return project
+
+
+async def _seed_monorepo_download_fixture(session: AsyncSession) -> SeededMonorepoDownloadsFixture:
+    """
+    Insert one repo with per-PURL download metadata for aggregation tests.
+    """
+
+    suffix = uuid4().hex[:8]
+
+    project = Project(
+        canonical_id=f"daoip-5:stellar:project:adoption-monorepo-{suffix}",
+        display_name=f"Adoption Monorepo {suffix}",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    session.add(project)
+    await session.flush()
+
+    repo = Repo(
+        canonical_id=f"pkg:github/test/adoption-monorepo-{suffix}",
+        display_name=f"adoption-monorepo-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+        adoption_downloads=5,
+        repo_metadata={
+            "adoption_downloads_by_purl": {
+                "pkg:pub/foo": 100,
+                "pkg:pub/bar": 200,
+            }
+        },
+    )
+    session.add(repo)
+    await session.flush()
+
+    return SeededMonorepoDownloadsFixture(project_id=project.id, repo_id=repo.id)
 
 
 async def test_materialize_adoption_scores_persists_project_scores(
@@ -218,3 +274,23 @@ async def test_materialize_adoption_scores_is_idempotent(
     assert project_b.adoption_score == Decimal("50.00")
     assert project_c.adoption_score is None
     assert empty_project.adoption_score is None
+
+
+async def test_materialize_adoption_scores_updates_repo_downloads_from_metadata(
+    rollback_db_session: AsyncSession,
+) -> None:
+    """
+    Materialization should persist summed per-PURL downloads onto Repo rows.
+    """
+
+    seeded = await _seed_monorepo_download_fixture(rollback_db_session)
+
+    await materialize_adoption_scores(rollback_db_session)
+    repo = await rollback_db_session.get(Repo, seeded.repo_id)
+    assert repo is not None
+    assert repo.adoption_downloads == 300
+
+    await materialize_adoption_scores(rollback_db_session)
+    repo = await rollback_db_session.get(Repo, seeded.repo_id)
+    assert repo is not None
+    assert repo.adoption_downloads == 300
