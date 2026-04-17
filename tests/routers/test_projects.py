@@ -302,3 +302,73 @@ async def test_project_depends_on_excludes_self_refs(
 
     for dep in resp.json():
         assert dep["project"]["canonical_id"] != cid
+
+
+# ---------------------------------------------------------------------------
+# Sort tests
+# ---------------------------------------------------------------------------
+
+
+async def test_list_projects_sort_by_display_name(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects?sort=display_name:asc returns items in alphabetical order."""
+
+    client, seed = seeded_client
+    tag = seed["project_a"].canonical_id.split("-")[-1]
+    resp = await client.get("/projects", params={"sort": "display_name:asc", "search": tag})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    names = [item["display_name"] for item in data["items"]]
+    assert names == sorted(names)
+
+
+async def test_list_projects_sort_desc(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects?sort=criticality_score:desc puts higher scores first."""
+
+    client, seed = seeded_client
+    tag = seed["project_a"].canonical_id.split("-")[-1]
+    resp = await client.get("/projects", params={"sort": "criticality_score:desc", "search": tag})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    scores = [item["criticality_score"] for item in data["items"] if item["criticality_score"] is not None]
+    assert scores == sorted(scores, reverse=True)
+
+
+async def test_list_projects_sort_invalid_field_returns_422(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects?sort=nonexistent_field:asc returns 422."""
+
+    client, _ = seeded_client
+    resp = await client.get("/projects", params={"sort": "nonexistent_field:asc"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Category filter tests
+# ---------------------------------------------------------------------------
+
+
+async def test_list_projects_filter_by_category(
+    seeded_client: tuple[AsyncClient, dict[str, Any]],
+) -> None:
+    """GET /projects?category=infrastructure returns only matching projects."""
+
+    client, seed = seeded_client
+    resp = await client.get("/projects", params={"category": "infrastructure"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["total"] >= 1
+    for item in data["items"]:
+        assert item["category"] == "infrastructure"
+
+    # Alpha is infrastructure, Beta is defi.
+    cids = [item["canonical_id"] for item in data["items"]]
+    assert seed["project_a"].canonical_id in cids
+    assert seed["project_b"].canonical_id not in cids

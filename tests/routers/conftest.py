@@ -152,6 +152,9 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             project_type=ProjectType.scf_project,
             activity_status=ActivityStatus.discontinued,
             category="defi",
+            criticality_score=40,
+            pony_factor=1,
+            adoption_score=15.0,
         )
 
         seed_session.add_all([project_a, project_b])
@@ -166,6 +169,8 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             repo_url=f"https://github.com/alpha-org/repo-a1-{tag}",
             latest_commit_date=_now(),
             adoption_stars=42,
+            criticality_score=90,
+            pony_factor=2,
         )
         repo_a2 = Repo(
             canonical_id=f"pkg:github/alpha-org/repo-a2-{tag}",
@@ -182,6 +187,9 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             latest_version="0.1.0",
             project_id=project_b.id,
             repo_url=f"https://github.com/beta-org/repo-b1-{tag}",
+            adoption_stars=10,
+            criticality_score=30,
+            pony_factor=1,
         )
         ext_repo = ExternalRepo(
             canonical_id=f"pkg:npm/test-ext-{tag}",
