@@ -10,6 +10,7 @@ The core helper mutates the provided SQLAlchemy session but does not commit.
 Usage::
 
     uv run python -m pg_atlas.metrics.materialize_adoption
+    uv run python -m pg_atlas.metrics.materialize_adoption --tee=adoption.log
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -17,10 +18,12 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,12 +31,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.instruments.tee import run_with_tee
 from pg_atlas.metrics.adoption import (
     RepoAdoptionSignals,
     compute_project_adoption_scores,
     compute_repo_adoption_composites,
 )
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -107,11 +115,6 @@ async def main() -> None:
     Run one offline adoption materialization pass and commit the results.
     """
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    )
-
     factory = get_session_factory()
     async with factory() as session:
         stats = await materialize_adoption_scores(session)
@@ -121,10 +124,40 @@ async def main() -> None:
         "project adoption materialization finished: "
         f"repos_seen={stats.repos_seen} "
         f"repo_composites_computed={stats.repo_composites_computed} "
+        f"projects_seen={stats.projects_seen} "
         f"projects_scored={stats.projects_scored} "
         f"duration_seconds={stats.duration_seconds:.3f}"
     )
 
 
+def _build_parser() -> argparse.ArgumentParser:
+    """
+    Build the CLI parser for adoption materialization.
+    """
+
+    parser = argparse.ArgumentParser(description="Materialize project adoption scores.")
+    parser.add_argument(
+        "--tee",
+        type=Path,
+        default=None,
+        help="Optional path to mirror stdout/stderr logs while preserving console output.",
+    )
+
+    return parser
+
+
+def entrypoint() -> None:
+    """
+    Parse CLI arguments and run the materialization pass.
+    """
+
+    args = _build_parser().parse_args()
+
+    def _run() -> None:
+        asyncio.run(main())
+
+    run_with_tee(args.tee, _run)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    entrypoint()

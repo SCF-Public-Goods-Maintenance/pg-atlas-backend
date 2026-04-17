@@ -7,6 +7,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pg_atlas.metrics.adoption import (
     RepoAdoptionSignals,
     compute_project_adoption_scores,
@@ -29,9 +31,9 @@ def test_compute_repo_adoption_composites_uses_percentiles_and_excludes_nulls() 
     composites = compute_repo_adoption_composites(repos)
 
     assert composites == {
-        "repo-a1": 0.0,
-        "repo-a2": 25.0,
-        "repo-b1": 50.0,
+        "repo-a1": Decimal("0.00"),
+        "repo-a2": Decimal("25.00"),
+        "repo-b1": Decimal("50.00"),
     }
 
 
@@ -48,9 +50,9 @@ def test_compute_repo_adoption_composites_gives_ties_the_same_percentile() -> No
 
     composites = compute_repo_adoption_composites(repos)
 
-    assert composites["repo-a"] == 0.0
-    assert composites["repo-b"] == 0.0
-    assert abs(composites["repo-c"] - (200.0 / 3.0)) < 1e-12
+    assert composites["repo-a"] == Decimal("0.00")
+    assert composites["repo-b"] == Decimal("0.00")
+    assert composites["repo-c"] == Decimal("66.67")
 
 
 def test_compute_project_adoption_scores_averages_child_repo_composites_only() -> None:
@@ -66,15 +68,15 @@ def test_compute_project_adoption_scores_averages_child_repo_composites_only() -
         RepoAdoptionSignals(canonical_id="orphan", project_id=None),
     ]
     repo_composites = {
-        "repo-a1": 0.0,
-        "repo-a2": 25.0,
-        "repo-b1": 50.0,
-        "orphan": 75.0,
+        "repo-a1": Decimal("0.00"),
+        "repo-a2": Decimal("25.00"),
+        "repo-b1": Decimal("50.00"),
+        "orphan": Decimal("75.00"),
     }
 
     project_scores = compute_project_adoption_scores(repos, repo_composites)
 
     assert project_scores == {
-        1: 12.5,
-        2: 50.0,
+        1: Decimal("12.50"),
+        2: Decimal("50.00"),
     }

@@ -180,7 +180,7 @@ async def get_project(
         git_owner_url=project.git_owner_url,
         pony_factor=project.pony_factor,
         criticality_score=project.criticality_score,
-        adoption_score=project.adoption_score,
+        adoption_score=float(project.adoption_score) if project.adoption_score is not None else None,
         updated_at=project.updated_at,
         project_id=project.id,
         active_contributors_30d=active_30d,

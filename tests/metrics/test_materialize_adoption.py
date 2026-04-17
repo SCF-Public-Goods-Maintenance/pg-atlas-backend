@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -81,14 +82,14 @@ async def _seed_adoption_fixture(session: AsyncSession) -> SeededAdoptionFixture
         display_name=f"Adoption C {suffix}",
         project_type=ProjectType.scf_project,
         activity_status=ActivityStatus.live,
-        adoption_score=99.0,
+        adoption_score=Decimal("99.00"),
     )
     empty_project = Project(
         canonical_id=f"daoip-5:stellar:project:adoption-empty-{suffix}",
         display_name=f"Adoption Empty {suffix}",
         project_type=ProjectType.scf_project,
         activity_status=ActivityStatus.live,
-        adoption_score=88.0,
+        adoption_score=Decimal("88.00"),
     )
     session.add_all([project_a, project_b, project_c, empty_project])
     await session.flush()
@@ -181,8 +182,8 @@ async def test_materialize_adoption_scores_persists_project_scores(
     project_c = await _get_project(rollback_db_session, seeded.project_c_id)
     empty_project = await _get_project(rollback_db_session, seeded.empty_project_id)
 
-    assert project_a.adoption_score == 12.5
-    assert project_b.adoption_score == 50.0
+    assert project_a.adoption_score == Decimal("12.50")
+    assert project_b.adoption_score == Decimal("50.00")
     assert project_c.adoption_score is None
     assert empty_project.adoption_score is None
 
@@ -202,8 +203,8 @@ async def test_materialize_adoption_scores_is_idempotent(
     project_c = await _get_project(rollback_db_session, seeded.project_c_id)
     empty_project = await _get_project(rollback_db_session, seeded.empty_project_id)
 
-    assert project_a.adoption_score == 12.5
-    assert project_b.adoption_score == 50.0
+    assert project_a.adoption_score == Decimal("12.50")
+    assert project_b.adoption_score == Decimal("50.00")
     assert project_c.adoption_score is None
     assert empty_project.adoption_score is None
 
@@ -213,7 +214,7 @@ async def test_materialize_adoption_scores_is_idempotent(
     project_c = await _get_project(rollback_db_session, seeded.project_c_id)
     empty_project = await _get_project(rollback_db_session, seeded.empty_project_id)
 
-    assert project_a.adoption_score == 12.5
-    assert project_b.adoption_score == 50.0
+    assert project_a.adoption_score == Decimal("12.50")
+    assert project_b.adoption_score == Decimal("50.00")
     assert project_c.adoption_score is None
     assert empty_project.adoption_score is None

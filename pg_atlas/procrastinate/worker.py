@@ -26,7 +26,7 @@ import argparse
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import psycopg
@@ -39,6 +39,17 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _run_with_optional_tee(tee_path: Path | None, run: Callable[[], None]) -> None:
+    """
+    Backward-compatible wrapper for worker tee execution.
+
+    Tests and older call sites still import this helper from the worker module,
+    while the actual implementation now lives in ``pg_atlas.instruments.tee``.
+    """
+
+    run_with_tee(tee_path, run)
 
 
 def _queue_status_counts(queue_name: str) -> Counter[str]:
@@ -227,7 +238,7 @@ def main() -> None:
             )
         )
 
-    run_with_tee(args.tee, _run_worker)
+    _run_with_optional_tee(args.tee, _run_worker)
 
 
 if __name__ == "__main__":

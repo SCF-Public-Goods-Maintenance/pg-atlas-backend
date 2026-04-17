@@ -20,12 +20,24 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 
 from pg_atlas.metrics.criticality import compute_percentile_ranks
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+
+
+PERCENTILE_QUANTUM = Decimal("0.01")
+
+
+def _quantize_score(value: Decimal) -> Decimal:
+    """
+    Quantize one adoption score to two decimal places.
+    """
+
+    return value.quantize(PERCENTILE_QUANTUM, rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
@@ -41,7 +53,7 @@ class RepoAdoptionSignals:
     adoption_forks: int | None = None
 
 
-def compute_repo_adoption_composites(repos: Sequence[RepoAdoptionSignals]) -> dict[str, float]:
+def compute_repo_adoption_composites(repos: Sequence[RepoAdoptionSignals]) -> dict[str, Decimal]:
     """
     Compute transient repo-level adoption composites from available signals.
 
@@ -60,24 +72,24 @@ def compute_repo_adoption_composites(repos: Sequence[RepoAdoptionSignals]) -> di
         {repo.canonical_id: repo.adoption_forks for repo in repos if repo.adoption_forks is not None}
     )
 
-    composites: dict[str, float] = {}
+    composites: dict[str, Decimal] = {}
     for repo in repos:
-        signal_percentiles: list[float] = []
+        signal_percentiles: list[Decimal] = []
         for signal_scores in (downloads, stars, forks):
             percentile = signal_scores.get(repo.canonical_id)
             if percentile is not None:
-                signal_percentiles.append(percentile)
+                signal_percentiles.append(_quantize_score(Decimal(str(percentile))))
 
         if signal_percentiles:
-            composites[repo.canonical_id] = sum(signal_percentiles) / len(signal_percentiles)
+            composites[repo.canonical_id] = _quantize_score(sum(signal_percentiles) / Decimal(len(signal_percentiles)))
 
     return composites
 
 
 def compute_project_adoption_scores(
     repos: Sequence[RepoAdoptionSignals],
-    repo_composites: Mapping[str, float],
-) -> dict[int, float]:
+    repo_composites: Mapping[str, Decimal],
+) -> dict[int, Decimal]:
     """
     Aggregate project adoption scores from child repo composites.
 
@@ -85,7 +97,7 @@ def compute_project_adoption_scores(
     contribute to project-level writeback.
     """
 
-    project_values: dict[int, list[float]] = {}
+    project_values: dict[int, list[Decimal]] = {}
     for repo in repos:
         if repo.project_id is None:
             continue
@@ -96,4 +108,4 @@ def compute_project_adoption_scores(
 
         project_values.setdefault(repo.project_id, []).append(composite)
 
-    return {project_id: sum(values) / len(values) for project_id, values in project_values.items()}
+    return {project_id: _quantize_score(sum(values) / Decimal(len(values))) for project_id, values in project_values.items()}
