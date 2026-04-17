@@ -143,14 +143,6 @@ async def list_projects(
         str | None,
         Query(max_length=128, description="Filter by project category (exact match)."),
     ] = None,
-    round: Annotated[
-        str | None,
-        Query(
-            max_length=64,
-            alias="round",
-            description="Filter to projects that participated in a specific SCF round (e.g. 'SCF-1').",
-        ),
-    ] = None,
 ) -> PaginatedResponse[ProjectSummary]:
     """
     Paginated list of SCF-funded projects with optional filters and sorting.
@@ -160,7 +152,6 @@ async def list_projects(
     - **search**: case-insensitive substring match on `display_name`.
     - **sort**: comma-separated `field:direction` pairs for server-side ordering.
     - **category**: filter by exact project category string.
-    - **round**: filter to projects with an SCF submission in the given round.
     - Default order is `canonical_id` for deterministic pagination.
     """
     base = select(Project)
@@ -176,14 +167,6 @@ async def list_projects(
 
     if category is not None:
         base = base.where(Project.category == category)
-
-    if round is not None:
-        # JSONB containment: metadata->'scf_submissions' @> '[{"round": "..."}]'
-        base = base.where(
-            Project.project_metadata["scf_submissions"]
-            .astext.cast(JSONB)
-            .op("@>")(cast(json.dumps([{"round": round}]), JSONB))
-        )
 
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()

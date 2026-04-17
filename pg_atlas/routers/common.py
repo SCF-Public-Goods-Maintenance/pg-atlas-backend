@@ -114,13 +114,13 @@ def parse_sort_params(
 
         if field_name not in allowed_fields:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid sort field: '{field_name}'. Allowed: {sorted(allowed_fields.keys())}",
             )
 
         if direction not in ("asc", "desc"):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid sort direction: '{direction}'. Must be 'asc' or 'desc'.",
             )
 
@@ -128,13 +128,16 @@ def parse_sort_params(
         dir_fn = asc if direction == "asc" else desc
 
         # activity_status: use CASE-based ordering instead of raw enum text.
+        # Searched CASE (explicit comparisons) is more robust for native Enums in PG.
         if field_name == "activity_status":
             status_expr = case(
-                _ACTIVITY_STATUS_ORDER,
-                value=col,
-                else_=None,
+                (col == ActivityStatus.live, 4),
+                (col == ActivityStatus.in_dev, 3),
+                (col == ActivityStatus.discontinued, 2),
+                (col == ActivityStatus.non_responsive, 1),
+                else_=0,
             )
-            clauses.append(nulls_last(dir_fn(status_expr)))
+            clauses.append(dir_fn(status_expr))
             continue
 
         # Nullable metric columns: NULLS LAST to prevent nulls burying real data.

@@ -355,39 +355,3 @@ async def test_list_projects_filter_by_category(
     cids = [item["canonical_id"] for item in data["items"]]
     assert seed["project_a"].canonical_id in cids
     assert seed["project_b"].canonical_id not in cids
-
-
-# ---------------------------------------------------------------------------
-# Round filter tests
-# ---------------------------------------------------------------------------
-
-
-async def test_list_projects_filter_by_round(
-    seeded_client: tuple[AsyncClient, dict[str, Any]],
-) -> None:
-    """GET /projects?round=SCF-1 returns only projects with that round in scf_submissions."""
-
-    client, seed = seeded_client
-    resp = await client.get("/projects", params={"round": "SCF-1"})
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert data["total"] >= 1
-    cids = [item["canonical_id"] for item in data["items"]]
-    assert seed["project_a"].canonical_id in cids
-    # Beta has no scf_submissions metadata at all.
-    assert seed["project_b"].canonical_id not in cids
-
-
-async def test_list_projects_filter_by_round_no_match(
-    seeded_client: tuple[AsyncClient, dict[str, Any]],
-) -> None:
-    """GET /projects?round=NONEXISTENT returns empty results when no projects match."""
-
-    client, _ = seeded_client
-    resp = await client.get("/projects", params={"round": "NONEXISTENT-ROUND-XYZ"})
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert data["total"] == 0
-    assert data["items"] == []
