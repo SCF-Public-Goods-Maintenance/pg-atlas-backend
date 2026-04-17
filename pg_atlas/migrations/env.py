@@ -16,18 +16,22 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import asyncio
+import logging
 from logging.config import fileConfig
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from alembic import context
-from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import pool
-from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import pg_atlas.db_models  # noqa: F401 — registers all ORM models on PgBase.metadata  # type: ignore[reportUnusedImport]
 from pg_atlas.config import settings
 from pg_atlas.db_models.base import HexBinary, PgBase
+
+if TYPE_CHECKING:
+    from alembic.autogenerate.api import AutogenContext
+    from alembic.runtime.environment import NameFilterParentNames, NameFilterType
+    from sqlalchemy.engine import Connection
 
 # Alembic Config — provides access to alembic.ini values.
 config = context.config
@@ -39,10 +43,29 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+logger = logging.getLogger(__name__)
+
 # All ORM models are registered on PgBase.metadata by the import above.
 # Add new model modules to pg_atlas/db_models/__init__.py to include them in
 # autogenerate diff detection.
 target_metadata = PgBase.metadata
+
+
+def include_name(name: str | None, type_: NameFilterType, parent_names: NameFilterParentNames) -> bool:
+    """Automigrate only tables that are in the metadata; explicitly exclude all Procrastinate tables."""
+    if name and type_ == "table":
+        table_in_metadata = name in target_metadata.tables
+        starts_with_procrastinate = name.startswith("procrastinate_")
+        if table_in_metadata and starts_with_procrastinate:
+            logger.error(f"Registered table {name} starts with prefix 'procrastinate_'")
+            return False
+
+        elif not table_in_metadata and not starts_with_procrastinate:
+            logger.error(f"Unexpected table {name} found in the DB.")
+
+        return table_in_metadata
+    else:
+        return True
 
 
 def render_item(type_: str, obj: Any, autogen_context: AutogenContext) -> str | Literal[False]:
@@ -75,6 +98,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
         render_item=render_item,
         render_as_batch=False,
     )
@@ -88,6 +112,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_name=include_name,
         render_item=render_item,
     )
 
