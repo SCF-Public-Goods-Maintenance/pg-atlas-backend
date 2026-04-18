@@ -49,8 +49,9 @@ class PackagistCrawler(RegistryCrawler):
     """
     Crawler for Packagist (PHP/Composer package registry).
 
-    ``adoption_downloads`` is set to the last-30-days (monthly) download count,
-    matching the spec definition.  All-time total is stored in metadata.
+    ``downloads_30d`` is captured on ``CrawledPackage`` from Packagist monthly
+    download counts. The base crawler persists that value under the source
+    repo metadata PURL map (not directly to scalar adoption columns).
     """
 
     REGISTRY = "packagist.org"

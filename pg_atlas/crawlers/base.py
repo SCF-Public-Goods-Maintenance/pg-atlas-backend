@@ -100,6 +100,15 @@ class RegistryCrawler(ABC):
     Concrete subclasses implement ``fetch_package`` and ``fetch_dependents`` for
     their specific registry API.  The shared ``crawl_and_persist`` method handles
     DB writes, transaction boundaries, and rate limiting.
+
+    Current write contract:
+    - crawler package canonical IDs stay as package PURLs
+    - a package must resolve to an existing source ``Repo`` by repository URL
+        (or release-PURL fallback)
+    - download counts are written only to
+        ``Repo.repo_metadata['adoption_downloads_by_purl']``
+    - scalar ``Repo.adoption_downloads`` is reduced and persisted later by
+        adoption materialization.
     """
 
     def __init__(
@@ -183,11 +192,14 @@ class RegistryCrawler(ABC):
         package_names: list[str],
     ) -> CrawlResult:
         """
-        Crawl a list of packages and persist vertices/edges to the database.
+        Crawl packages and persist source-repo edges + metadata.
 
         Each package is processed in its own transaction (commit per-package).
         Failures are logged and collected in ``CrawlResult.errors`` — the crawl
         continues with the remaining packages.
+
+        A package is counted as processed only if its source ``Repo`` can be
+        resolved and all writes commit successfully.
         """
         result = CrawlResult()
 
@@ -219,7 +231,11 @@ class RegistryCrawler(ABC):
         result: CrawlResult,
     ) -> None:
         """
-        Merge package metadata into the source Repo, and create dependency edges.
+        Merge package metadata into the source Repo and write dependency edges.
+
+        The package vertex itself is not promoted to ``Repo`` in this path.
+        Instead, dependency graph edges are anchored on the resolved source
+        ``Repo`` vertex.
 
         This runs inside a session context managed by ``crawl_and_persist``.
         """

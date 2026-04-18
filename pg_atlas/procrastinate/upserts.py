@@ -198,7 +198,7 @@ async def upsert_repo(
                 vertex.adoption_forks = adoption_forks
             if releases is not None:
                 # FIXME: there can be existing releases we must not overwrite
-                # we want the union of unique
+                # we want the union of unique releases to be stored
                 vertex.releases = releases
             if repo_metadata is not None:
                 vertex.repo_metadata = repo_metadata

@@ -267,6 +267,10 @@ async def process_project(
     1. Upsert a ``Project`` row.
     2. If category is "Education & Community", skip GitHub/deps.dev crawling.
     3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
+
+    ``crawl_github_repo`` receives both deps.dev package payloads and repo
+    metadata so package detection can still run when deps.dev has no package
+    coverage for a repository.
     """
     logger.info(f"process_project: {display_name} ({project_canonical_id})")
 
@@ -409,6 +413,12 @@ async def crawl_github_repo(
        promote it to ``Repo`` and link it to the project.
     3. Ensure a ``Repo`` vertex ``pkg:github/owner/repo`` exists.
     4. Defer ``crawl_package_deps`` for each package.
+    5. Group detected packages by registry system and defer one
+        ``crawl_package_registry`` task per supported system.
+
+    Supported direct-registry crawl systems are intentionally limited to
+    ``DART`` and ``COMPOSER``. Other ecosystems are logged as unsupported for
+    observability.
     """
     logger.info(f"crawl_github_repo: {owner}/{repo} (project_id={project_id})")
 
@@ -573,7 +583,11 @@ async def crawl_package_registry(
 
     This task is intentionally separate from deps.dev dependency crawling.
     It fetches package signals from source registries and records per-package
-    download counts under the source repo metadata map.
+    download counts under the source repo metadata map
+    (``adoption_downloads_by_purl``).
+
+    It does not write scalar ``Repo.adoption_downloads`` directly; scalar
+    reduction is performed by adoption materialization.
     """
 
     normalized_system = normalize_registry_system(system)

@@ -81,7 +81,8 @@ def downloads_by_purl_from_metadata(
     """
     Extract and validate the per-PURL downloads map from repo metadata.
 
-    Invalid shapes are skipped and logged instead of silently ignored.
+    Validation is strict (string keys + integer values). Invalid shapes are
+    skipped and logged instead of silently ignored.
     """
 
     if repo_metadata is None:
@@ -94,12 +95,8 @@ def downloads_by_purl_from_metadata(
     try:
         parsed_downloads_by_purl = _DOWNLOADS_BY_PURL_ADAPTER.validate_python(raw_downloads_by_purl)
     except ValidationError as exc:
-        logger.warning(
-            "Invalid %s for repo %s: validation_errors=%d",
-            ADOPTION_DOWNLOADS_BY_PURL_KEY,
-            repo_canonical_id or "<unknown>",
-            exc.error_count(),
-        )
+        repo_id = repo_canonical_id or "<unknown>"
+        logger.error(f"Invalid {ADOPTION_DOWNLOADS_BY_PURL_KEY} for repo {repo_id}: validation_errors={exc.error_count()}")
         return None
 
     return parsed_downloads_by_purl if parsed_downloads_by_purl else None
@@ -117,6 +114,9 @@ def merge_download_into_repo_metadata(
 
     The ``adoption_downloads_by_purl`` map is the crawler write target; scalar
     reduction happens later during adoption materialization.
+
+    Existing metadata entries are preserved when valid. Invalid existing map
+    shapes are discarded with logging by ``downloads_by_purl_from_metadata``.
     """
 
     metadata: dict[str, object] = dict(repo_metadata or {})
