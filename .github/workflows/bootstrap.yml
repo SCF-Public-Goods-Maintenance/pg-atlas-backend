@@ -117,7 +117,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Run worker — registry-crawl queue
-        run: uv run python -m pg_atlas.procrastinate.worker --queue=registry-crawl --drain-rounds=20 --concurrency=8 --tee=registry-crawl-worker.log
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=registry-crawl --drain-rounds=2 --concurrency=2 --tee=registry-crawl-worker.log
 
       - name: Parse worker logs
         id: parse-logs

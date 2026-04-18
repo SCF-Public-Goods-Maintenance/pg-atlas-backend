@@ -420,10 +420,7 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_flutter(mock
     assert registry_defer_calls[0].kwargs["package_names"] == ["stellar_flutter_sdk"]
 
     build_crawler_mock.assert_called_once()
-    fake_crawler.crawl_and_persist.assert_awaited_once_with(
-        package_names=["stellar_flutter_sdk"],
-        source_repo_canonical_id="pkg:github/Soneso/stellar_flutter_sdk",
-    )
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["stellar_flutter_sdk"])
 
 
 async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: Any) -> None:
@@ -470,7 +467,4 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: 
     assert registry_defer_calls[0].kwargs["package_names"] == ["soneso/stellar-php-sdk"]
 
     build_crawler_mock.assert_called_once()
-    fake_crawler.crawl_and_persist.assert_awaited_once_with(
-        package_names=["soneso/stellar-php-sdk"],
-        source_repo_canonical_id="pkg:github/Soneso/stellar-php-sdk",
-    )
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["soneso/stellar-php-sdk"])

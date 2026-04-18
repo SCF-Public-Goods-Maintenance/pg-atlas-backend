@@ -99,7 +99,7 @@ async def test_fetch_package_parses_scores_and_downloads(
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
     # adoption_downloads = last 30 days; adoption_stars reserved for GitHub
-    assert pkg.downloads == 1469
+    assert pkg.downloads_30d == 1469
     assert pkg.stars is None
 
     assert pkg.metadata["pub_points"] == 140
@@ -125,7 +125,7 @@ async def test_fetch_package_no_scorecard(
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
-    assert pkg.downloads == 100  # downloadCount30Days from score
+    assert pkg.downloads_30d == 100  # downloadCount30Days from score
     assert "download_count_4w" not in pkg.metadata
     assert "download_count_12w" not in pkg.metadata
     assert "download_count_52w" not in pkg.metadata
@@ -150,7 +150,7 @@ async def test_fetch_package_short_weekly_list(
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
-    assert pkg.downloads == 200  # downloadCount30Days from score
+    assert pkg.downloads_30d == 200  # downloadCount30Days from score
     assert pkg.metadata["download_count_52w"] == sum(weekly_30)
     assert pkg.metadata["download_count_4w"] == sum(weekly_30[:4])
     assert pkg.metadata["download_count_12w"] == sum(weekly_30[:12])
@@ -176,7 +176,7 @@ async def test_fetch_package_metrics_failure(
     assert pkg.canonical_id == "pkg:pub/stellar_flutter_sdk"
     assert pkg.latest_version == "1.8.6"
     assert len(pkg.dependencies) > 0
-    assert pkg.downloads is None  # no metrics data available
+    assert pkg.downloads_30d is None  # no metrics data available
     assert pkg.stars is None
 
 

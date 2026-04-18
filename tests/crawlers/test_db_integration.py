@@ -121,7 +121,7 @@ def _make_package(
         display_name=display_name,
         latest_version=latest_version,
         repo_url=repo_url,
-        downloads=downloads,
+        downloads_30d=downloads,
         stars=stars,
         metadata={},
         dependencies=dependencies or [],

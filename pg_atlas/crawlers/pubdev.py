@@ -159,7 +159,7 @@ class PubDevCrawler(RegistryCrawler):
             display_name=name,
             latest_version=version,
             repo_url=repo_url,
-            downloads=downloads_30d,
+            downloads_30d=downloads_30d,
             stars=None,
             metadata=metadata,
             dependencies=dependencies,

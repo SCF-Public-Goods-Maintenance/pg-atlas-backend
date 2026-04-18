@@ -543,7 +543,6 @@ async def crawl_github_repo(
             queueing_lock=f"registry:{repo_canonical_id}:{system}",
             system=system,
             package_names=sorted(package_names),
-            source_repo_canonical_id=repo_canonical_id,
         )
         if enqueued:
             deferred_registry_tasks += 1
@@ -568,7 +567,6 @@ async def crawl_github_repo(
 async def crawl_package_registry(
     system: str,
     package_names: list[str],
-    source_repo_canonical_id: str,
 ) -> None:
     """
     Crawl direct registry signals and persist package-level download metadata.
@@ -603,10 +601,7 @@ async def crawl_package_registry(
 
             return
 
-        result = await crawler.crawl_and_persist(
-            package_names=package_names,
-            source_repo_canonical_id=source_repo_canonical_id,
-        )
+        result = await crawler.crawl_and_persist(package_names=package_names)
 
     logger.info(
         f"crawl_package_registry: system={normalized_system} packages={len(package_names)} "
@@ -681,54 +676,59 @@ async def crawl_package_deps(
 
         source_vertex_id: int = row[0]
 
-    finally:
-        await session.close()
+        # ----- Process each requirement -----
+        for req in reqs:
+            dep_purl_type = _purl_type_for_system(req.system)
+            dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
 
-    # ----- Process each requirement -----
-    for req in reqs:
-        dep_purl_type = _purl_type_for_system(req.system)
-        dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
+            if dep_canonical_id == source_repo_canonical_id:
+                logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
 
-        if dep_canonical_id == source_repo_canonical_id:
-            logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
+                continue
 
-            continue
+            # Look up the dependency's package PURL in existing Repos' releases.
+            repo_match = await find_repo_by_release_purl(dep_canonical_id)
 
-        # Look up the dependency's package PURL in existing Repos' releases.
-        repo_match = await find_repo_by_release_purl(dep_canonical_id)
+            if repo_match is not None:
+                dep_vertex_id, repo_canonical_id, project_id = repo_match
 
-        if repo_match is not None:
-            dep_vertex_id, repo_canonical_id, project_id = repo_match
-
-            await upsert_depends_on(
-                in_vertex_id=source_vertex_id,
-                out_vertex_id=dep_vertex_id,
-                version_range=req.version_constraint,
-            )
-
-            # Recurse only if the Repo belongs to a tracked Project.
-            if project_id is not None:
-                await _defer_with_lock(
-                    crawl_package_deps,
-                    queueing_lock=f"{req.system}:{req.name}",
-                    system=req.system,
-                    package_name=req.name,
-                    source_repo_canonical_id=repo_canonical_id,
+                await upsert_depends_on(
+                    session=session,
+                    in_vertex_id=source_vertex_id,
+                    out_vertex_id=dep_vertex_id,
+                    version_range=req.version_constraint,
                 )
 
-        else:
-            # External dependency — upsert ExternalRepo, no recursion.
-            dep_vertex_id = await upsert_external_repo(
-                canonical_id=dep_canonical_id,
-                display_name=req.name,
-                latest_version=req.version_constraint,
-            )
+                # Recurse only if the Repo belongs to a tracked Project.
+                if project_id is not None:
+                    await _defer_with_lock(
+                        crawl_package_deps,
+                        queueing_lock=f"{req.system}:{req.name}",
+                        system=req.system,
+                        package_name=req.name,
+                        source_repo_canonical_id=repo_canonical_id,
+                    )
 
-            await upsert_depends_on(
-                in_vertex_id=source_vertex_id,
-                out_vertex_id=dep_vertex_id,
-                version_range=req.version_constraint,
-            )
+            else:
+                # External dependency — upsert ExternalRepo, no recursion.
+                dep_vertex_id = await upsert_external_repo(
+                    session=session,
+                    canonical_id=dep_canonical_id,
+                    display_name=req.name,
+                    latest_version=req.version_constraint,
+                )
+
+                await upsert_depends_on(
+                    session=session,
+                    in_vertex_id=source_vertex_id,
+                    out_vertex_id=dep_vertex_id,
+                    version_range=req.version_constraint,
+                )
+
+        await session.commit()
+
+    finally:
+        await session.close()
 
     logger.info(f"crawl_package_deps: {system}/{package_name}@{version} - {len(reqs)} deps processed")
 

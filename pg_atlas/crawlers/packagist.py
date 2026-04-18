@@ -157,7 +157,7 @@ class PackagistCrawler(RegistryCrawler):
             display_name=name,
             latest_version=latest_version,
             repo_url=repo_url,
-            downloads=monthly,
+            downloads_30d=monthly,
             stars=None,
             metadata=metadata,
             dependencies=dependencies,

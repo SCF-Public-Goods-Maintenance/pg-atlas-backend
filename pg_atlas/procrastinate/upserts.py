@@ -197,6 +197,8 @@ async def upsert_repo(
             if adoption_forks is not None:
                 vertex.adoption_forks = adoption_forks
             if releases is not None:
+                # FIXME: there can be existing releases we must not overwrite
+                # we want the union of unique
                 vertex.releases = releases
             if repo_metadata is not None:
                 vertex.repo_metadata = repo_metadata
@@ -245,6 +247,7 @@ async def upsert_repo(
 
 
 async def upsert_external_repo(
+    session: AsyncSession,
     *,
     canonical_id: str,
     display_name: str,
@@ -258,8 +261,6 @@ async def upsert_external_repo(
     (i.e. it was promoted earlier), the existing ``Repo`` id is returned
     without modification.
     """
-    session = await _session()
-
     try:
         vertex = await _upsert_ext(
             session,
@@ -269,17 +270,11 @@ async def upsert_external_repo(
             repo_url=repo_url,
         )
         vertex_id: int = vertex.id
-        await session.commit()
-
         return vertex_id
 
-    except Exception:
-        await session.rollback()
-
+    except ValueError as exc:
+        logger.warning(exc)
         raise
-
-    finally:
-        await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -519,51 +514,45 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
 
 
 async def upsert_depends_on(
+    session: AsyncSession,
     *,
     in_vertex_id: int,
     out_vertex_id: int,
     version_range: str | None = None,
     confidence: EdgeConfidence = EdgeConfidence.inferred_shadow,
-) -> None:
+) -> bool:
     """
     Insert a ``DependsOn`` edge if it does not already exist.
 
-    Existing edges are left unchanged (no update on conflict) because the
-    ``(in_vertex_id, out_vertex_id)`` composite PK already enforces
-    uniqueness.
+    Only the ``version_range`` is updated on existing edges.
+    Returns ``True`` if an edge was inserted or updated.
     """
-    session = await _session()
-
-    try:
-        result = await session.execute(
-            select(DependsOn).where(
-                DependsOn.in_vertex_id == in_vertex_id,
-                DependsOn.out_vertex_id == out_vertex_id,
-            )
+    result = await session.execute(
+        select(DependsOn).where(
+            DependsOn.in_vertex_id == in_vertex_id,
+            DependsOn.out_vertex_id == out_vertex_id,
         )
-        existing = result.scalar_one_or_none()
+    )
+    existing = result.scalar_one_or_none()
 
-        if existing is not None:
-            await session.close()
+    if existing is not None:
+        if existing.version_range != version_range:
+            existing.version_range = version_range
+            await session.flush()
+            return True
 
-            return
+        return False
 
-        edge = DependsOn(
-            in_vertex_id=in_vertex_id,
-            out_vertex_id=out_vertex_id,
-            version_range=version_range,
-            confidence=confidence,
-        )
-        session.add(edge)
-        await session.commit()
+    edge = DependsOn(
+        in_vertex_id=in_vertex_id,
+        out_vertex_id=out_vertex_id,
+        version_range=version_range,
+        confidence=confidence,
+    )
+    session.add(edge)
+    await session.flush()
 
-    except Exception:
-        await session.rollback()
-
-        raise
-
-    finally:
-        await session.close()
+    return True
 
 
 # ---------------------------------------------------------------------------

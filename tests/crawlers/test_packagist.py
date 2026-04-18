@@ -104,7 +104,7 @@ async def test_fetch_package_parses_stats(
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
-    assert pkg.downloads == 1970  # monthly (last 30 days per spec)
+    assert pkg.downloads_30d == 1970  # monthly (last 30 days per spec)
     assert pkg.stars is None  # reserved for GitHub
     assert pkg.metadata["downloads_total"] == 46925
     assert pkg.metadata["download_count_30d"] == 1970
@@ -126,7 +126,7 @@ async def test_fetch_package_handles_missing_downloads(
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     assert pkg.canonical_id == "pkg:composer/soneso/stellar-php-sdk"
-    assert pkg.downloads is None
+    assert pkg.downloads_30d is None
 
 
 async def test_fetch_package_handles_malformed_downloads(
@@ -139,7 +139,7 @@ async def test_fetch_package_handles_malformed_downloads(
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     assert pkg.canonical_id == "pkg:composer/soneso/stellar-php-sdk"
-    assert pkg.downloads is None
+    assert pkg.downloads_30d is None
     assert "download_count_30d" not in pkg.metadata
     assert "downloads_daily" not in pkg.metadata
 

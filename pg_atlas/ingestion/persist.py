@@ -54,8 +54,7 @@ from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
-from pg_atlas.db_models.vertex_ops import get_vertex
-from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_external_repo
+from pg_atlas.db_models.vertex_ops import get_vertex, upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
@@ -330,7 +329,7 @@ async def _upsert_sbom_vertices(
         display_name, version, repo_url = canonical_inputs[canonical_id]
 
         try:
-            dep_vertex = await _upsert_external_repo(
+            dep_vertex = await upsert_external_repo(
                 session,
                 canonical_id=canonical_id,
                 display_name=display_name,
