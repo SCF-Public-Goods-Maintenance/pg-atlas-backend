@@ -66,11 +66,15 @@ async def _seed_adoption_fixture(session: AsyncSession) -> SeededAdoptionFixture
 
     # Neutralize existing repo adoption signals inside the rollback-only
     # transaction so the percentile pools are deterministic for this test.
+    # Materialization now rebuilds downloads from repo_metadata maps, so we
+    # also clear repo_metadata to avoid background fixtures re-entering the
+    # ranking pools.
     await session.execute(
         update(Repo).values(
             adoption_stars=None,
             adoption_forks=None,
             adoption_downloads=None,
+            repo_metadata=None,
         )
     )
     await session.flush()
