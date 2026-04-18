@@ -25,19 +25,22 @@ from pydantic import BaseModel, ValidationError
 logger = logging.getLogger(__name__)
 
 
-_MANIFEST_SEARCH_TERMS = [
-    "path:Cargo.toml",
-    "path:package.json",
-    "path:pyproject.toml",
-    "path:setup.py",
-    "path:setup.cfg",
-    "path:pom.xml",
-    "path:go.mod",
-    "path:Gemfile",
-    "path:pubspec.yaml",
-    "path:composer.json",
-    "path:.gemspec",
-]
+_MANIFEST_FILE_NAMES = frozenset(
+    {
+        "cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "pom.xml",
+        "go.mod",
+        "gemfile",
+        "pubspec.yaml",
+        "composer.json",
+    }
+)
+
+_SKIPPED_PATH_SUBSTRINGS = frozenset({".github", "example", "test"})
 
 
 class _NpmManifest(BaseModel):
@@ -237,10 +240,11 @@ def get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
 
 def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:
     """
-    Detect published packages by searching for manifests in the repository.
+    Detect published packages by scanning manifests in the repository tree.
 
-    Uses GitHub code search so monorepo manifests in nested directories are
-    detected.
+    This scan is auth-independent and covers nested monorepo paths. It avoids
+    GitHub code-search query/parser failures by listing the Git tree directly
+    and parsing only manifest blobs.
     """
     gh = get_github_client()
     repo_path = f"{owner}/{repo_name}"
@@ -254,46 +258,29 @@ def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReferen
 
         return []
 
-    search_terms = " OR ".join(_MANIFEST_SEARCH_TERMS)
-    query = f"repo:{repo_path} ({search_terms}) -path:test -path:tests -path:example -path:examples"
+    manifest_paths = _manifest_paths_from_repo_tree(repo, repo_path)
 
-    try:
-        search_results = gh.search_code(query=query)
-        for index, result in enumerate(search_results):
-            # Guard against unexpectedly-large repositories.
-            if index >= 200:
-                break
+    for path in manifest_paths:
+        system = _system_from_manifest_path(path)
+        if system is None:
+            continue
 
-            path_obj = getattr(result, "path", None)
-            path = path_obj if isinstance(path_obj, str) else ""
-            if not path:
-                continue
+        try:
+            manifest_text = _read_manifest_text(repo, path)
+        except GithubException as exc:
+            logger.warning(f"Failed to read manifest {path} in {repo_path}: {exc}")
+            continue
 
-            system = _system_from_manifest_path(path)
-            if system is None:
-                continue
+        package_name = _extract_package_name(system, path, manifest_text, owner, repo_name)
+        if package_name is None:
+            continue
 
-            try:
-                manifest_text = _read_manifest_text(repo, path)
-            except GithubException as exc:
-                logger.warning(f"Failed to read manifest {path} in {repo_path}: {exc}")
-                continue
+        key = (system, package_name)
+        if key in seen_keys:
+            continue
 
-            package_name = _extract_package_name(system, path, manifest_text, owner, repo_name)
-
-            if package_name is None:
-                continue
-
-            key = (system, package_name)
-            if key in seen_keys:
-                continue
-
-            seen_keys.add(key)
-            package_refs.append(PackageReference(system=system, name=package_name))
-
-    except GithubException as exc:
-        logger.warning(f"GitHub code search unavailable for {repo_path}: {exc}")
-        return []
+        seen_keys.add(key)
+        package_refs.append(PackageReference(system=system, name=package_name))
 
     if not package_refs:
         logger.info(f"detect_packages_from_repo: {repo_path} packages={{}}")
@@ -306,6 +293,49 @@ def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReferen
     logger.info(f"detect_packages_from_repo: {repo_path} packages={counts_by_system}")
 
     return package_refs
+
+
+def _manifest_paths_from_repo_tree(repo: Any, repo_path: str) -> list[str]:
+    """
+    Collect manifest blob paths from one repository tree.
+
+    Skips common test/example folders to reduce noise.
+    """
+
+    try:
+        default_branch = getattr(repo, "default_branch", None) or "main"
+        tree = repo.get_git_tree(default_branch, recursive=True)
+    except GithubException as exc:
+        logger.warning(f"Failed to list git tree for {repo_path}: {exc}")
+        return []
+
+    if bool(getattr(tree, "truncated", False)):
+        logger.warning(f"Manifest scan tree was truncated for {repo_path}")
+
+    manifest_paths: set[str] = set()
+    for item in getattr(tree, "tree", []):
+        path_obj = getattr(item, "path", None)
+        item_type_obj = getattr(item, "type", None)
+        if item_type_obj != "blob":
+            continue
+
+        path = path_obj if isinstance(path_obj, str) else ""
+        if not path or _is_skipped_manifest_path(path):
+            continue
+
+        basename = path.rsplit("/", 1)[-1].lower()
+        if basename in _MANIFEST_FILE_NAMES or basename.endswith(".gemspec"):
+            manifest_paths.add(path)
+
+    return sorted(manifest_paths)
+
+
+def _is_skipped_manifest_path(path: str) -> bool:
+    """
+    Return whether one path falls under ignored test/example folders.
+    """
+    normalized_path = path.lower()
+    return any(substr in normalized_path for substr in _SKIPPED_PATH_SUBSTRINGS)
 
 
 def _system_from_manifest_path(path: str) -> str | None:
