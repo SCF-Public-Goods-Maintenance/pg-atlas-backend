@@ -11,6 +11,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.config import settings
+from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.main import app
 from pg_atlas.routers import health as health_router
 
 
@@ -44,15 +46,26 @@ async def test_health_returns_ready_when_database_is_configured(
 ) -> None:
     """Configured databases should move /health from live to ready."""
 
-    async def read_schema_version() -> str:
+    class FakeSession:
+        pass
+
+    async def configured_session():
+        yield FakeSession()
+
+    async def read_schema_version(session: AsyncSession) -> str:
+        del session
         return "66ac36af6383"
 
     monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+asyncpg://configured")
     monkeypatch.setattr(settings, "ARTIFACT_S3_ENDPOINT", "https://s3.filebase.com")
-    monkeypatch.setattr(health_router, "_read_schema_version", read_schema_version)
+    monkeypatch.setattr(health_router, "_schema_version_from_session", read_schema_version)
+    app.dependency_overrides[maybe_db_session] = configured_session
 
-    response = await async_client.get("/health")
-    body = response.json()
+    try:
+        response = await async_client.get("/health")
+        body = response.json()
+    finally:
+        app.dependency_overrides.pop(maybe_db_session, None)
 
     assert response.status_code == 200
     assert body == {
@@ -71,13 +84,24 @@ async def test_health_returns_503_when_database_check_fails(
 ) -> None:
     """Configured-database failures should become readiness 503 responses."""
 
-    async def read_schema_version() -> str | None:
+    class FakeSession:
+        pass
+
+    async def configured_session():
+        yield FakeSession()
+
+    async def read_schema_version(session: AsyncSession) -> str | None:
+        del session
         raise SQLAlchemyError("database unavailable")
 
     monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+asyncpg://configured")
-    monkeypatch.setattr(health_router, "_read_schema_version", read_schema_version)
+    monkeypatch.setattr(health_router, "_schema_version_from_session", read_schema_version)
+    app.dependency_overrides[maybe_db_session] = configured_session
 
-    response = await async_client.get("/health")
+    try:
+        response = await async_client.get("/health")
+    finally:
+        app.dependency_overrides.pop(maybe_db_session, None)
 
     assert response.status_code == 503
     assert response.json() == {"detail": "database unavailable"}
@@ -86,7 +110,9 @@ async def test_health_returns_503_when_database_check_fails(
 def test_select_app_schema_version_ignores_procrastinate_revision() -> None:
     """The readiness response should hide the Procrastinate migration branch."""
 
-    assert health_router._select_app_schema_version(["procrastinate_001", "66ac36af6383"]) == "66ac36af6383"
+    assert (
+        health_router._select_app_schema_version(["procrastinate_001", "procrastinate_002", "66ac36af6383"]) == "66ac36af6383"
+    )
 
 
 def test_select_app_schema_version_rejects_multiple_application_revisions() -> None:
@@ -104,7 +130,7 @@ async def test_schema_version_from_session_reads_database_revision(
     schema_version = await health_router._schema_version_from_session(db_session)
 
     assert isinstance(schema_version, str)
-    assert schema_version != "procrastinate_001"
+    assert not schema_version.startswith("procrastinate_")
 
 
 async def test_openapi_describes_health_readiness_schema(async_client: AsyncClient) -> None:

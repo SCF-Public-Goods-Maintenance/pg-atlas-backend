@@ -12,9 +12,9 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.api_metadata import VERSION
 from pg_atlas.config import settings
-from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.db_models.session import maybe_db_session
 
 router = APIRouter(tags=["health"])
 
@@ -54,7 +54,7 @@ def _artifact_store_status() -> Literal["local", "IPFS"]:
 def _select_app_schema_version(version_rows: Sequence[str]) -> str | None:
     """Select the application Alembic revision from raw alembic_version rows."""
 
-    application_revisions = [version_row for version_row in version_rows if version_row != "procrastinate_001"]
+    application_revisions = [version_row for version_row in version_rows if not version_row.startswith("procrastinate_")]
     if len(application_revisions) > 1:
         raise ValueError("multiple non-Procrastinate revisions found in alembic_version")
     if not application_revisions:
@@ -69,21 +69,13 @@ async def _schema_version_from_session(session: AsyncSession) -> str | None:
     return _select_app_schema_version(result.scalars().all())
 
 
-async def _read_schema_version() -> str | None:
-    """Open a database session and read the current application schema version."""
-
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        return await _schema_version_from_session(session)
-
-
 @router.get("/health", response_model=HealthResponse, summary="Readiness check")
-async def health() -> HealthResponse:
+async def health(session: Annotated[AsyncSession | None, Depends(maybe_db_session)]) -> HealthResponse:
     """
     Return the current readiness status and application version.
     """
     artifact_store = _artifact_store_status()
-    if not settings.DATABASE_URL:
+    if session is None:
         return HealthResponse(
             status="live",
             version=VERSION,
@@ -95,7 +87,7 @@ async def health() -> HealthResponse:
         )
 
     try:
-        schema_version = await _read_schema_version()
+        schema_version = await _schema_version_from_session(session)
     except (SQLAlchemyError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
