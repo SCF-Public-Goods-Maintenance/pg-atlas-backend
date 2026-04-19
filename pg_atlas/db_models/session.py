@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+import msgspec
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -54,10 +55,13 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
             raise ValueError(
                 "PG_ATLAS_DATABASE_URL is not configured. Set it to a postgresql:// DSN before using database sessions."
             )
+
+        decoder = msgspec.json.Decoder()
         _engine = create_async_engine(
             settings.DATABASE_URL,
             echo=settings.LOG_LEVEL == "DEBUG",
             pool_pre_ping=True,
+            json_deserializer=decoder.decode,
         )
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _session_factory
