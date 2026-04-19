@@ -36,6 +36,7 @@ from sqlalchemy import select
 from pg_atlas.config import settings
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
+from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_vertex import RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
@@ -441,7 +442,7 @@ async def crawl_github_repo(
     packages_to_process = list(unique_packages.values())
 
     # ----- Build releases from package info -----
-    releases: list[dict[str, Any]] = []
+    releases: list[Release] = []
     async with depsdev_session() as stub:
         for pkg in packages_to_process:
             system = pkg.system
@@ -451,11 +452,11 @@ async def crawl_github_repo(
                 pkg_info = await get_package(system, name, stub=stub)
                 for v in pkg_info.versions:
                     releases.append(
-                        {
-                            "version": v.version,
-                            "release_date": v.published_at,
-                            "purl": strip_purl_version(v.purl),
-                        }
+                        Release(
+                            version=v.version,
+                            release_date=v.published_at or "",
+                            purl=strip_purl_version(v.purl),
+                        )
                     )
 
             except DepsDevError:
@@ -468,7 +469,7 @@ async def crawl_github_repo(
     # ----- Determine latest_version -----
     if releases:
         # Use the latest version from package releases.
-        latest_version = releases[-1].get("version", "")
+        latest_version = releases[-1].version
     else:
         latest_version = latest_version_from_repo(owner, repo)
 

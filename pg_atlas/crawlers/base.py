@@ -22,9 +22,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import msgspec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pg_atlas.db_models.release import Release, merge_releases
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.vertex_ops import upsert_external_repo
 from pg_atlas.metrics.adoption import merge_download_into_repo_metadata
@@ -67,6 +69,7 @@ class CrawledPackage:
     stars: int | None
     metadata: dict[str, Any]
     dependencies: list[CrawledDependency]
+    releases: list[Release]
 
 
 @dataclass
@@ -261,6 +264,22 @@ class RegistryCrawler(ABC):
                 downloads=crawled.downloads_30d,
                 repo_canonical_id=source_repo.canonical_id,
             )
+
+        package_releases = crawled.releases
+        # ensure that `crawled.canonical_id` is in the releases
+        if not any(release.purl == crawled.canonical_id for release in package_releases):
+            package_releases = [
+                *package_releases,
+                Release(
+                    purl=crawled.canonical_id,
+                    version=crawled.latest_version,
+                    release_date="",
+                ),
+            ]
+
+        source_repo.releases = merge_releases(source_repo.releases, package_releases)
+
+        if crawled.downloads_30d is not None or package_releases:
             await session.flush()
 
         # Forward dependencies: this package depends on each dep
@@ -307,3 +326,17 @@ class RegistryCrawler(ABC):
                 result.edges_created += 1
             else:
                 result.edges_skipped += 1
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def as_str_key_dict(value: Any) -> dict[str, Any]:
+    """Return a dict with only string keys; otherwise return an empty dict."""
+
+    try:
+        return msgspec.convert(value, type=dict[str, Any])
+    except msgspec.ValidationError:
+        return {}

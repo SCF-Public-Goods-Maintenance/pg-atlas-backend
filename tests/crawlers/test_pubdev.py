@@ -56,6 +56,9 @@ async def test_fetch_package_parses_metadata(
     assert pkg.display_name == "stellar_flutter_sdk"
     assert pkg.latest_version == "1.8.6"
     assert pkg.repo_url == "https://github.com/Soneso/stellar_flutter_sdk"
+    assert pkg.releases
+    assert {release.version for release in pkg.releases} >= {"1.8.6", "1.7.0"}
+    assert all(release.purl == "pkg:pub/stellar_flutter_sdk" for release in pkg.releases)
 
 
 async def test_fetch_package_parses_dependencies(
@@ -199,7 +202,7 @@ async def test_fetch_package_handles_null_dependencies(
     mock_http_client: AsyncMock,
 ) -> None:
     """Dependencies key explicitly set to null does not crash."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "name": "null_deps_pkg",
         "latest": {
             "version": "0.1.0",
@@ -207,7 +210,7 @@ async def test_fetch_package_handles_null_dependencies(
         },
         "versions": [],
     }
-    minimal_metrics = {"score": {}, "scorecard": {}}
+    minimal_metrics: dict[str, Any] = {"score": {}, "scorecard": {}}
     mock_http_client.get = AsyncMock(side_effect=[_response(package_data), _response(minimal_metrics)])
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("null_deps_pkg")
@@ -219,7 +222,7 @@ async def test_fetch_package_filters_sdk_dependencies(
     mock_http_client: AsyncMock,
 ) -> None:
     """SDK dependencies (dict constraints like {"sdk": "flutter"}) are excluded."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "name": "sdk_deps_pkg",
         "latest": {
             "version": "1.0.0",
@@ -234,7 +237,7 @@ async def test_fetch_package_filters_sdk_dependencies(
         },
         "versions": [],
     }
-    minimal_metrics = {"score": {}, "scorecard": {}}
+    minimal_metrics: dict[str, Any] = {"score": {}, "scorecard": {}}
     mock_http_client.get = AsyncMock(side_effect=[_response(package_data), _response(minimal_metrics)])
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("sdk_deps_pkg")

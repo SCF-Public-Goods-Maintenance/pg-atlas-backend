@@ -24,6 +24,7 @@ from pg_atlas.db_models.base import (
     SubmissionStatus,
     Visibility,
 )
+from pg_atlas.db_models.release import Release
 
 T = TypeVar("T")
 
@@ -202,7 +203,7 @@ class RepoDetailResponse(RepoSummary):
     and active contributor stats.
     """
 
-    releases: list[dict[str, Any]] | None
+    releases: list[Release] | None
     parent_project: ProjectSummary | None
     contributors: list[ContributorSummary]
     outgoing_dep_counts: DepCounts

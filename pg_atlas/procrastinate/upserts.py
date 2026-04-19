@@ -34,6 +34,7 @@ from pg_atlas.db_models.base import (
 )
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
+from pg_atlas.db_models.release import Release, merge_releases
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.db_models.vertex_ops import get_vertex
@@ -140,7 +141,7 @@ async def upsert_repo(
     latest_commit_date: dt.datetime | None = None,
     adoption_stars: int | None = None,
     adoption_forks: int | None = None,
-    releases: list[dict[str, Any]] | None = None,
+    releases: list[Release] | None = None,
     repo_metadata: dict[str, Any] | None = None,
 ) -> int:
     """
@@ -161,6 +162,8 @@ async def upsert_repo(
         vertex = await get_vertex(session, canonical_id)
 
         if vertex is not None and isinstance(vertex, ExternalRepo):
+            merged_releases = merge_releases(vertex.releases, releases)
+
             repo_id = await _promote_external_to_repo(
                 session,
                 vertex_id=vertex.id,
@@ -171,7 +174,7 @@ async def upsert_repo(
                 latest_commit_date=latest_commit_date,
                 adoption_stars=adoption_stars,
                 adoption_forks=adoption_forks,
-                releases=releases,
+                releases=merged_releases,
                 repo_metadata=repo_metadata,
             )
             await session.commit()
@@ -197,9 +200,7 @@ async def upsert_repo(
             if adoption_forks is not None:
                 vertex.adoption_forks = adoption_forks
             if releases is not None:
-                # FIXME: there can be existing releases we must not overwrite
-                # we want the union of unique releases to be stored
-                vertex.releases = releases
+                vertex.releases = merge_releases(vertex.releases, releases)
             if repo_metadata is not None:
                 vertex.repo_metadata = repo_metadata
 
@@ -293,7 +294,7 @@ async def _promote_external_to_repo(
     latest_commit_date: dt.datetime | None,
     adoption_stars: int | None,
     adoption_forks: int | None,
-    releases: list[dict[str, Any]] | None,
+    releases: list[Release] | None,
     repo_metadata: dict[str, Any] | None,
 ) -> int:
     """

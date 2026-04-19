@@ -137,6 +137,7 @@ def _make_package(
         stars=None,
         metadata={},
         dependencies=dependencies or [],
+        releases=[],
     )
 
 
@@ -189,6 +190,8 @@ async def test_crawl_writes_downloads_to_source_repo_metadata(
         metadata = repo.repo_metadata or {}
         downloads_by_purl = metadata.get("adoption_downloads_by_purl")
         assert downloads_by_purl == {package_canonical_id: 500}
+        assert repo.releases is not None
+        assert {(release.purl, release.version) for release in repo.releases} == {(package_canonical_id, "1.0.0")}
 
 
 async def test_crawl_creates_forward_dependency_edges_from_source_repo(
