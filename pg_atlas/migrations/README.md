@@ -75,7 +75,8 @@ If you try to restore this dump into a blank database, that will fail. The
 hosted dump does not include everything needed to bootstrap the schema from
 scratch (notably PostgreSQL enum types), so the correct sequence is always:
 
-1. migrate the local database to `heads` (or the specified revision)
+1. clear Procrastinate tables that are not in the dump: `uv run alembic downgrade procrastinate@base`
+1. migrate the local database to `heads` (or the specified revision): `uv run alembic upgrade heads`
 1. restore the dump onto that migrated schema
 
 ## Generate a new revision

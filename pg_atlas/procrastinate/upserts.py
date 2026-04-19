@@ -100,6 +100,7 @@ async def upsert_project(
             session.add(project)
         else:
             project.display_name = display_name
+            # TODO: determine project_type based on `Project.has_published_packages()`
             project.project_type = project_type
             project.activity_status = activity_status
             if git_owner_url is not None:

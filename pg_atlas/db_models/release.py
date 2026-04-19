@@ -12,7 +12,7 @@ class Release(msgspec.Struct, frozen=True):
 
     purl: str
     version: str
-    release_date: str
+    release_date: str = ""  # if populated, the value MUST be `isoformat`
 
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type: Any, _handler: Any) -> core_schema.CoreSchema:

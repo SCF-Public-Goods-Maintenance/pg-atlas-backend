@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import select
 
 from pg_atlas.config import settings
+from pg_atlas.crawlers.base import AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.release import Release
@@ -46,11 +48,10 @@ from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
     DepsDevProjectInfo,
-    ProjectPackageVersion,
+    ProjectPackage,
     depsdev_session,
     get_package,
     get_project_batch,
-    get_project_package_versions,
     get_requirements,
 )
 from pg_atlas.procrastinate.github import (
@@ -277,15 +278,12 @@ async def process_project(
 
     status = ActivityStatus(activity_status)
 
-    # ----- Determine project type (preliminary; may be refined after deps.dev) -----
-    project_type = ProjectType.scf_project
-
     # ----- Education & Community: upsert project row only, skip crawling -----
     if category == "Education & Community":
         await upsert_project(
             canonical_id=project_canonical_id,
             display_name=display_name,
-            project_type=project_type,
+            project_type=ProjectType.scf_project,
             activity_status=status,
             git_owner_url=git_owner_url,
             category=category,
@@ -325,7 +323,7 @@ async def process_project(
 
                 for project_key, proj_info in depsdev_projects.items():
                     try:
-                        proj_info.package_versions = await get_project_package_versions(project_key, stub=stub)
+                        await proj_info.populate_packages(stub=stub)
                     except DepsDevError as exc:
                         logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
 
@@ -333,7 +331,7 @@ async def process_project(
             logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
 
     # ----- Determine project type -----
-    has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
+    has_packages = any(info.packages for info in depsdev_projects.values()) if depsdev_projects else False
     project_type = ProjectType.public_good if has_packages else ProjectType.scf_project
 
     # ----- Upsert Project row -----
@@ -353,7 +351,7 @@ async def process_project(
         depsdev_key = f"github.com/{repo_full}".lower()
         depsdev_info = depsdev_projects.get(depsdev_key)
 
-        packages: list[ProjectPackageVersion] = []
+        packages: list[ProjectPackage] = []
         adoption_stars = repo_info.stars
         adoption_forks = repo_info.forks
         # normalize datetime to UTC before DB persistence
@@ -362,7 +360,7 @@ async def process_project(
             pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
 
         if depsdev_info:
-            packages = depsdev_info.package_versions
+            packages = depsdev_info.packages
             adoption_stars = max(adoption_stars, depsdev_info.stars_count)
             adoption_forks = max(adoption_forks, depsdev_info.forks_count)
 
@@ -374,15 +372,7 @@ async def process_project(
             owner=repo_owner,
             repo=repo_name,
             project_id=project_id,
-            packages=[
-                {
-                    "system": pkg.system,
-                    "name": pkg.name,
-                    "version": pkg.version,
-                    "purl": pkg.purl,
-                }
-                for pkg in packages
-            ],
+            packages=[asdict(pkg) for pkg in packages],
             pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
@@ -423,11 +413,15 @@ async def crawl_github_repo(
     """
     logger.info(f"crawl_github_repo: {owner}/{repo} (project_id={project_id})")
 
+    # ----- Proceed with Deps.dev packages, or detect published packages from repo manifests -----
     package_refs = [PackageReference.from_payload(pkg) for pkg in packages]
+    # the above comes from DepsDev and only includes systems it supports
     if not package_refs:
+        # TODO: it would be helpful to track that we are now creating a MIXED list
         package_refs = detect_packages_from_repo(owner, repo)
         logger.info(f"Detected {len(package_refs)} packages in {owner}/{repo}")
 
+    # TODO: remove after dedup in `process_project`
     # Deps.dev project package versions can include many entries per package
     # (one row per version). Collapse to unique package keys before crawling.
     unique_packages: dict[tuple[str, str], PackageReference] = {}
@@ -442,6 +436,7 @@ async def crawl_github_repo(
     packages_to_process = list(unique_packages.values())
 
     # ----- Build releases from package info -----
+    # FIXME: must not try to get packages for systems that DepsDev does not support
     releases: list[Release] = []
     async with depsdev_session() as stub:
         for pkg in packages_to_process:
@@ -497,11 +492,14 @@ async def crawl_github_repo(
     )
 
     # ----- For each package: absorb ExternalRepo if one exists -----
+    # must happen for all packages regardless of system
     for pkg in packages_to_process:
         system = pkg.system
         name = pkg.name
 
         # Build the canonical_id this package would have as a vertex.
+        # TODO: simplify when purl is provided in the PackageReference
+        # preferred solution: ensure and enforce that the purl is present on every PackageReference.
         purl_type = _purl_type_for_system(system)
         if purl_type:
             pkg_canonical_id = f"pkg:{purl_type}/{name}"
@@ -520,6 +518,7 @@ async def crawl_github_repo(
     await associate_repo_with_project(repo_canonical_id, project_id)
 
     # ----- Defer crawl_package_deps for each package -----
+    # FIXME: must be filtered for DepsDev supported systems
     for pkg in packages_to_process:
         system = pkg.system
         name = pkg.name
@@ -535,6 +534,7 @@ async def crawl_github_repo(
     registry_packages_by_system: dict[str, set[str]] = {}
     unsupported_registry_purls: dict[str, set[str]] = {}
 
+    # FIXME: this is a mess, clean up in refactor
     for pkg in packages_to_process:
         normalized_system = normalize_registry_system(pkg.system)
         if normalized_system is None:
@@ -558,6 +558,7 @@ async def crawl_github_repo(
         if enqueued:
             deferred_registry_tasks += 1
 
+    # FIXME: only warn for unsupported packages that have come from `detect_packages_from_repo`
     for system, purls in sorted(unsupported_registry_purls.items()):
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
@@ -622,6 +623,8 @@ async def crawl_package_registry(
         f"crawl_package_registry: system={normalized_system} packages={len(package_names)} "
         f"processed={result.packages_processed} errors={len(result.errors)}"
     )
+    if result.packages_processed == 0:
+        raise AllPackagesFailed(package_names)
 
 
 # ---------------------------------------------------------------------------

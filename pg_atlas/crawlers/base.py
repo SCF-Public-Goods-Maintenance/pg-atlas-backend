@@ -91,6 +91,9 @@ class CrawlResult:
 class SourceRepoNotFound(Exception): ...
 
 
+class AllPackagesFailed(Exception): ...
+
+
 # ---------------------------------------------------------------------------
 # Abstract base crawler
 # ---------------------------------------------------------------------------
@@ -128,7 +131,11 @@ class RegistryCrawler(ABC):
 
     @abstractmethod
     async def fetch_package(self, package_name: str) -> CrawledPackage:
-        """Fetch package metadata from the registry API."""
+        """
+        Fetch package metadata from the registry API.
+
+        This SHOULD populate `releases[].release_date` and it MUST be `isoformat`.
+        """
         ...
 
     @abstractmethod
@@ -269,12 +276,12 @@ class RegistryCrawler(ABC):
         # ensure that `crawled.canonical_id` is in the releases
         if not any(release.purl == crawled.canonical_id for release in package_releases):
             package_releases = [
-                *package_releases,
                 Release(
                     purl=crawled.canonical_id,
                     version=crawled.latest_version,
                     release_date="",
                 ),
+                *package_releases,
             ]
 
         source_repo.releases = merge_releases(source_repo.releases, package_releases)

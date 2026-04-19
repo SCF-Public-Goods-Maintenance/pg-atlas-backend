@@ -425,6 +425,9 @@ def _run_dependency_graph_query(owner: str, repo_name: str, *, after: str | None
 def _is_skipped_manifest_path(path: str) -> bool:
     """
     Return whether one path falls under ignored test/example folders.
+
+    This is a quick and dirty "best-effort" check that excludes e.g. `contest/` and `latest/`.
+    We'd rather miss a couple of uncommon manifest paths than have to read a lot of junk.
     """
     normalized_path = path.lower()
     return any(substr in normalized_path for substr in _SKIPPED_PATH_SUBSTRINGS)
