@@ -32,11 +32,15 @@ def parse_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str], list
 
     Returns:
         A tuple of (status_counts_by_queue, warnings, errors, unsupported_purls).
+        All collections are empty if the file does not exist.
     """
     status_counts: dict[str, dict[str, int]] = {}
     warnings: list[str] = []
     errors: list[str] = []
     unsupported_purls: dict[str, set[str]] = {}
+
+    if not Path(log_path).exists():
+        return status_counts, warnings, errors, unsupported_purls
 
     with open(log_path) as f:
         for line in f:

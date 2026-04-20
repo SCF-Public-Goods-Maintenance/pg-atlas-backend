@@ -43,13 +43,16 @@ jobs:
 
       - name: Parse worker logs
         id: parse-logs
+        if: always()
         run: python .github/scripts/parse-sbom-log.py sbom-worker.log
 
       - name: Parse criticality logs
         id: parse-criticality
+        if: always()
         run: python .github/scripts/parse-materialize-criticality-log.py criticality.log
 
       - name: Write job summary
+        if: always()
         run: |
           python .github/scripts/render-template.py \
             .github/templates/sbom-queue-summary.md \
@@ -65,6 +68,7 @@ jobs:
             warning_count="${{ steps.parse-logs.outputs.warning_count || '0' }}" \
             error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
+            warning_detail="${{ steps.parse-logs.outputs.warnings || '' }}" \
             spdx_details="${{ steps.parse-logs.outputs.spdx_details || 'No records details available.' }}" \
             criticality_dep_nodes_seen="${{ steps.parse-criticality.outputs.criticality_dep_nodes_seen || '—' }}" \
             criticality_active_nodes_scored="${{ steps.parse-criticality.outputs.criticality_active_nodes_scored || '—' }}" \

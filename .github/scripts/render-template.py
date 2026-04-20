@@ -7,7 +7,7 @@ them from ``KEY=VALUE`` pairs passed as command-line arguments.
 Usage::
 
     python .github/scripts/render-template.py \\
-        .github/templates/bootstrap-summary.md \\
+        .github/templates/<job-name>-summary.md \\
         trigger=schedule run_id=12345 ...
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors

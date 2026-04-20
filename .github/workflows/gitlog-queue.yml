@@ -18,7 +18,7 @@ concurrency:
 jobs:
   process-gitlog:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     env:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,6 +44,7 @@ jobs:
         run: uv run python -m pg_atlas.procrastinate.seed_gitlog
 
       - name: Run worker — gitlog queue
+        timeout-minutes: 320
         run: uv run python -m pg_atlas.procrastinate.worker --queue=gitlog --drain-rounds=2 --concurrency=6 --tee=gitlog-worker.log
         env:
           PG_ATLAS_ARTIFACT_S3_ENDPOINT: https://s3.filebase.com
@@ -51,17 +52,21 @@ jobs:
           PG_ATLAS_FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
 
       - name: Materialize pony factor
+        if: always()
         run: uv run python -m pg_atlas.metrics.materialize_pony --latest-seed-run --tee=pony.log
 
       - name: Parse worker logs
         id: parse-logs
+        if: always()
         run: python .github/scripts/parse-gitlog-log.py gitlog-worker.log gh-auth-status.log
 
       - name: Parse pony factor logs
         id: parse-pony
+        if: always()
         run: python .github/scripts/parse-materialize-pony-log.py pony.log
 
       - name: Write job summary
+        if: always()
         run: |
           python .github/scripts/render-template.py \
             .github/templates/gitlog-queue-summary.md \
@@ -81,6 +86,7 @@ jobs:
             terminal_failures_marked_private="${{ steps.parse-logs.outputs.terminal_failures_marked_private || 'none' }}" \
             gh_auth_status="${{ steps.parse-logs.outputs.gh_auth_status || 'Unavailable' }}" \
             error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
+            warning_detail="${{ steps.parse-logs.outputs.warnings || '' }}" \
             pony_repo_rows_updated="${{ steps.parse-pony.outputs.pony_repo_rows_updated || '—' }}" \
             pony_project_rows_updated="${{ steps.parse-pony.outputs.pony_project_rows_updated || '—' }}" \
             pony_resolved_seed_run_ordinal="${{ steps.parse-pony.outputs.pony_resolved_seed_run_ordinal || '—' }}" \

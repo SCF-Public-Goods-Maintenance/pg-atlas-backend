@@ -16,9 +16,13 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import os
 import re
 import sys
+from pathlib import Path
+
+# Add the scripts directory to sys.path to allow importing sibling modules
+sys.path.insert(0, str(Path(__file__).parent))
+from worker_log_utils import emit_github_output
 
 _SUMMARY_RE = re.compile(
     r"Pony-factor materialization finished: "
@@ -33,12 +37,16 @@ def parse_log(log_path: str) -> dict[str, str]:
     """
     Scan a tee'd materialize_pony log for the summary line.
 
-    Returns a dict of output key→value pairs.
+    Returns a dict of output key→value pairs, empty if the file is absent.
     """
+
+    p = Path(log_path)
+    if not p.exists():
+        return {}
 
     result: dict[str, str] = {}
 
-    with open(log_path) as f:
+    with p.open() as f:
         for line in f:
             m = _SUMMARY_RE.search(line)
 
@@ -59,15 +67,7 @@ def main() -> None:
         sys.exit(1)
 
     outputs = parse_log(sys.argv[1])
-
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output:
-        with open(github_output, "a") as f:
-            for key, value in outputs.items():
-                f.write(f"{key}={value}\n")
-    else:
-        for key, value in outputs.items():
-            print(f"{key}={value}")
+    emit_github_output({}, [], [], extra_outputs=outputs)
 
 
 if __name__ == "__main__":

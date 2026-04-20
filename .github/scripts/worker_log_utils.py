@@ -95,10 +95,18 @@ def emit_github_output(
                 print(f"{k}<<EOF\n{v}\nEOF")
 
         if all_warnings:
-            print(f"warnings={chr(10).join(all_warnings[:50])}")
+            print("warnings<<EOF\n")
+            for w in all_warnings[:50]:
+                print(f"* {w}")
+
+            print("EOF")
 
         if all_errors:
-            print(f"errors={chr(10).join(all_errors[:50])}")
+            print("errors<<EOF\n")
+            for e in all_errors[:50]:
+                print(f"* {e}")
+
+            print("EOF")
 
         return
 
@@ -119,15 +127,15 @@ def emit_github_output(
 
         # Multiline values use heredoc syntax.
         if all_warnings:
-            f.write("warnings<<EOF\n")
+            f.write("warnings<<EOF\n\n")
             for w in all_warnings[:50]:
-                f.write(f"{w}\n")
+                f.write(f"* {w}\n")
 
             f.write("EOF\n")
 
         if all_errors:
-            f.write("errors<<EOF\n")
+            f.write("errors<<EOF\n\n")
             for e in all_errors[:50]:
-                f.write(f"{e}\n")
+                f.write(f"* {e}\n")
 
             f.write("EOF\n")

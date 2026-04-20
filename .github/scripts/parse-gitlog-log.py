@@ -42,6 +42,16 @@ def parse_worker_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str
     total_rate_limit_hits = "0"
     terminal_failures_marked_private = "none"
 
+    if not Path(log_path).exists():
+        return (
+            status_counts,
+            warnings,
+            errors,
+            first_rate_limit_hit_after_n_repos,
+            total_rate_limit_hits,
+            terminal_failures_marked_private,
+        )
+
     with open(log_path) as file:
         for raw_line in file:
             line = raw_line.rstrip("\n")
