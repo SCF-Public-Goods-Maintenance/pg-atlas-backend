@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.project import Project
@@ -87,18 +88,28 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
     active_graph = project_active_subgraph(dependency_graph)
     active_scores = compute_criticality(active_graph)
 
-    # --- columnar load: id + canonical_id only ---
-    repo_rows = (await session.execute(select(Repo.id, Repo.canonical_id))).all()
-    ext_rows = (await session.execute(select(ExternalRepo.id, ExternalRepo.canonical_id))).all()
+    # --- columnar load: id + canonical_id + current score (for diff-filtering) ---
+    repo_rows = (await session.execute(select(Repo.id, Repo.canonical_id, Repo.criticality_score))).all()
+    ext_rows = (
+        await session.execute(select(ExternalRepo.id, ExternalRepo.canonical_id, ExternalRepo.criticality_score))
+    ).all()
     dep_nodes_seen = len(repo_rows) + len(ext_rows)
 
-    # --- bulk update Repo criticality scores ---
-    repo_updates = [{"id": rid, "criticality_score": active_scores.get(cid, 0)} for rid, cid in repo_rows]
+    # --- bulk update Repo criticality scores (skip rows where score is unchanged) ---
+    repo_updates = [
+        {"id": rid, "criticality_score": active_scores.get(cid, 0)}
+        for rid, cid, current_score in repo_rows
+        if current_score != active_scores.get(cid, 0)
+    ]
     if repo_updates:
         await session.execute(update(Repo), repo_updates)
 
-    # --- bulk update ExternalRepo criticality scores ---
-    ext_updates = [{"id": rid, "criticality_score": active_scores.get(cid, 0)} for rid, cid in ext_rows]
+    # --- bulk update ExternalRepo criticality scores (skip rows where score is unchanged) ---
+    ext_updates = [
+        {"id": rid, "criticality_score": active_scores.get(cid, 0)}
+        for rid, cid, current_score in ext_rows
+        if current_score != active_scores.get(cid, 0)
+    ]
     if ext_updates:
         await session.execute(update(ExternalRepo), ext_updates)
 
@@ -124,17 +135,17 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
         )
         .execution_options(synchronize_session=False)
     )
-    await session.execute(project_update)
-
-    project_rows_updated = await session.scalar(select(func.count(Project.id))) or 0
+    project_result = await session.execute(project_update)
+    assert isinstance(project_result, CursorResult)
+    project_rows_updated = project_result.rowcount
 
     duration_seconds = time.perf_counter() - started_at
 
     stats = CriticalityMaterializationStats(
         dep_nodes_seen=dep_nodes_seen,
         active_dep_nodes_scored=len(active_scores),
-        repo_rows_updated=len(repo_rows),
-        external_repo_rows_updated=len(ext_rows),
+        repo_rows_updated=len(repo_updates),
+        external_repo_rows_updated=len(ext_updates),
         project_rows_updated=project_rows_updated,
         duration_seconds=duration_seconds,
     )

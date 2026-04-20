@@ -328,8 +328,11 @@ async def test_materialize_pony_factor_scores_is_idempotent(
     second_stats = await materialize_pony_factor_scores(rollback_db_session)
     rollback_db_session.expire_all()
 
-    assert first_stats.repo_rows_updated == second_stats.repo_rows_updated
-    assert first_stats.project_rows_updated == second_stats.project_rows_updated
+    assert first_stats.repo_rows_updated > 0
+    assert first_stats.project_rows_updated > 0
+    # On the second pass all values are already current — diff-filter produces zero updates.
+    assert second_stats.repo_rows_updated == 0
+    assert second_stats.project_rows_updated == 0
 
     alpha_project = await _get_project(rollback_db_session, seeded.alpha_project_id)
     gamma_project = await _get_project(rollback_db_session, seeded.gamma_project_id)

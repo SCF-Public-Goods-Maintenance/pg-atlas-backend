@@ -221,11 +221,20 @@ async def materialize_pony_factor_scores(
 
     # --- compute repo pony factors (no ORM load) ---
     repo_counts = await _load_repo_email_commit_counts(session, target_repo_ids)
+
+    # Load current values so we only UPDATE rows where the score has changed,
+    # reducing row lock pressure when the DB is under concurrent write load.
+    current_repo_pony: dict[int, int | None] = {}
+    if target_repo_ids:
+        current_repo_pony_stmt = select(Repo.id, Repo.pony_factor).where(Repo.id.in_(target_repo_ids))
+        current_repo_pony = {int(rid): val for rid, val in (await session.execute(current_repo_pony_stmt)).all()}
+
     repo_updates: list[dict[str, int]] = []
     for repo_id in target_repo_ids:
         counts_by_email = repo_counts.get(repo_id, {})
         repo_pony = compute_pony_factor(counts_by_email.values())
-        repo_updates.append({"id": repo_id, "pony_factor": repo_pony})
+        if current_repo_pony.get(repo_id) != repo_pony:
+            repo_updates.append({"id": repo_id, "pony_factor": repo_pony})
 
     if repo_updates:
         await session.execute(update(Repo), repo_updates)
@@ -239,33 +248,30 @@ async def materialize_pony_factor_scores(
     project_repo_ids = sorted({repo_id for repo_ids in repos_by_project.values() for repo_id in repo_ids})
     project_repo_counts = await _load_repo_email_commit_counts(session, project_repo_ids)
 
+    current_proj_pony: dict[int, int | None] = {}
+    if project_ids:
+        current_proj_pony_stmt = select(Project.id, Project.pony_factor).where(Project.id.in_(project_ids))
+        current_proj_pony = {int(pid): val for pid, val in (await session.execute(current_proj_pony_stmt)).all()}
+
     project_updates: list[dict[str, int | None]] = []
     for pid in project_ids:
         repo_ids = repos_by_project.get(pid, [])
+
         if not repo_ids:
-            project_updates.append({"id": pid, "pony_factor": None})
-            continue
+            new_pony: int | None = None
+        else:
+            project_counts_by_email: defaultdict[str, int] = defaultdict(int)
+            for repo_id in repo_ids:
+                for email_hash, commit_count in project_repo_counts.get(repo_id, {}).items():
+                    project_counts_by_email[email_hash] += commit_count
 
-        project_counts_by_email: defaultdict[str, int] = defaultdict(int)
-        for repo_id in repo_ids:
-            for email_hash, commit_count in project_repo_counts.get(repo_id, {}).items():
-                project_counts_by_email[email_hash] += commit_count
+            new_pony = compute_pony_factor(project_counts_by_email.values())
 
-        project_updates.append({"id": pid, "pony_factor": compute_pony_factor(project_counts_by_email.values())})
+        if current_proj_pony.get(pid) != new_pony:
+            project_updates.append({"id": pid, "pony_factor": new_pony})
 
     if project_updates:
         await session.execute(update(Project), project_updates)
-
-    # --- null-out stale repos on full recompute ---
-    if full_recompute and target_repo_ids:
-        stale_repo_stmt = (
-            update(Repo)
-            .where(Repo.id.not_in(target_repo_ids))
-            .where(Repo.pony_factor.is_not(None))
-            .values(pony_factor=None)
-            .execution_options(synchronize_session=False)
-        )
-        await session.execute(stale_repo_stmt)
 
     duration_seconds = time.perf_counter() - started_at
     stats = PonyFactorMaterializationStats(
