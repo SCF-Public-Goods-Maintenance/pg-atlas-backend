@@ -32,7 +32,7 @@ def _make_flush_guard(session: AsyncSession) -> tuple[AsyncMock, Callable[[], No
 
 
 @pytest.fixture
-def assert_no_uow(db_session: AsyncSession) -> Callable[[AsyncSession], None]:
+def assert_no_uow() -> Callable[[AsyncSession], None]:
     """
     Return a callable that asserts no ORM Unit-of-Work mutations occurred.
 
