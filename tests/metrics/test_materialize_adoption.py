@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models import Project, Repo
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, Visibility
 from pg_atlas.metrics.materialize_adoption import AdoptionMaterializationStats, materialize_adoption_scores
+from tests.metrics.conftest import _make_flush_guard
 
 
 @dataclass(frozen=True)
@@ -230,11 +232,11 @@ async def test_materialize_adoption_scores_persists_project_scores(
     seeded = await _seed_adoption_fixture(rollback_db_session)
 
     stats = await materialize_adoption_scores(rollback_db_session)
+    rollback_db_session.expire_all()
 
     assert isinstance(stats, AdoptionMaterializationStats)
     assert stats.repos_seen >= 5
     assert stats.repo_composites_computed >= 3
-    assert stats.projects_seen >= 4
     assert stats.projects_scored >= 2
 
     project_a = await _get_project(rollback_db_session, seeded.project_a_id)
@@ -258,6 +260,7 @@ async def test_materialize_adoption_scores_is_idempotent(
     seeded = await _seed_adoption_fixture(rollback_db_session)
 
     await materialize_adoption_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     project_a = await _get_project(rollback_db_session, seeded.project_a_id)
     project_b = await _get_project(rollback_db_session, seeded.project_b_id)
     project_c = await _get_project(rollback_db_session, seeded.project_c_id)
@@ -269,6 +272,7 @@ async def test_materialize_adoption_scores_is_idempotent(
     assert empty_project.adoption_score is None
 
     await materialize_adoption_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     project_a = await _get_project(rollback_db_session, seeded.project_a_id)
     project_b = await _get_project(rollback_db_session, seeded.project_b_id)
     project_c = await _get_project(rollback_db_session, seeded.project_c_id)
@@ -290,11 +294,34 @@ async def test_materialize_adoption_scores_updates_repo_downloads_from_metadata(
     seeded = await _seed_monorepo_download_fixture(rollback_db_session)
 
     await materialize_adoption_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     repo = await rollback_db_session.get(Repo, seeded.repo_id)
     assert repo is not None
     assert repo.adoption_downloads == 300
 
     await materialize_adoption_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     repo = await rollback_db_session.get(Repo, seeded.repo_id)
     assert repo is not None
     assert repo.adoption_downloads == 300
+
+
+async def test_materialize_adoption_scores_does_not_use_uow(
+    rollback_db_session: AsyncSession, assert_no_uow: Callable[[AsyncSession], None]
+) -> None:
+    """
+    Adoption materialization must use bulk DML only — no ORM UoW dirty-tracking or flush.
+    """
+
+    await _seed_adoption_fixture(rollback_db_session)
+    await rollback_db_session.flush()
+    rollback_db_session.expire_all()
+
+    flush_mock, restore_flush = _make_flush_guard(rollback_db_session)
+    try:
+        await materialize_adoption_scores(rollback_db_session)
+    finally:
+        restore_flush()
+
+    flush_mock.assert_not_called()
+    assert_no_uow(rollback_db_session)

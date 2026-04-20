@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.contributed_to import ContributedTo
@@ -153,19 +153,19 @@ async def _load_project_repo_membership(
     *,
     full_recompute: bool,
     target_repo_ids: list[int],
-) -> tuple[list[Project], dict[int, list[int]]]:
+) -> tuple[list[int], dict[int, list[int]]]:
     """
-    Return affected projects and their child repo ids.
+    Return affected project ids and their child repo id membership.
     """
 
     if full_recompute:
-        projects = list((await session.execute(select(Project).order_by(Project.id))).scalars().all())
+        project_ids = [int(pid) for pid in (await session.execute(select(Project.id).order_by(Project.id))).scalars().all()]
         membership_rows = (await session.execute(select(Repo.id, Repo.project_id).where(Repo.project_id.is_not(None)))).all()
     else:
         if not target_repo_ids:
             return [], {}
 
-        project_ids = (
+        affected_project_ids_raw = (
             (
                 await session.execute(
                     select(Repo.project_id)
@@ -178,17 +178,12 @@ async def _load_project_repo_membership(
             .scalars()
             .all()
         )
-        affected_project_ids = [int(project_id) for project_id in project_ids if project_id is not None]
-        if not affected_project_ids:
+        project_ids = [int(pid) for pid in affected_project_ids_raw if pid is not None]
+        if not project_ids:
             return [], {}
 
-        projects = list(
-            (await session.execute(select(Project).where(Project.id.in_(affected_project_ids)).order_by(Project.id)))
-            .scalars()
-            .all()
-        )
         membership_rows = (
-            await session.execute(select(Repo.id, Repo.project_id).where(Repo.project_id.in_(affected_project_ids)))
+            await session.execute(select(Repo.id, Repo.project_id).where(Repo.project_id.in_(project_ids)))
         ).all()
 
     repos_by_project: defaultdict[int, list[int]] = defaultdict(list)
@@ -198,7 +193,7 @@ async def _load_project_repo_membership(
 
         repos_by_project[int(project_id)].append(int(repo_id))
 
-    return projects, dict(repos_by_project)
+    return project_ids, dict(repos_by_project)
 
 
 async def materialize_pony_factor_scores(
@@ -210,7 +205,7 @@ async def materialize_pony_factor_scores(
     """
     Recompute and persist pony factor on Repo and Project rows within one session.
 
-    The session is mutated and flushed, but not committed.
+    All writes use bulk DML; the ORM identity map is untouched. No ``flush()`` is issued.
     """
 
     if latest_seed_run and seed_run_ordinal is not None:
@@ -224,15 +219,19 @@ async def materialize_pony_factor_scores(
         seed_run_ordinal=seed_run_ordinal,
     )
 
-    target_repos = list(
-        (await session.execute(select(Repo).where(Repo.id.in_(target_repo_ids)).order_by(Repo.id))).scalars().all()
-    )
+    # --- compute repo pony factors (no ORM load) ---
     repo_counts = await _load_repo_email_commit_counts(session, target_repo_ids)
-    for repo in target_repos:
-        counts_by_email = repo_counts.get(repo.id, {})
-        repo.pony_factor = compute_pony_factor(counts_by_email.values())
+    repo_updates: list[dict[str, int]] = []
+    for repo_id in target_repo_ids:
+        counts_by_email = repo_counts.get(repo_id, {})
+        repo_pony = compute_pony_factor(counts_by_email.values())
+        repo_updates.append({"id": repo_id, "pony_factor": repo_pony})
 
-    projects, repos_by_project = await _load_project_repo_membership(
+    if repo_updates:
+        await session.execute(update(Repo), repo_updates)
+
+    # --- compute project pony factors ---
+    project_ids, repos_by_project = await _load_project_repo_membership(
         session,
         full_recompute=full_recompute,
         target_repo_ids=target_repo_ids,
@@ -240,10 +239,11 @@ async def materialize_pony_factor_scores(
     project_repo_ids = sorted({repo_id for repo_ids in repos_by_project.values() for repo_id in repo_ids})
     project_repo_counts = await _load_repo_email_commit_counts(session, project_repo_ids)
 
-    for project in projects:
-        repo_ids = repos_by_project.get(project.id, [])
+    project_updates: list[dict[str, int | None]] = []
+    for pid in project_ids:
+        repo_ids = repos_by_project.get(pid, [])
         if not repo_ids:
-            project.pony_factor = None
+            project_updates.append({"id": pid, "pony_factor": None})
             continue
 
         project_counts_by_email: defaultdict[str, int] = defaultdict(int)
@@ -251,14 +251,26 @@ async def materialize_pony_factor_scores(
             for email_hash, commit_count in project_repo_counts.get(repo_id, {}).items():
                 project_counts_by_email[email_hash] += commit_count
 
-        project.pony_factor = compute_pony_factor(project_counts_by_email.values())
+        project_updates.append({"id": pid, "pony_factor": compute_pony_factor(project_counts_by_email.values())})
 
-    await session.flush()
+    if project_updates:
+        await session.execute(update(Project), project_updates)
+
+    # --- null-out stale repos on full recompute ---
+    if full_recompute and target_repo_ids:
+        stale_repo_stmt = (
+            update(Repo)
+            .where(Repo.id.not_in(target_repo_ids))
+            .where(Repo.pony_factor.is_not(None))
+            .values(pony_factor=None)
+            .execution_options(synchronize_session=False)
+        )
+        await session.execute(stale_repo_stmt)
 
     duration_seconds = time.perf_counter() - started_at
     stats = PonyFactorMaterializationStats(
-        repo_rows_updated=len(target_repos),
-        project_rows_updated=len(projects),
+        repo_rows_updated=len(repo_updates),
+        project_rows_updated=len(project_updates),
         resolved_seed_run_ordinal=resolved_seed_run_ordinal,
         duration_seconds=duration_seconds,
     )

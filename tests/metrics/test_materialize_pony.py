@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,7 @@ from pg_atlas.db_models import ContributedTo, Contributor, GitLogArtifact, Proje
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus, Visibility
 from pg_atlas.gitlog.parser import hash_email
 from pg_atlas.metrics.materialize_pony import PonyFactorMaterializationStats, materialize_pony_factor_scores
+from tests.metrics.conftest import _make_flush_guard
 
 
 @dataclass(frozen=True)
@@ -284,6 +286,7 @@ async def test_materialize_pony_factor_scores_persists_repo_and_project_scores(
     seeded = await _seed_pony_component(rollback_db_session)
 
     stats = await materialize_pony_factor_scores(rollback_db_session)
+    rollback_db_session.expire_all()
 
     assert isinstance(stats, PonyFactorMaterializationStats)
     assert stats.resolved_seed_run_ordinal is None
@@ -321,7 +324,9 @@ async def test_materialize_pony_factor_scores_is_idempotent(
     seeded = await _seed_pony_component(rollback_db_session)
 
     first_stats = await materialize_pony_factor_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     second_stats = await materialize_pony_factor_scores(rollback_db_session)
+    rollback_db_session.expire_all()
 
     assert first_stats.repo_rows_updated == second_stats.repo_rows_updated
     assert first_stats.project_rows_updated == second_stats.project_rows_updated
@@ -342,6 +347,7 @@ async def test_materialize_pony_factor_scores_latest_seed_run_limits_updates(
     seeded = await _seed_pony_component(rollback_db_session)
 
     stats = await materialize_pony_factor_scores(rollback_db_session, latest_seed_run=True)
+    rollback_db_session.expire_all()
 
     assert stats.resolved_seed_run_ordinal == seeded.seed_run_ordinal_upper
     assert stats.repo_rows_updated == 1
@@ -374,6 +380,7 @@ async def test_materialize_pony_factor_scores_explicit_seed_run_recomputes_affec
     seeded = await _seed_pony_component(rollback_db_session)
 
     stats = await materialize_pony_factor_scores(rollback_db_session, seed_run_ordinal=seeded.seed_run_ordinal_lower)
+    rollback_db_session.expire_all()
 
     assert stats.resolved_seed_run_ordinal == seeded.seed_run_ordinal_lower
     assert stats.repo_rows_updated == 2
@@ -394,3 +401,24 @@ async def test_materialize_pony_factor_scores_explicit_seed_run_recomputes_affec
     assert alpha_project.pony_factor == 2
     assert beta_project.pony_factor == 99
     assert gamma_project.pony_factor == 0
+
+
+async def test_materialize_pony_factor_scores_does_not_use_uow(
+    rollback_db_session: AsyncSession, assert_no_uow: Callable[[AsyncSession], None]
+) -> None:
+    """
+    Pony-factor materialization must use bulk DML only — no ORM UoW dirty-tracking or flush.
+    """
+
+    await _seed_pony_component(rollback_db_session)
+    await rollback_db_session.flush()
+    rollback_db_session.expire_all()
+
+    flush_mock, restore_flush = _make_flush_guard(rollback_db_session)
+    try:
+        await materialize_pony_factor_scores(rollback_db_session)
+    finally:
+        restore_flush()
+
+    flush_mock.assert_not_called()
+    assert_no_uow(rollback_db_session)
