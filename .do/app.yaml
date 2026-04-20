@@ -2,8 +2,10 @@ name: pg-atlas-backend
 region: ams
 
 databases:
-  - engine: PG
+  - cluster_name: REDACTED
+    production: true
     name: pg-atlas-dev
+    engine: PG
     version: "18"
 
 features:
@@ -33,6 +35,32 @@ services:
       - key: PG_ATLAS_ARTIFACT_S3_ENDPOINT
         scope: RUN_TIME
         value: https://s3.filebase.com
+    alerts:
+      - rule: CPU_UTILIZATION
+        operator: GREATER_THAN
+        value: 50
+        window: TEN_MINUTES
+      - rule: MEM_UTILIZATION
+        operator: GREATER_THAN
+        value: 75
+        window: THIRTY_MINUTES
+      - rule: RESTART_COUNT
+        operator: GREATER_THAN
+        value: 1
+        window: FIVE_MINUTES
+    health_check:
+      failure_threshold: 9
+      http_path: /health
+      initial_delay_seconds: 1
+      period_seconds: 10
+      success_threshold: 1
+      timeout_seconds: 1
+    liveness_health_check:
+      failure_threshold: 9
+      http_path: /health
+      period_seconds: 60
+      success_threshold: 1
+      timeout_seconds: 1
 
 ingress:
   rules:
