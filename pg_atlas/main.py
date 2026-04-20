@@ -20,6 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pg_atlas.api_metadata import DESCRIPTION, VERSION, generate_route_id
 from pg_atlas.config import settings
+from pg_atlas.rate_limit import (
+    DEFAULT_LIMIT_PER_MINUTE,
+    ROUTE_LIMITS_PER_MINUTE,
+    ApiRateLimitMiddleware,
+)
 from pg_atlas.routers import contributors, gitlog, health, ingestion, metadata, projects, repos
 from pg_atlas.routers.tags import TAGS_METADATA
 
@@ -64,6 +69,12 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
+
+app.add_middleware(
+    ApiRateLimitMiddleware,
+    default_limit_per_minute=DEFAULT_LIMIT_PER_MINUTE,
+    route_limits_per_minute=ROUTE_LIMITS_PER_MINUTE,
+)
 
 app.add_middleware(
     CORSMiddleware,

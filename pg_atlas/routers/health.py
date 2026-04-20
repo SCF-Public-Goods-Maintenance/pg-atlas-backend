@@ -1,11 +1,9 @@
 """
-Health check router for PG Atlas.
+Health and readiness router for PG Atlas.
 
-Provides GET /health for liveness monitoring. The response is deliberately
-lightweight so that uptime monitors can call it frequently without overhead.
-
-A ``components`` key will be added in A2 to report the health of individual
-subsystems (database connection, NetworkX graph load status, etc.).
+GET /health reports whether the service is merely live or fully ready. When the
+database is configured, the endpoint checks the active Alembic revision and
+returns HTTP 503 if readiness cannot be established.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -13,33 +11,95 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-import importlib.metadata
+from collections.abc import Sequence
+from typing import Annotated, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from pg_atlas.api_metadata import VERSION
+from pg_atlas.config import settings
+from pg_atlas.db_models.session import maybe_db_session
 
 router = APIRouter(tags=["health"])
+
+
+class HealthComponents(BaseModel):
+    """Component-level readiness details for GET /health."""
+
+    artifact_store: Literal["local", "IPFS"]
+    database: Literal["ready", "not-configured"]
+    schema_version: str | None
 
 
 class HealthResponse(BaseModel):
     """Response body for GET /health."""
 
-    status: str
+    status: Literal["live", "ready"]
     version: str
+    components: HealthComponents
 
 
-@router.get("/health", response_model=HealthResponse, summary="Liveness check")
-async def health() -> HealthResponse:
+def _artifact_store_status() -> Literal["local", "IPFS"]:
+    """Return the configured artifact store backend."""
+
+    if settings.ARTIFACT_S3_ENDPOINT is not None:
+        return "IPFS"
+    return "local"
+
+
+def _select_app_schema_version(version_rows: Sequence[str]) -> str | None:
+    """Select the application Alembic revision from raw alembic_version rows."""
+
+    application_revisions = [version_row for version_row in version_rows if not version_row.startswith("procrastinate_")]
+    if len(application_revisions) > 1:
+        raise ValueError("multiple non-Procrastinate revisions found in alembic_version")
+    if not application_revisions:
+        return None
+    return application_revisions[0]
+
+
+async def _schema_version_from_session(session: AsyncSession) -> str | None:
+    """Read and normalize the application schema revision from one session."""
+
+    result = await session.execute(text("SELECT version_num FROM alembic_version"))
+    return _select_app_schema_version(result.scalars().all())
+
+
+@router.get("/health", response_model=HealthResponse, summary="Readiness check")
+async def health(session: Annotated[AsyncSession | None, Depends(maybe_db_session)]) -> HealthResponse:
     """
-    Return the current health status and application version.
-
-    This endpoint is intentionally dependency-free (no DB call) so that it
-    remains responsive even when the database is unreachable. A richer check
-    with named component statuses (db, graph) will be added in A2.
+    Return the current readiness status and application version.
     """
+    artifact_store = _artifact_store_status()
+    if session is None:
+        return HealthResponse(
+            status="live",
+            version=VERSION,
+            components=HealthComponents(
+                artifact_store=artifact_store,
+                database="not-configured",
+                schema_version=None,
+            ),
+        )
+
     try:
-        version = importlib.metadata.version("pg-atlas-backend")
-    except importlib.metadata.PackageNotFoundError:
-        version = "dev"
+        schema_version = await _schema_version_from_session(session)
+    except (SQLAlchemyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
-    return HealthResponse(status="ok", version=version)
+    return HealthResponse(
+        status="ready",
+        version=VERSION,
+        components=HealthComponents(
+            artifact_store=artifact_store,
+            database="ready",
+            schema_version=schema_version,
+        ),
+    )
