@@ -18,6 +18,7 @@ Queue opengrants final status counts: todo=0 doing=0 succeeded=5 failed=0 cancel
 2026-07-17 10:06:00,456 WARNING  task: Something odd happened
 Queue package-deps final status counts: todo=1 doing=0 succeeded=3 failed=1 cancelled=0 aborted=0
 Queue registry-crawl final status counts: todo=0 doing=0 succeeded=2 failed=0 cancelled=0 aborted=0
+2026-07-17 10:06:01,005 WARNING  task: another blemish
 2026-07-17 10:06:01,456 WARNING  task: registry-crawl unsupported ecosystem: system=CARGO purls=pkg:cargo/org/a pkg:cargo/org/b
 2026-07-17 10:07:00,789 ERROR    task: Critical failure
 """
@@ -42,10 +43,10 @@ Queue registry-crawl final status counts: todo=0 doing=0 succeeded=2 failed=0 ca
     assert "opengrants_succeeded=5" in stdout
     assert "package_deps_failed=1" in stdout
     assert "registry_crawl_succeeded=2" in stdout
-    assert "warning_count=1" in stdout
+    assert "warning_count=2" in stdout
     assert "error_count=1" in stdout
-    assert "warnings=Something odd happened" in stdout
-    assert "errors=Critical failure" in stdout
+    assert "warnings<<EOF\n\n* Something odd happened\n* another blemish\nEOF" in stdout
+    assert "errors<<EOF\n\n* Critical failure\nEOF" in stdout
     assert "unsupported_ecosystem_group_count=1" in stdout
     assert "unsupported_ecosystem_purl_count=2" in stdout
     assert "- CARGO (2): pkg:cargo/org/a pkg:cargo/org/b" in stdout

@@ -127,14 +127,14 @@ def emit_github_output(
 
         # Multiline values use heredoc syntax.
         if all_warnings:
-            f.write("warnings<<EOF\n\n")
+            f.write("warnings<<EOF\n")
             for w in all_warnings[:50]:
                 f.write(f"* {w}\n")
 
             f.write("EOF\n")
 
         if all_errors:
-            f.write("errors<<EOF\n\n")
+            f.write("errors<<EOF\n")
             for e in all_errors[:50]:
                 f.write(f"* {e}\n")
 
