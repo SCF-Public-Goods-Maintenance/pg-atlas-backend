@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models import DependsOn, ExternalRepo, Project, Repo
 from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, Visibility
 from pg_atlas.metrics.materialize_criticality import CriticalityMaterializationStats, materialize_criticality_scores
+from tests.metrics.conftest import _make_flush_guard
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,7 @@ async def test_materialize_criticality_scores_persists_repo_external_and_project
     seeded = await _seed_disconnected_component(rollback_db_session)
 
     stats = await materialize_criticality_scores(rollback_db_session)
+    rollback_db_session.expire_all()
 
     assert isinstance(stats, CriticalityMaterializationStats)
     assert stats.repo_rows_updated >= 4
@@ -270,6 +273,7 @@ async def test_materialize_criticality_scores_is_idempotent(
     seeded = await _seed_disconnected_component(rollback_db_session)
 
     await materialize_criticality_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     leaf_repo = await _get_repo(rollback_db_session, seeded.leaf_repo_id)
     core_repo = await _get_repo(rollback_db_session, seeded.core_repo_id)
     zero_repo = await _get_repo(rollback_db_session, seeded.zero_repo_id)
@@ -295,6 +299,7 @@ async def test_materialize_criticality_scores_is_idempotent(
     )
 
     await materialize_criticality_scores(rollback_db_session)
+    rollback_db_session.expire_all()
     leaf_repo = await _get_repo(rollback_db_session, seeded.leaf_repo_id)
     core_repo = await _get_repo(rollback_db_session, seeded.core_repo_id)
     zero_repo = await _get_repo(rollback_db_session, seeded.zero_repo_id)
@@ -320,3 +325,24 @@ async def test_materialize_criticality_scores_is_idempotent(
     )
 
     assert first_scores == second_scores
+
+
+async def test_materialize_criticality_scores_does_not_use_uow(
+    rollback_db_session: AsyncSession, assert_no_uow: Callable[[AsyncSession], None]
+) -> None:
+    """
+    Criticality materialization must use bulk DML only — no ORM UoW dirty-tracking or flush.
+    """
+
+    await _seed_disconnected_component(rollback_db_session)
+    await rollback_db_session.flush()
+    rollback_db_session.expire_all()
+
+    flush_mock, restore_flush = _make_flush_guard(rollback_db_session)
+    try:
+        await materialize_criticality_scores(rollback_db_session)
+    finally:
+        restore_flush()
+
+    flush_mock.assert_not_called()
+    assert_no_uow(rollback_db_session)

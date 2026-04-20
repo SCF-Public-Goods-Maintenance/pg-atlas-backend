@@ -28,7 +28,6 @@ from __future__ import annotations
 import logging
 
 import networkx as nx
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -81,52 +80,3 @@ def compute_criticality(G_active: nx.DiGraph[str]) -> dict[str, int]:
         f"compute_criticality: scored {len(criticality)} nodes; max={max(criticality.values(), default=0)}, nonzero={nonzero}"
     )
     return criticality
-
-
-def compute_percentile_ranks(
-    scores: dict[str, int | float],
-    ranking_nodes: set[str] | None = None,
-) -> dict[str, float]:
-    """
-    Convert raw scores to percentile ranks within [0.0, 100.0).
-
-    Uses numpy searchsorted (exclusive / left-side rank):
-        rank        = searchsorted(sorted_scores, score)   # 0-based count of scores < this score
-        percentile  = rank / n * 100.0
-
-    Parameters:
-        scores: raw scores keyed by canonical_id.
-        ranking_nodes: when provided, restrict the ranking reference distribution
-            and result to this node set (e.g., only ``project_type="public-good"``
-            Repos). Pass ``None`` to rank all nodes (default).
-
-    Properties:
-        - Minimum score  -> 0th percentile (rank = 0).
-        - Maximum score  -> (n-1)/n * 100 < 100 (no node is universally top-ranked).
-        - Ties           -> all tied values receive the same (lowest) percentile.
-        - Single element -> 0th percentile.
-
-    Ecological intent: avoids the illusion that any single package is
-    unconditionally "top-ranked" — the ecosystem is always the reference frame.
-    Consistent with scipy.stats.percentileofscore(kind="weak") minus 100 ceiling.
-
-    Returns:
-        dict[canonical_id, float] — all values in [0.0, 100.0).
-        Empty dict when scores is empty.
-    """
-    if ranking_nodes is not None:
-        scores = {k: v for k, v in scores.items() if k in ranking_nodes}
-
-    if not scores:
-        return {}
-
-    all_scores = np.array(list(scores.values()), dtype=np.float64)
-    sorted_scores = np.sort(all_scores)
-    n = len(sorted_scores)
-
-    percentiles: dict[str, float] = {}
-    for node, score in scores.items():
-        rank = int(np.searchsorted(sorted_scores, float(score)))
-        percentiles[node] = rank / n * 100.0
-
-    return percentiles

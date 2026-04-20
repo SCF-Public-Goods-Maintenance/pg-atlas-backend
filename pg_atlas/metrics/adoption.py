@@ -21,13 +21,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Final
 
+import numpy as np
 from pydantic import StrictInt, TypeAdapter, ValidationError
-
-from pg_atlas.metrics.criticality import compute_percentile_ranks
 
 PERCENTILE_QUANTUM = Decimal("0.01")
 ADOPTION_DOWNLOADS_BY_PURL_KEY = "adoption_downloads_by_purl"
@@ -36,25 +34,52 @@ _DOWNLOADS_BY_PURL_ADAPTER: Final[TypeAdapter[dict[str, int]]] = TypeAdapter(dic
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Percentile ranking (vectorised, columnar)
+# ---------------------------------------------------------------------------
+
+
+def compute_percentile_ranks(values: np.ndarray) -> np.ndarray:
+    """
+    Convert raw scores to percentile ranks within [0.0, 100.0).
+
+    Vectorised via ``np.searchsorted``:
+
+        sorted  = sort(values)
+        ranks   = searchsorted(sorted, values)   # count of scores < this score
+        pctiles = ranks / n * 100.0
+
+    Properties:
+        - Minimum score  → 0th percentile (rank = 0).
+        - Maximum score  → (n-1)/n * 100 < 100 (no element is top-ranked).
+        - Ties           → all tied values receive the same (lowest) percentile.
+        - Single element → 0th percentile.
+        - Empty input    → empty output.
+
+    Ecological intent: avoids the illusion that any single package is
+    unconditionally "top-ranked" — the ecosystem is always the reference frame.
+    """
+
+    if values.size == 0:
+        return np.empty(0, dtype=np.float64)
+
+    sorted_values = np.sort(values)
+    ranks = np.searchsorted(sorted_values, values).astype(np.float64)
+
+    return ranks / len(values) * 100.0
+
+
+# ---------------------------------------------------------------------------
+# Score quantization
+# ---------------------------------------------------------------------------
+
+
 def _quantize_score(value: Decimal) -> Decimal:
     """
     Quantize one adoption score to two decimal places.
     """
 
     return value.quantize(PERCENTILE_QUANTUM, rounding=ROUND_HALF_UP)
-
-
-@dataclass(frozen=True)
-class RepoAdoptionSignals:
-    """
-    Snapshot the adoption signal columns needed for one repo-level computation.
-    """
-
-    canonical_id: str
-    project_id: int | None
-    adoption_downloads: int | None = None
-    adoption_stars: int | None = None
-    adoption_forks: int | None = None
 
 
 def aggregate_repo_downloads(
@@ -127,41 +152,58 @@ def merge_download_into_repo_metadata(
     return metadata
 
 
-def compute_repo_adoption_composites(repos: Sequence[RepoAdoptionSignals]) -> dict[str, Decimal]:
+def compute_repo_adoption_composites(
+    canonical_ids: Sequence[str],
+    downloads: Sequence[int | None],
+    stars: Sequence[int | None],
+    forks: Sequence[int | None],
+) -> dict[str, Decimal]:
     """
-    Compute transient repo-level adoption composites from available signals.
+    Compute transient repo-level adoption composites from columnar signal arrays.
 
-    The ranking domain is all provided ``Repo`` rows. Missing signal values are
-    excluded from that signal's percentile pool rather than coerced to ``0``.
+    The ranking domain is all provided rows. Missing signal values (``None``)
+    are excluded from that signal's percentile pool rather than coerced to ``0``.
     Repos with no available signals are omitted from the result.
     """
 
-    downloads = compute_percentile_ranks(
-        {repo.canonical_id: repo.adoption_downloads for repo in repos if repo.adoption_downloads is not None}
-    )
-    stars = compute_percentile_ranks(
-        {repo.canonical_id: repo.adoption_stars for repo in repos if repo.adoption_stars is not None}
-    )
-    forks = compute_percentile_ranks(
-        {repo.canonical_id: repo.adoption_forks for repo in repos if repo.adoption_forks is not None}
-    )
+    n = len(canonical_ids)
+    dl_mask = np.array([v is not None for v in downloads], dtype=np.bool_)
+    st_mask = np.array([v is not None for v in stars], dtype=np.bool_)
+    fk_mask = np.array([v is not None for v in forks], dtype=np.bool_)
+
+    # Percentile arrays — NaN for rows not in pool, float for pool members.
+    dl_pctiles = np.full(n, np.nan, dtype=np.float64)
+    st_pctiles = np.full(n, np.nan, dtype=np.float64)
+    fk_pctiles = np.full(n, np.nan, dtype=np.float64)
+
+    if dl_mask.any():
+        dl_pctiles[dl_mask] = compute_percentile_ranks(np.array([v for v in downloads if v is not None], dtype=np.float64))
+
+    if st_mask.any():
+        st_pctiles[st_mask] = compute_percentile_ranks(np.array([v for v in stars if v is not None], dtype=np.float64))
+
+    if fk_mask.any():
+        fk_pctiles[fk_mask] = compute_percentile_ranks(np.array([v for v in forks if v is not None], dtype=np.float64))
+
+    signal_stack = np.column_stack([dl_pctiles, st_pctiles, fk_pctiles])
 
     composites: dict[str, Decimal] = {}
-    for repo in repos:
-        signal_percentiles: list[Decimal] = []
-        for signal_scores in (downloads, stars, forks):
-            percentile = signal_scores.get(repo.canonical_id)
-            if percentile is not None:
-                signal_percentiles.append(_quantize_score(Decimal(str(percentile))))
+    for i in range(n):
+        row = signal_stack[i]
+        valid = row[~np.isnan(row)]
+        if valid.size == 0:
+            continue
 
-        if signal_percentiles:
-            composites[repo.canonical_id] = _quantize_score(sum(signal_percentiles) / Decimal(len(signal_percentiles)))
+        mean_val: float = valid.sum() / valid.size
+        mean = _quantize_score(Decimal(str(mean_val)))
+        composites[canonical_ids[i]] = mean
 
     return composites
 
 
 def compute_project_adoption_scores(
-    repos: Sequence[RepoAdoptionSignals],
+    project_ids: Sequence[int | None],
+    canonical_ids: Sequence[str],
     repo_composites: Mapping[str, Decimal],
 ) -> dict[int, Decimal]:
     """
@@ -172,14 +214,15 @@ def compute_project_adoption_scores(
     """
 
     project_values: dict[int, list[Decimal]] = {}
-    for repo in repos:
-        if repo.project_id is None:
+    for i, cid in enumerate(canonical_ids):
+        pid = project_ids[i]
+        if pid is None:
             continue
 
-        composite = repo_composites.get(repo.canonical_id)
+        composite = repo_composites.get(cid)
         if composite is None:
             continue
 
-        project_values.setdefault(repo.project_id, []).append(composite)
+        project_values.setdefault(pid, []).append(composite)
 
-    return {project_id: _quantize_score(sum(values) / Decimal(len(values))) for project_id, values in project_values.items()}
+    return {pid: _quantize_score(sum(values) / Decimal(len(values))) for pid, values in project_values.items()}

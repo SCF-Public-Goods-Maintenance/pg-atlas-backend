@@ -1,12 +1,12 @@
 """
 A9 criticality materialization for repo-resolution dependency graphs.
 
-This module turns the already-merged A6 and A9 in-memory metric functions into
+This module turns the A6 and A9 in-memory metric functions into
 an offline persistence pass:
 
 1. Load the repo-resolution dependency graph from PostgreSQL.
-2. Project the active ecosystem with A6.
-3. Compute repo/external criticality with A9.
+2. Project the active ecosystem (A6).
+3. Compute repo/external criticality (A9).
 4. Materialize dep-layer scores back onto ORM rows.
 5. Aggregate project scores from child repos.
 
@@ -68,7 +68,8 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
     """
     Recompute and persist A9 criticality scores within one session.
 
-    The session is mutated and flushed, but not committed.
+    All writes use bulk DML; the ORM identity map is untouched. No ``flush()``
+    is issued.
 
     Behavior:
     - Repo and ExternalRepo rows are always materialized to an integer score.
@@ -86,20 +87,22 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
     active_graph = project_active_subgraph(dependency_graph)
     active_scores = compute_criticality(active_graph)
 
-    repos = (await session.execute(select(Repo))).scalars().all()
-    external_repos = (await session.execute(select(ExternalRepo))).scalars().all()
-    project_rows_updated = await session.scalar(select(func.count(Project.id))) or 0
+    # --- columnar load: id + canonical_id only ---
+    repo_rows = (await session.execute(select(Repo.id, Repo.canonical_id))).all()
+    ext_rows = (await session.execute(select(ExternalRepo.id, ExternalRepo.canonical_id))).all()
+    dep_nodes_seen = len(repo_rows) + len(ext_rows)
 
-    dep_nodes_seen = len(repos) + len(external_repos)
+    # --- bulk update Repo criticality scores ---
+    repo_updates = [{"id": rid, "criticality_score": active_scores.get(cid, 0)} for rid, cid in repo_rows]
+    if repo_updates:
+        await session.execute(update(Repo), repo_updates)
 
-    for repo in repos:
-        repo.criticality_score = active_scores.get(repo.canonical_id, 0)
+    # --- bulk update ExternalRepo criticality scores ---
+    ext_updates = [{"id": rid, "criticality_score": active_scores.get(cid, 0)} for rid, cid in ext_rows]
+    if ext_updates:
+        await session.execute(update(ExternalRepo), ext_updates)
 
-    for external_repo in external_repos:
-        external_repo.criticality_score = active_scores.get(external_repo.canonical_id, 0)
-
-    await session.flush()
-
+    # --- set-based Project aggregation (sum of child Repo scores) ---
     project_score_subquery = (
         select(
             Repo.project_id.label("project_id"),
@@ -123,18 +126,15 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
     )
     await session.execute(project_update)
 
-    # Keep already-loaded Project rows usable inside the current AsyncSession.
-    await session.execute(select(Project).execution_options(populate_existing=True))
-
-    await session.flush()
+    project_rows_updated = await session.scalar(select(func.count(Project.id))) or 0
 
     duration_seconds = time.perf_counter() - started_at
 
     stats = CriticalityMaterializationStats(
         dep_nodes_seen=dep_nodes_seen,
         active_dep_nodes_scored=len(active_scores),
-        repo_rows_updated=len(repos),
-        external_repo_rows_updated=len(external_repos),
+        repo_rows_updated=len(repo_rows),
+        external_repo_rows_updated=len(ext_rows),
         project_rows_updated=project_rows_updated,
         duration_seconds=duration_seconds,
     )
