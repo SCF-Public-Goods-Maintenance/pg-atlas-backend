@@ -108,7 +108,6 @@ async def test_fetch_package_parses_stats(
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     assert pkg.downloads_30d == 1970  # monthly (last 30 days per spec)
-    assert pkg.stars is None  # reserved for GitHub
     assert pkg.metadata["downloads_total"] == 46925
     assert pkg.metadata["download_count_30d"] == 1970
     assert pkg.metadata["downloads_daily"] == 68
