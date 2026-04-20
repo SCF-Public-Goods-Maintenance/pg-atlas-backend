@@ -134,7 +134,6 @@ def _make_package(
         latest_version="1.0.0",
         repo_url=repo_url,
         downloads_30d=downloads_30d,
-        stars=None,
         metadata={},
         dependencies=dependencies or [],
         releases=[],

@@ -66,7 +66,6 @@ class CrawledPackage:
     latest_version: str
     repo_url: str | None
     downloads_30d: int | None
-    stars: int | None
     metadata: dict[str, Any]
     dependencies: list[CrawledDependency]
     releases: list[Release]

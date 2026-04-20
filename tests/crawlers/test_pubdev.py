@@ -101,9 +101,8 @@ async def test_fetch_package_parses_scores_and_downloads(
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
-    # adoption_downloads = last 30 days; adoption_stars reserved for GitHub
+    # adoption_downloads = last 30 days
     assert pkg.downloads_30d == 1469
-    assert pkg.stars is None
 
     assert pkg.metadata["pub_points"] == 140
     assert pkg.metadata["pub_points_max"] == 160
@@ -180,7 +179,6 @@ async def test_fetch_package_metrics_failure(
     assert pkg.latest_version == "1.8.6"
     assert len(pkg.dependencies) > 0
     assert pkg.downloads_30d is None  # no metrics data available
-    assert pkg.stars is None
 
 
 async def test_fetch_package_handles_missing_fields(
