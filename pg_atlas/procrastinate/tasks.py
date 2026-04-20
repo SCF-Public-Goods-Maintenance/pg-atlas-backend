@@ -10,12 +10,12 @@ Task hierarchy (queue names in brackets)::
     sync_opengrants  [opengrants]
       └─ process_project  [opengrants]
            └─ crawl_github_repo  [opengrants]
-                └─ crawl_package_deps  [package-deps]
+                 ├─ crawl_package_deps  [package-deps]
+                 └─ crawl_package_registry  [registry-crawl]
 
-The bootstrap workers are invoked sequentially per queue so that all
-``crawl_github_repo`` tasks are complete before ``crawl_package_deps`` begins.
-This guarantees that ``Repo`` vertices and their ``Project`` associations
-exist by the time the dependency crawl needs to check them.
+The bootstrap workers run ``package-deps`` and ``registry-crawl`` after
+``opengrants`` has drained so that all ``Repo`` vertices and ``Project``
+associations exist by the time downstream crawls execute.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,11 @@ import yaml
 from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import select
 
+from pg_atlas.config import settings
+from pg_atlas.crawlers.base import AllPackagesFailed
+from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
+from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 from pg_atlas.db_models.repo_vertex import RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
@@ -43,28 +48,19 @@ from pg_atlas.procrastinate.app import app
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
     DepsDevProjectInfo,
-    ProjectPackageVersion,
+    ProjectPackage,
     depsdev_session,
     get_package,
     get_project_batch,
-    get_project_package_versions,
     get_requirements,
 )
 from pg_atlas.procrastinate.github import (
     GitHubRepoMetadata,
     PackageReference,
-)
-from pg_atlas.procrastinate.github import (
-    detect_packages_from_repo as _detect_packages_from_repo,
-)
-from pg_atlas.procrastinate.github import (
-    get_single_repo as _get_single_repo,
-)
-from pg_atlas.procrastinate.github import (
-    latest_version_from_repo as _latest_version_from_repo,
-)
-from pg_atlas.procrastinate.github import (
-    list_org_repos as _list_org_repos,
+    detect_packages_from_repo,
+    get_single_repo,
+    latest_version_from_repo,
+    list_org_repos,
 )
 from pg_atlas.procrastinate.opengrants import fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
@@ -79,6 +75,10 @@ from pg_atlas.procrastinate.upserts import (
 
 logger = logging.getLogger(__name__)
 
+# TODO: refactor into single source of truth; should live in crawlers and depsdev.
+REGISTRY_CRAWL_SYSTEMS = frozenset({"DART", "COMPOSER"})
+DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "RUBYGEMS", "NUGET"})
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -90,27 +90,7 @@ _MAPPING_PATH = Path(__file__).parent / "project-git-mapping.yml"
 _MAX_RELEASE_ENTRIES = 555
 
 
-# ---------------------------------------------------------------------------
-# Mapping file helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_git_mapping() -> dict[str, dict[str, str]]:
-    """
-    Load the project → git URL mapping YAML file.
-
-    Returns a dict mapping ``projectId`` → ``{git_owner_url, git_repo_url}``.
-    """
-    if not _MAPPING_PATH.exists():
-        return {}
-
-    with _MAPPING_PATH.open() as f:
-        data: dict[str, dict[str, str]] = yaml.safe_load(f) or {}
-
-    return data
-
-
-async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+async def defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
     """
     Defer a Procrastinate task and suppress expected duplicate-lock noise.
 
@@ -125,9 +105,6 @@ async def _defer_with_lock(task: Any, queueing_lock: str, **kwargs: Any) -> bool
         logger.warning(str(exc))
 
         return False
-
-
-defer_with_lock = _defer_with_lock
 
 
 # ---------------------------------------------------------------------------
@@ -270,20 +247,25 @@ async def process_project(
     1. Upsert a ``Project`` row.
     2. If category is "Education & Community", skip GitHub/deps.dev crawling.
     3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
+
+    ``crawl_github_repo`` receives versionless package identities so it can:
+    - reuse known package keys from deps.dev project mapping, and
+    - still detect packages from repository manifests when deps.dev has no
+        package coverage for a repository.
+
+    Later in ``crawl_github_repo``, ``get_package`` is used to fetch default
+    version and release metadata for these package identities.
     """
     logger.info(f"process_project: {display_name} ({project_canonical_id})")
 
     status = ActivityStatus(activity_status)
-
-    # ----- Determine project type (preliminary; may be refined after deps.dev) -----
-    project_type = ProjectType.scf_project
 
     # ----- Education & Community: upsert project row only, skip crawling -----
     if category == "Education & Community":
         await upsert_project(
             canonical_id=project_canonical_id,
             display_name=display_name,
-            project_type=project_type,
+            project_type=ProjectType.scf_project,
             activity_status=status,
             git_owner_url=git_owner_url,
             category=category,
@@ -302,10 +284,10 @@ async def process_project(
     repos_to_crawl: list[GitHubRepoMetadata] = []
     if owner:
         if extended_universe or not git_repo_url:
-            repos_to_crawl = _list_org_repos(owner)
+            repos_to_crawl = list_org_repos(owner)
         else:
             repo_name = git_repo_url.rstrip("/").rsplit("/", 1)[-1]
-            repos_to_crawl = _get_single_repo(owner, repo_name)
+            repos_to_crawl = get_single_repo(owner, repo_name)
             logger.info(f"Restricting {git_owner_url} crawl to {repo_name} only.")
 
     # ----- deps.dev GetProjectBatch -----
@@ -323,7 +305,7 @@ async def process_project(
 
                 for project_key, proj_info in depsdev_projects.items():
                     try:
-                        proj_info.package_versions = await get_project_package_versions(project_key, stub=stub)
+                        await proj_info.populate_packages(stub=stub)
                     except DepsDevError as exc:
                         logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
 
@@ -331,7 +313,7 @@ async def process_project(
             logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
 
     # ----- Determine project type -----
-    has_packages = any(info.package_versions for info in depsdev_projects.values()) if depsdev_projects else False
+    has_packages = any(info.packages for info in depsdev_projects.values()) if depsdev_projects else False
     project_type = ProjectType.public_good if has_packages else ProjectType.scf_project
 
     # ----- Upsert Project row -----
@@ -351,7 +333,7 @@ async def process_project(
         depsdev_key = f"github.com/{repo_full}".lower()
         depsdev_info = depsdev_projects.get(depsdev_key)
 
-        packages: list[ProjectPackageVersion] = []
+        packages: list[ProjectPackage] = []
         adoption_stars = repo_info.stars
         adoption_forks = repo_info.forks
         # normalize datetime to UTC before DB persistence
@@ -360,7 +342,7 @@ async def process_project(
             pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
 
         if depsdev_info:
-            packages = depsdev_info.package_versions
+            packages = depsdev_info.packages
             adoption_stars = max(adoption_stars, depsdev_info.stars_count)
             adoption_forks = max(adoption_forks, depsdev_info.forks_count)
 
@@ -372,15 +354,7 @@ async def process_project(
             owner=repo_owner,
             repo=repo_name,
             project_id=project_id,
-            packages=[
-                {
-                    "system": pkg.system,
-                    "name": pkg.name,
-                    "version": pkg.version,
-                    "purl": pkg.purl,
-                }
-                for pkg in packages
-            ],
+            packages=[asdict(pkg) for pkg in packages],
             pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
@@ -411,32 +385,30 @@ async def crawl_github_repo(
     2. For each package, check if it exists as ``ExternalRepo``; if so,
        promote it to ``Repo`` and link it to the project.
     3. Ensure a ``Repo`` vertex ``pkg:github/owner/repo`` exists.
-    4. Defer ``crawl_package_deps`` for each package.
+    4. Defer ``crawl_package_deps`` for deps.dev-supported packages.
+    5. Group registry-crawl packages by registry system and defer one
+        ``crawl_package_registry`` task per supported system.
+
+    Supported direct-registry crawl systems are intentionally limited to
+    ``DART`` and ``COMPOSER``. Other ecosystems are logged as unsupported for
+    observability.
     """
     logger.info(f"crawl_github_repo: {owner}/{repo} (project_id={project_id})")
 
+    # ----- Proceed with Deps.dev packages, or detect published packages from repo manifests -----
     package_refs = [PackageReference.from_payload(pkg) for pkg in packages]
+    received_depsdev_payload = bool(package_refs)
     if not package_refs:
-        package_refs = _detect_packages_from_repo(owner, repo)
+        package_refs = detect_packages_from_repo(owner, repo)
         logger.info(f"Detected {len(package_refs)} packages in {owner}/{repo}")
 
-    # Deps.dev project package versions can include many entries per package
-    # (one row per version). Collapse to unique package keys before crawling.
-    unique_packages: dict[tuple[str, str], PackageReference] = {}
-    for pkg in package_refs:
-        system = pkg.system
-        name = pkg.name
-        if not system or not name:
-            continue
+    depsdev_packages, registry_packages, misc_packages = _partition_package_refs(package_refs)
+    mixed_package_list = bool(depsdev_packages) and bool(registry_packages or misc_packages)
 
-        unique_packages[(system, name)] = pkg
-
-    packages_to_process = list(unique_packages.values())
-
-    # ----- Build releases from package info -----
-    releases: list[dict[str, Any]] = []
+    # ----- Build releases from deps.dev-supported package info -----
+    releases: list[Release] = []
     async with depsdev_session() as stub:
-        for pkg in packages_to_process:
+        for pkg in depsdev_packages:
             system = pkg.system
             name = pkg.name
 
@@ -444,26 +416,27 @@ async def crawl_github_repo(
                 pkg_info = await get_package(system, name, stub=stub)
                 for v in pkg_info.versions:
                     releases.append(
-                        {
-                            "version": v.version,
-                            "release_date": v.published_at,
-                            "purl": strip_purl_version(v.purl),
-                        }
+                        Release(
+                            version=v.version,
+                            release_date=v.published_at or "",
+                            purl=strip_purl_version(v.purl),
+                        )
                     )
 
             except DepsDevError:
                 logger.debug(f"Package not found on deps.dev: {system}/{name}")
 
+    releases = sorted_releases_desc(releases)
+
     if len(releases) > _MAX_RELEASE_ENTRIES:
         logger.warning(f"Truncating releases for {owner}/{repo} from {len(releases)} to {_MAX_RELEASE_ENTRIES} entries")
-        releases = releases[-_MAX_RELEASE_ENTRIES:]
+        releases = releases[:_MAX_RELEASE_ENTRIES]
 
     # ----- Determine latest_version -----
     if releases:
-        # Use the latest version from package releases.
-        latest_version = releases[-1].get("version", "")
+        latest_version = preferred_latest_version(releases)
     else:
-        latest_version = _latest_version_from_repo(owner, repo)
+        latest_version = latest_version_from_repo(owner, repo)
 
     # ----- Upsert the Repo vertex (pkg:github/owner/repo) -----
     repo_canonical_id = f"pkg:github/{owner}/{repo}"
@@ -489,11 +462,14 @@ async def crawl_github_repo(
     )
 
     # ----- For each package: absorb ExternalRepo if one exists -----
-    for pkg in packages_to_process:
+    # must happen for all packages regardless of system
+    for pkg in package_refs:
         system = pkg.system
         name = pkg.name
 
         # Build the canonical_id this package would have as a vertex.
+        # Package references from repository detection may not carry a purl.
+        # FIXME: ensure and enforce that the purl is present on every PackageReference
         purl_type = _purl_type_for_system(system)
         if purl_type:
             pkg_canonical_id = f"pkg:{purl_type}/{name}"
@@ -511,12 +487,12 @@ async def crawl_github_repo(
     # ----- Associate the github repo vertex with the project -----
     await associate_repo_with_project(repo_canonical_id, project_id)
 
-    # ----- Defer crawl_package_deps for each package -----
-    for pkg in packages_to_process:
+    # ----- Defer crawl_package_deps for deps.dev-supported packages -----
+    for pkg in depsdev_packages:
         system = pkg.system
         name = pkg.name
 
-        await _defer_with_lock(
+        await defer_with_lock(
             crawl_package_deps,
             queueing_lock=f"{system}:{name}",
             system=system,
@@ -524,10 +500,103 @@ async def crawl_github_repo(
             source_repo_canonical_id=repo_canonical_id,
         )
 
+    # ----- Defer crawl_package_registry for crawler-supported packages -----
+    registry_packages_by_system: dict[str, set[str]] = {}
+    for pkg in registry_packages:
+        normalized_system = normalize_registry_system(pkg.system)
+        if normalized_system is None:
+            continue
+
+        registry_packages_by_system.setdefault(normalized_system, set()).add(pkg.name)
+
+    deferred_registry_tasks = 0
+    for system, package_names in registry_packages_by_system.items():
+        if system not in REGISTRY_CRAWL_SYSTEMS:
+            continue
+
+        enqueued = await defer_with_lock(
+            crawl_package_registry,
+            queueing_lock=f"registry:{repo_canonical_id}:{system}",
+            system=system,
+            package_names=sorted(package_names),
+        )
+        if enqueued:
+            deferred_registry_tasks += 1
+
+    warning_packages = list(misc_packages)
+    if mixed_package_list:
+        warning_packages.extend(depsdev_packages)
+
+    if received_depsdev_payload and not mixed_package_list:
+        warning_packages = list(misc_packages)
+
+    unsupported_registry_purls = _build_registry_warning_purls(warning_packages)
+    for system, purls in sorted(unsupported_registry_purls.items()):
+        joined_purls = " ".join(sorted(purls))
+        logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
+
     logger.info(
-        f"crawl_github_repo: {owner}/{repo} - {len(packages_to_process)} packages, "
-        f"deferred {len(packages_to_process)} crawl_package_deps tasks"
+        f"crawl_github_repo: {owner}/{repo} - {len(package_refs)} packages, "
+        f"deferred {len(depsdev_packages)} crawl_package_deps tasks, "
+        f"deferred {deferred_registry_tasks} crawl_package_registry tasks"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task: crawl_package_registry
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="registry-crawl")
+async def crawl_package_registry(
+    system: str,
+    package_names: list[str],
+) -> None:
+    """
+    Crawl direct registry signals and persist package-level download metadata.
+
+    This task is intentionally separate from deps.dev dependency crawling.
+    It fetches package signals from source registries and records per-package
+    download counts under the source repo metadata map
+    (``adoption_downloads_by_purl``).
+
+    It does not write scalar ``Repo.adoption_downloads`` directly; scalar
+    reduction is performed by adoption materialization.
+    """
+
+    normalized_system = normalize_registry_system(system)
+    if normalized_system is None:
+        logger.warning(f"crawl_package_registry: unsupported system={system}")
+
+        return
+
+    session_factory = get_session_factory()
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+        follow_redirects=True,
+        headers={"User-Agent": "pg-atlas-crawler/0.1"},
+    ) as client:
+        crawler = build_registry_crawler(
+            normalized_system,
+            client=client,
+            session_factory=session_factory,
+            rate_limit=settings.CRAWLER_RATE_LIMIT,
+            max_retries=settings.CRAWLER_MAX_RETRIES,
+        )
+
+        if crawler is None:
+            logger.warning(f"crawl_package_registry: no crawler available for system={normalized_system}")
+
+            return
+
+        result = await crawler.crawl_and_persist(package_names=package_names)
+
+    logger.info(
+        f"crawl_package_registry: system={normalized_system} packages={len(package_names)} "
+        f"processed={result.packages_processed} errors={len(result.errors)}"
+    )
+    if result.packages_processed == 0:
+        raise AllPackagesFailed(package_names)
 
 
 # ---------------------------------------------------------------------------
@@ -597,54 +666,59 @@ async def crawl_package_deps(
 
         source_vertex_id: int = row[0]
 
-    finally:
-        await session.close()
+        # ----- Process each requirement -----
+        for req in reqs:
+            dep_purl_type = _purl_type_for_system(req.system)
+            dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
 
-    # ----- Process each requirement -----
-    for req in reqs:
-        dep_purl_type = _purl_type_for_system(req.system)
-        dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
+            if dep_canonical_id == source_repo_canonical_id:
+                logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
 
-        if dep_canonical_id == source_repo_canonical_id:
-            logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
+                continue
 
-            continue
+            # Look up the dependency's package PURL in existing Repos' releases.
+            repo_match = await find_repo_by_release_purl(dep_canonical_id)
 
-        # Look up the dependency's package PURL in existing Repos' releases.
-        repo_match = await find_repo_by_release_purl(dep_canonical_id)
+            if repo_match is not None:
+                dep_vertex_id, repo_canonical_id, project_id = repo_match
 
-        if repo_match is not None:
-            dep_vertex_id, repo_canonical_id, project_id = repo_match
-
-            await upsert_depends_on(
-                in_vertex_id=source_vertex_id,
-                out_vertex_id=dep_vertex_id,
-                version_range=req.version_constraint,
-            )
-
-            # Recurse only if the Repo belongs to a tracked Project.
-            if project_id is not None:
-                await _defer_with_lock(
-                    crawl_package_deps,
-                    queueing_lock=f"{req.system}:{req.name}",
-                    system=req.system,
-                    package_name=req.name,
-                    source_repo_canonical_id=repo_canonical_id,
+                await upsert_depends_on(
+                    session=session,
+                    in_vertex_id=source_vertex_id,
+                    out_vertex_id=dep_vertex_id,
+                    version_range=req.version_constraint,
                 )
 
-        else:
-            # External dependency — upsert ExternalRepo, no recursion.
-            dep_vertex_id = await upsert_external_repo(
-                canonical_id=dep_canonical_id,
-                display_name=req.name,
-                latest_version=req.version_constraint,
-            )
+                # Recurse only if the Repo belongs to a tracked Project.
+                if project_id is not None:
+                    await defer_with_lock(
+                        crawl_package_deps,
+                        queueing_lock=f"{req.system}:{req.name}",
+                        system=req.system,
+                        package_name=req.name,
+                        source_repo_canonical_id=repo_canonical_id,
+                    )
 
-            await upsert_depends_on(
-                in_vertex_id=source_vertex_id,
-                out_vertex_id=dep_vertex_id,
-                version_range=req.version_constraint,
-            )
+            else:
+                # External dependency — upsert ExternalRepo, no recursion.
+                dep_vertex_id = await upsert_external_repo(
+                    session=session,
+                    canonical_id=dep_canonical_id,
+                    display_name=req.name,
+                    latest_version=req.version_constraint,
+                )
+
+                await upsert_depends_on(
+                    session=session,
+                    in_vertex_id=source_vertex_id,
+                    out_vertex_id=dep_vertex_id,
+                    version_range=req.version_constraint,
+                )
+
+        await session.commit()
+
+    finally:
+        await session.close()
 
     logger.info(f"crawl_package_deps: {system}/{package_name}@{version} - {len(reqs)} deps processed")
 
@@ -652,6 +726,7 @@ async def crawl_package_deps(
 # ---------------------------------------------------------------------------
 # PURL type mapping (system → PURL type component)
 # ---------------------------------------------------------------------------
+# FIXME: duplication with DEPSDEV_SUPPORTED_SYSTEMS and REGISTRY_CRAWL_SYSTEMS
 
 
 def _purl_type_for_system(system: str) -> str | None:
@@ -671,6 +746,80 @@ def _purl_type_for_system(system: str) -> str | None:
         "GO": "golang",
         "RUBYGEMS": "gem",
         "NUGET": "nuget",
+        "DART": "pub",
+        "COMPOSER": "composer",
     }
 
     return _map.get(system.upper())
+
+
+def _purl_for_package(system: str, name: str) -> str:
+    """
+    Build a best-effort PURL for one system/package pair.
+    """
+
+    purl_type = _purl_type_for_system(system)
+    if purl_type is None:
+        return name
+
+    return f"pkg:{purl_type}/{name}"
+
+
+def _partition_package_refs(
+    package_refs: list[PackageReference],
+) -> tuple[list[PackageReference], list[PackageReference], list[PackageReference]]:
+    """
+    Split package references by processing path.
+
+    Returns ``(depsdev_packages, registry_packages, misc_packages)``.
+    """
+
+    depsdev_packages: list[PackageReference] = []
+    registry_packages: list[PackageReference] = []
+    misc_packages: list[PackageReference] = []
+
+    for package_ref in package_refs:
+        system = package_ref.system.upper()
+        if system in DEPSDEV_SUPPORTED_SYSTEMS:
+            depsdev_packages.append(package_ref)
+            continue
+
+        normalized_registry_system = normalize_registry_system(system)
+        if normalized_registry_system in REGISTRY_CRAWL_SYSTEMS:
+            registry_packages.append(package_ref)
+            continue
+
+        misc_packages.append(package_ref)
+
+    return depsdev_packages, registry_packages, misc_packages
+
+
+def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[str, set[str]]:
+    """Build grouped warning payload for registry-unsupported package references."""
+
+    grouped_purls: dict[str, set[str]] = {}
+    for package_ref in package_refs:
+        purl = package_ref.purl or _purl_for_package(package_ref.system, package_ref.name)
+        grouped_purls.setdefault(package_ref.system.upper(), set()).add(purl)
+
+    return grouped_purls
+
+
+# ---------------------------------------------------------------------------
+# Mapping file helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_git_mapping() -> dict[str, dict[str, str]]:
+    """
+    Load the project → git URL mapping YAML file.
+
+    Returns a dict mapping ``projectId`` → ``{git_owner_url, git_repo_url}``.
+    """
+    if not _MAPPING_PATH.exists():
+        return {}
+
+    with _MAPPING_PATH.open() as f:
+        data: dict[str, dict[str, str]] = yaml.safe_load(f) or {}
+
+    return data

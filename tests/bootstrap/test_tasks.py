@@ -1,5 +1,4 @@
 """
-
 Unit tests for ``pg_atlas.procrastinate.tasks``.
 
 These tests avoid network/database I/O via pytest-native mocking
@@ -12,6 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,22 +20,21 @@ from procrastinate.exceptions import AlreadyEnqueued
 from pg_atlas.db_models.base import ActivityStatus, ProjectType
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
-    DepsDevPackageInfo,
-    DepsDevProjectInfo,
     DepsDevRequirement,
-    DepsDevVersionInfo,
-    ProjectPackageVersion,
+    ProjectPackage,
 )
 from pg_atlas.procrastinate.opengrants import ScfProject
 
 try:
     from pg_atlas.procrastinate.tasks import (
         GitHubRepoMetadata,
-        _defer_with_lock,
+        PackageReference,
         _load_git_mapping,
         _purl_type_for_system,
         crawl_github_repo,
         crawl_package_deps,
+        crawl_package_registry,
+        defer_with_lock,
         process_gitlog_batch,
         process_project,
         sync_opengrants,
@@ -47,6 +46,18 @@ except ValueError:
 class _FakeConfiguredTask:
     def __init__(self, mocker: Any) -> None:
         self.defer_async = mocker.AsyncMock()
+
+
+def _depsdev_package_info(default_version: str, versions: list[SimpleNamespace]) -> SimpleNamespace:
+    """Build a minimal deps.dev package info stub for task tests."""
+
+    return SimpleNamespace(
+        system="PYPI",
+        name="stellar-sdk",
+        purl="pkg:pypi/stellar-sdk",
+        default_version=default_version,
+        versions=versions,
+    )
 
 
 def test_purl_type_for_system() -> None:
@@ -66,7 +77,7 @@ async def test_defer_with_lock_handles_already_enqueued(mocker: Any) -> None:
     configured.defer_async.side_effect = AlreadyEnqueued("Job cannot be enqueued")
     task.configure.return_value = configured
 
-    ok = await _defer_with_lock(task, queueing_lock="PYPI:foo", system="PYPI", package_name="foo")
+    ok = await defer_with_lock(task, queueing_lock="PYPI:foo", system="PYPI", package_name="foo")
 
     assert ok is False
 
@@ -120,8 +131,17 @@ async def test_process_gitlog_batch_calls_runtime(mocker: Any) -> None:
 
 
 async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> None:
+    depsdev_info = SimpleNamespace(
+        project_id="github.com/org/repo",
+        stars_count=10,
+        forks_count=3,
+        license="Apache-2.0",
+        description="repo",
+        packages=[ProjectPackage(system="PYPI", name="stellar-sdk", purl="pkg:pypi/stellar-sdk")],
+    )
+    depsdev_info.populate_packages = mocker.AsyncMock()
     mocker.patch(
-        "pg_atlas.procrastinate.tasks._list_org_repos",
+        "pg_atlas.procrastinate.tasks.list_org_repos",
         return_value=[
             GitHubRepoMetadata(
                 name="repo",
@@ -140,28 +160,8 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         "pg_atlas.procrastinate.tasks.get_project_batch",
         new=mocker.AsyncMock(
             return_value={
-                "github.com/org/repo": DepsDevProjectInfo(
-                    project_id="github.com/org/repo",
-                    stars_count=10,
-                    forks_count=3,
-                    license="Apache-2.0",
-                    description="repo",
-                    package_versions=[],
-                )
+                "github.com/org/repo": depsdev_info,
             }
-        ),
-    )
-    mocker.patch(
-        "pg_atlas.procrastinate.tasks.get_project_package_versions",
-        new=mocker.AsyncMock(
-            return_value=[
-                ProjectPackageVersion(
-                    system="PYPI",
-                    name="stellar-sdk",
-                    version="11.1.0",
-                    purl="pkg:pypi/stellar-sdk@11.1.0",
-                )
-            ]
         ),
     )
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
@@ -183,8 +183,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         {
             "system": "PYPI",
             "name": "stellar-sdk",
-            "version": "11.1.0",
-            "purl": "pkg:pypi/stellar-sdk@11.1.0",
+            "purl": "pkg:pypi/stellar-sdk",
         }
     ]
 
@@ -193,17 +192,13 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
         new=mocker.AsyncMock(
-            return_value=DepsDevPackageInfo(
-                system="PYPI",
-                name="stellar-sdk",
-                purl="pkg:pypi/stellar-sdk",
-                default_version="11.1.0",
+            return_value=_depsdev_package_info(
+                "11.1.0",
                 versions=[
-                    DepsDevVersionInfo(
+                    SimpleNamespace(
                         version="11.1.0",
                         purl="pkg:pypi/stellar-sdk@11.1.0",
                         published_at=None,
-                        is_default=True,
                     )
                 ],
             )
@@ -212,7 +207,7 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
     mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
-    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
         owner="StellarCN",
@@ -226,31 +221,23 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     assert defer_mock.call_count == 1
 
 
-async def test_crawl_github_repo_deduplicates_same_package(mocker: Any) -> None:
+async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
-        new=mocker.AsyncMock(
-            return_value=DepsDevPackageInfo(
-                system="PYPI",
-                name="stellar-sdk",
-                purl="pkg:pypi/stellar-sdk",
-                default_version="11.1.0",
-                versions=[],
-            )
-        ),
+        new=mocker.AsyncMock(return_value=_depsdev_package_info("11.1.0", versions=[])),
     )
     upsert_repo_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
     mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
-    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
         owner="StellarCN",
         repo="py-stellar-base",
         project_id=1,
         packages=[
-            {"system": "PYPI", "name": "stellar-sdk", "version": "1.0.0"},
-            {"system": "PYPI", "name": "stellar-sdk", "version": "1.1.0"},
+            {"system": "PYPI", "name": "stellar-sdk", "purl": "pkg:pypi/stellar-sdk"},
+            {"system": "PYPI", "name": "stellar-sdk", "purl": "pkg:pypi/stellar-sdk"},
         ],
         adoption_stars=123,
         adoption_forks=44,
@@ -258,22 +245,14 @@ async def test_crawl_github_repo_deduplicates_same_package(mocker: Any) -> None:
 
     # 1 upsert for github repo; per-package loop calls absorb, not upsert_repo.
     assert upsert_repo_mock.call_count == 1
-    assert absorb_mock.call_count == 1
-    assert defer_mock.call_count == 1
+    assert absorb_mock.call_count == 2
+    assert defer_mock.call_count == 2
 
 
 async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
-        new=mocker.AsyncMock(
-            return_value=DepsDevPackageInfo(
-                system="PYPI",
-                name="stellar-sdk",
-                purl="pkg:pypi/stellar-sdk",
-                default_version="1.0.0",
-                versions=[],
-            )
-        ),
+        new=mocker.AsyncMock(return_value=_depsdev_package_info("1.0.0", versions=[])),
     )
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_requirements",
@@ -314,7 +293,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
         new=mocker.AsyncMock(
-            return_value=DepsDevPackageInfo(
+            return_value=SimpleNamespace(
                 system="PYPI",
                 name="py-evm",
                 purl="pkg:pypi/py-evm",
@@ -333,7 +312,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
     )
     upsert_ext_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_external_repo", new=mocker.AsyncMock(return_value=200))
     edge_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_depends_on", new=mocker.AsyncMock())
-    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks._defer_with_lock", new=mocker.AsyncMock(return_value=True))
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     session = mocker.AsyncMock()
     execute_result = mocker.Mock()
@@ -355,7 +334,7 @@ async def test_crawl_package_deps_skips_self_recursive_dep(mocker: Any) -> None:
 
 async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
     upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=42))
-    list_repos_mock = mocker.patch("pg_atlas.procrastinate.tasks._list_org_repos")
+    list_repos_mock = mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos")
     crawl_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
 
     await process_project(
@@ -372,3 +351,97 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
     assert upsert_mock.call_args.kwargs["category"] == "Education & Community"
     list_repos_mock.assert_not_called()
     crawl_mock.assert_not_called()
+
+
+async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_flutter(mocker: Any) -> None:
+    """Ensure Flutter package detection defers and executes DART registry crawl."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system="DART", name="stellar_flutter_sdk")],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
+
+    fake_result = mocker.Mock(packages_processed=1, errors=[])
+    fake_crawler = mocker.Mock()
+    fake_crawler.crawl_and_persist = mocker.AsyncMock(return_value=fake_result)
+    build_crawler_mock = mocker.patch("pg_atlas.procrastinate.tasks.build_registry_crawler", return_value=fake_crawler)
+
+    async def _defer_side_effect(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+        if task is crawl_package_registry:
+            await crawl_package_registry(**kwargs)
+
+        return True
+
+    defer_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.defer_with_lock",
+        new=mocker.AsyncMock(side_effect=_defer_side_effect),
+    )
+
+    await crawl_github_repo(
+        owner="Soneso",
+        repo="stellar_flutter_sdk",
+        project_id=1,
+        packages=[],
+        adoption_stars=123,
+        adoption_forks=44,
+    )
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == "DART"
+    assert registry_defer_calls[0].kwargs["package_names"] == ["stellar_flutter_sdk"]
+
+    build_crawler_mock.assert_called_once()
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["stellar_flutter_sdk"])
+
+
+async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: Any) -> None:
+    """Ensure Composer package detection defers and executes COMPOSER registry crawl."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system="COMPOSER", name="soneso/stellar-php-sdk")],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
+
+    fake_result = mocker.Mock(packages_processed=1, errors=[])
+    fake_crawler = mocker.Mock()
+    fake_crawler.crawl_and_persist = mocker.AsyncMock(return_value=fake_result)
+    build_crawler_mock = mocker.patch("pg_atlas.procrastinate.tasks.build_registry_crawler", return_value=fake_crawler)
+
+    async def _defer_side_effect(task: Any, queueing_lock: str, **kwargs: Any) -> bool:
+        if task is crawl_package_registry:
+            await crawl_package_registry(**kwargs)
+
+        return True
+
+    defer_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.defer_with_lock",
+        new=mocker.AsyncMock(side_effect=_defer_side_effect),
+    )
+
+    await crawl_github_repo(
+        owner="Soneso",
+        repo="stellar-php-sdk",
+        project_id=1,
+        packages=[],
+        adoption_stars=123,
+        adoption_forks=44,
+    )
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == "COMPOSER"
+    assert registry_defer_calls[0].kwargs["package_names"] == ["soneso/stellar-php-sdk"]
+
+    build_crawler_mock.assert_called_once()
+    fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["soneso/stellar-php-sdk"])

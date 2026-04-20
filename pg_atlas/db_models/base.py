@@ -18,11 +18,16 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import enum
-from typing import Annotated
+from typing import Annotated, Any
 
+import msgspec
 import sqlalchemy.types as types
 from sqlalchemy import Dialect, MetaData, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, mapped_column
+from sqlalchemy.types import TypeDecorator
+
+from pg_atlas.db_models.release import Release
 
 
 def enum_values(obj: type[enum.Enum]) -> list[str]:
@@ -40,7 +45,7 @@ def enum_values(obj: type[enum.Enum]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Custom column type: HexBinary
+# Custom column types
 # ---------------------------------------------------------------------------
 
 
@@ -76,6 +81,44 @@ class HexBinary(types.TypeDecorator[str]):
             # Can occur during outer joins or eager loading of nullable relations.
             return ""
         return value.hex()
+
+
+class ReleaseListJSONB(TypeDecorator[list[Release] | None]):
+    """
+    JSONB mapper that exposes release payloads as ``list[Release]`` in Python.
+    Values are stored as plain JSON dictionaries in PostgreSQL.
+    """
+
+    impl = JSONB
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> list[dict[str, str]] | None:
+        """Serialize ``Release`` structs into JSON-compatible dictionaries."""
+        if value is None:
+            return None
+
+        payload = msgspec.to_builtins(value)
+
+        return msgspec.convert(payload, type=list[dict[str, str]])
+
+    def process_result_value(self, value: Any, dialect: Any) -> list[Release] | None:
+        """Deserialize JSON dictionaries into ``Release`` structs."""
+        if value is None:
+            return None
+
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                row = msgspec.convert(item, type=dict[str, object])
+                if row.get("release_date") is None:
+                    row["release_date"] = ""
+
+                normalized.append(row)
+                continue
+
+            normalized.append(item)
+
+        return msgspec.convert(normalized, list[Release])
 
 
 # ---------------------------------------------------------------------------

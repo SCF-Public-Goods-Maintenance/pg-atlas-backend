@@ -18,7 +18,8 @@ from typing import Any
 
 import httpx
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler
+from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.db_models.release import Release
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,9 @@ class PackagistCrawler(RegistryCrawler):
     """
     Crawler for Packagist (PHP/Composer package registry).
 
-    ``adoption_downloads`` is set to the last-30-days (monthly) download count,
-    matching the spec definition.  All-time total is stored in metadata.
+    ``downloads_30d`` is captured on ``CrawledPackage`` from Packagist monthly
+    download counts. The base crawler persists that value under the source
+    repo metadata PURL map (not directly to scalar adoption columns).
     """
 
     REGISTRY = "packagist.org"
@@ -113,23 +115,28 @@ class PackagistCrawler(RegistryCrawler):
 
     def _parse_package(self, pkg_data: dict[str, Any], downloads_data: dict[str, Any]) -> CrawledPackage:
         """Parse Packagist API responses into a CrawledPackage."""
-        package = pkg_data.get("package", {})
-        name = package.get("name", "")
-        versions: dict[str, Any] = package.get("versions", {})
+        package = as_str_key_dict(pkg_data.get("package"))
+        name_obj = package.get("name")
+        name = name_obj if isinstance(name_obj, str) else ""
+        versions = as_str_key_dict(package.get("versions"))
+        package_purl = f"pkg:composer/{name}"
 
         # Select latest stable version
         latest_version, version_data = self._select_latest_version(versions)
 
         # Extract repo URL from source
-        source = version_data.get("source", {})
-        repo_url: str | None = source.get("url") if source else None
+        source = as_str_key_dict(version_data.get("source"))
+        repo_url_obj = source.get("url")
+        repo_url: str | None = repo_url_obj if isinstance(repo_url_obj, str) else None
 
         # Parse dependencies from require dict
-        require: dict[str, str] = version_data.get("require", {}) or {}
+        require = as_str_key_dict(version_data.get("require"))
         dependencies: list[CrawledDependency] = []
-        for dep_name, version_range in require.items():
+        for dep_name, version_range_obj in require.items():
             if self._should_filter(dep_name):
                 continue
+
+            version_range = version_range_obj if isinstance(version_range_obj, str) else None
             dependencies.append(
                 CrawledDependency(
                     canonical_id=f"pkg:composer/{dep_name}",
@@ -139,7 +146,9 @@ class PackagistCrawler(RegistryCrawler):
             )
 
         # Parse download stats from /downloads.json (nested under package.downloads.total)
-        dl_totals = downloads_data.get("package", {}).get("downloads", {}).get("total", {})
+        downloads_pkg = as_str_key_dict(downloads_data.get("package"))
+        downloads_by_type = as_str_key_dict(downloads_pkg.get("downloads"))
+        dl_totals = as_str_key_dict(downloads_by_type.get("total"))
         total = dl_totals.get("total")
 
         metadata: dict[str, Any] = {}
@@ -152,15 +161,30 @@ class PackagistCrawler(RegistryCrawler):
         if daily is not None:
             metadata["downloads_daily"] = daily
 
+        releases: list[Release] = []
+        for version_key, version_payload_obj in versions.items():
+            if not isinstance(version_payload_obj, dict):
+                continue
+
+            version_payload = as_str_key_dict(version_payload_obj)
+
+            version_value = version_payload.get("version")
+            release_version = version_value if isinstance(version_value, str) and version_value else version_key
+
+            released_at = version_payload.get("time")
+            release_date = released_at if isinstance(released_at, str) else ""
+            releases.append(Release(purl=package_purl, version=release_version, release_date=release_date))
+
         return CrawledPackage(
-            canonical_id=f"pkg:composer/{name}",
+            canonical_id=package_purl,
             display_name=name,
             latest_version=latest_version,
             repo_url=repo_url,
-            downloads=monthly,
+            downloads_30d=monthly,
             stars=None,
             metadata=metadata,
             dependencies=dependencies,
+            releases=releases,
         )
 
     def _select_latest_version(self, versions: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -174,7 +198,11 @@ class PackagistCrawler(RegistryCrawler):
         stable: list[tuple[tuple[int, ...], str, dict[str, Any]]] = []
         dev_fallbacks: dict[str, dict[str, Any]] = {}
 
-        for version_key, data in versions.items():
+        for version_key, data_obj in versions.items():
+            if not isinstance(data_obj, dict):
+                continue
+
+            data = as_str_key_dict(data_obj)
             if _is_dev_version(version_key):
                 dev_fallbacks[version_key] = data
             else:

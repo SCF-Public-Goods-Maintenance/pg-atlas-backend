@@ -1,11 +1,13 @@
 # Reference Graph Bootstrap — weekly crawl of OpenGrants, GitHub, and deps.dev.
 #
-# Runs two sequential worker steps:
-#   1. opengrants queue (sync_opengrants → process_project → crawl_github_repo)
-#   2. package-deps queue (crawl_package_deps)
+# Runs four jobs:
+#   1. crawl       (opengrants queue)
+#   2. deps-dev    (package-deps queue)
+#   3. registries  (registry-crawl queue)
+#   4. metrics     (materialize criticality/adoption)
 #
-# The separation ensures all Repo vertices and Project associations exist
-# before the dependency crawler checks them.
+# deps-dev and registries run in parallel after crawl completes.
+# metrics runs after both queue jobs complete.
 #
 # SPDX-FileCopyrightText: 2026 PG Atlas contributors
 # SPDX-License-Identifier: MPL-2.0
@@ -23,6 +25,14 @@ concurrency:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    outputs:
+      opengrants_succeeded: ${{ steps.parse-logs.outputs.opengrants_succeeded }}
+      opengrants_failed: ${{ steps.parse-logs.outputs.opengrants_failed }}
+      opengrants_todo: ${{ steps.parse-logs.outputs.opengrants_todo }}
+      opengrants_cancelled: ${{ steps.parse-logs.outputs.opengrants_cancelled }}
+      warning_count: ${{ steps.parse-logs.outputs.warning_count }}
+      error_count: ${{ steps.parse-logs.outputs.error_count }}
+      errors: ${{ steps.parse-logs.outputs.errors }}
     timeout-minutes: 300
     env:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -44,38 +54,81 @@ jobs:
       - name: Run worker — opengrants queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=opengrants --drain-rounds=4 --concurrency=8 --tee=opengrants-worker.log
 
+      - name: Parse worker logs
+        id: parse-logs
+        run: python .github/scripts/parse-bootstrap-log.py opengrants-worker.log
+
+  deps-dev:
+    runs-on: ubuntu-latest
+    needs: crawl
+    outputs:
+      package_deps_succeeded: ${{ steps.parse-logs.outputs.package_deps_succeeded }}
+      package_deps_failed: ${{ steps.parse-logs.outputs.package_deps_failed }}
+      package_deps_todo: ${{ steps.parse-logs.outputs.package_deps_todo }}
+      package_deps_cancelled: ${{ steps.parse-logs.outputs.package_deps_cancelled }}
+      warning_count: ${{ steps.parse-logs.outputs.warning_count }}
+      error_count: ${{ steps.parse-logs.outputs.error_count }}
+      errors: ${{ steps.parse-logs.outputs.errors }}
+    timeout-minutes: 240
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      UV_NO_GROUP: dev
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
       - name: Run worker — package-deps queue
         run: uv run python -m pg_atlas.procrastinate.worker --queue=package-deps --drain-rounds=30 --concurrency=8 --tee=package-deps-worker.log
 
       - name: Parse worker logs
         id: parse-logs
-        run: python .github/scripts/parse-bootstrap-log.py opengrants-worker.log package-deps-worker.log
+        run: python .github/scripts/parse-bootstrap-log.py package-deps-worker.log
 
-      - name: Write job summary
-        run: |
-          python .github/scripts/render-template.py \
-            .github/templates/bootstrap-summary.md \
-            trigger="${{ github.event_name }}" \
-            run_id="${{ github.run_id }}" \
-            server_url="${{ github.server_url }}" \
-            repository="${{ github.repository }}" \
-            finished="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
-            opengrants_succeeded="${{ steps.parse-logs.outputs.opengrants_succeeded || '—' }}" \
-            opengrants_failed="${{ steps.parse-logs.outputs.opengrants_failed || '—' }}" \
-            opengrants_todo="${{ steps.parse-logs.outputs.opengrants_todo || '—' }}" \
-            opengrants_cancelled="${{ steps.parse-logs.outputs.opengrants_cancelled || '—' }}" \
-            package_deps_succeeded="${{ steps.parse-logs.outputs.package_deps_succeeded || '—' }}" \
-            package_deps_failed="${{ steps.parse-logs.outputs.package_deps_failed || '—' }}" \
-            package_deps_todo="${{ steps.parse-logs.outputs.package_deps_todo || '—–' }}" \
-            package_deps_cancelled="${{ steps.parse-logs.outputs.package_deps_cancelled || '—' }}" \
-            warning_count="${{ steps.parse-logs.outputs.warning_count || '0' }}" \
-            error_count="${{ steps.parse-logs.outputs.error_count || '0' }}" \
-            error_detail="${{ steps.parse-logs.outputs.errors || '' }}" \
-            >> "$GITHUB_STEP_SUMMARY"
+  registries:
+    runs-on: ubuntu-latest
+    needs: crawl
+    outputs:
+      registry_crawl_succeeded: ${{ steps.parse-logs.outputs.registry_crawl_succeeded }}
+      registry_crawl_failed: ${{ steps.parse-logs.outputs.registry_crawl_failed }}
+      registry_crawl_todo: ${{ steps.parse-logs.outputs.registry_crawl_todo }}
+      registry_crawl_cancelled: ${{ steps.parse-logs.outputs.registry_crawl_cancelled }}
+      unsupported_ecosystem_group_count: ${{ steps.parse-logs.outputs.unsupported_ecosystem_group_count }}
+      unsupported_ecosystem_purl_count: ${{ steps.parse-logs.outputs.unsupported_ecosystem_purl_count }}
+      unsupported_ecosystems: ${{ steps.parse-logs.outputs.unsupported_ecosystems }}
+      warning_count: ${{ steps.parse-logs.outputs.warning_count }}
+      error_count: ${{ steps.parse-logs.outputs.error_count }}
+      errors: ${{ steps.parse-logs.outputs.errors }}
+    timeout-minutes: 180
+    env:
+      PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      UV_NO_GROUP: dev
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run worker — registry-crawl queue
+        run: uv run python -m pg_atlas.procrastinate.worker --queue=registry-crawl --drain-rounds=2 --concurrency=2 --tee=registry-crawl-worker.log
+
+      - name: Parse worker logs
+        id: parse-logs
+        run: python .github/scripts/parse-bootstrap-log.py registry-crawl-worker.log
 
   metrics:
     runs-on: ubuntu-latest
-    needs: crawl
+    needs:
+      - crawl
+      - deps-dev
+      - registries
     timeout-minutes: 60
     env:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -88,6 +141,45 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
+
+      - name: Write bootstrap summary
+        env:
+          WARN_CRAWL: ${{ needs.crawl.outputs.warning_count || '0' }}
+          WARN_DEPS: ${{ needs.deps-dev.outputs.warning_count || '0' }}
+          WARN_REG: ${{ needs.registries.outputs.warning_count || '0' }}
+          ERR_CRAWL: ${{ needs.crawl.outputs.error_count || '0' }}
+          ERR_DEPS: ${{ needs.deps-dev.outputs.error_count || '0' }}
+          ERR_REG: ${{ needs.registries.outputs.error_count || '0' }}
+        run: |
+          warning_total=$((WARN_CRAWL + WARN_DEPS + WARN_REG))
+          error_total=$((ERR_CRAWL + ERR_DEPS + ERR_REG))
+
+          python .github/scripts/render-template.py \
+            .github/templates/bootstrap-summary.md \
+            trigger="${{ github.event_name }}" \
+            run_id="${{ github.run_id }}" \
+            server_url="${{ github.server_url }}" \
+            repository="${{ github.repository }}" \
+            finished="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            opengrants_succeeded="${{ needs.crawl.outputs.opengrants_succeeded || '—' }}" \
+            opengrants_failed="${{ needs.crawl.outputs.opengrants_failed || '—' }}" \
+            opengrants_todo="${{ needs.crawl.outputs.opengrants_todo || '—' }}" \
+            opengrants_cancelled="${{ needs.crawl.outputs.opengrants_cancelled || '—' }}" \
+            package_deps_succeeded="${{ needs.deps-dev.outputs.package_deps_succeeded || '—' }}" \
+            package_deps_failed="${{ needs.deps-dev.outputs.package_deps_failed || '—' }}" \
+            package_deps_todo="${{ needs.deps-dev.outputs.package_deps_todo || '—' }}" \
+            package_deps_cancelled="${{ needs.deps-dev.outputs.package_deps_cancelled || '—' }}" \
+            registry_crawl_succeeded="${{ needs.registries.outputs.registry_crawl_succeeded || '—' }}" \
+            registry_crawl_failed="${{ needs.registries.outputs.registry_crawl_failed || '—' }}" \
+            registry_crawl_todo="${{ needs.registries.outputs.registry_crawl_todo || '—' }}" \
+            registry_crawl_cancelled="${{ needs.registries.outputs.registry_crawl_cancelled || '—' }}" \
+            warning_count="$warning_total" \
+            error_count="$error_total" \
+            unsupported_ecosystem_group_count="${{ needs.registries.outputs.unsupported_ecosystem_group_count || '0' }}" \
+            unsupported_ecosystem_purl_count="${{ needs.registries.outputs.unsupported_ecosystem_purl_count || '0' }}" \
+            unsupported_ecosystems="${{ needs.registries.outputs.unsupported_ecosystems || 'None' }}" \
+            error_detail="${{ needs.crawl.outputs.errors || '' }}${{ needs.deps-dev.outputs.errors || '' }}${{ needs.registries.outputs.errors || '' }}" \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Materialize criticality
         run: uv run python -m pg_atlas.metrics.materialize_criticality --tee=criticality.log

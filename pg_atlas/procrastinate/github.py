@@ -13,13 +13,139 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
+import tomllib
 from dataclasses import dataclass
 from threading import Lock
+from typing import Any
 
 import msgspec
 from github import Auth, Github, GithubException
 
 logger = logging.getLogger(__name__)
+
+
+_MANIFEST_FILE_NAMES = frozenset(
+    {
+        "cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "pom.xml",
+        "go.mod",
+        "gemfile",
+        "pubspec.yaml",
+        "composer.json",
+    }
+)
+
+_SKIPPED_PATH_SUBSTRINGS = frozenset({".github", "example", "test"})
+
+
+class _NpmManifest(msgspec.Struct, omit_defaults=True):
+    """Typed subset of package.json fields used for package detection."""
+
+    name: str | None = None
+    private: bool | None = None
+    version: str | None = None
+
+
+class _ComposerManifest(msgspec.Struct, omit_defaults=True):
+    """Typed subset of composer.json fields used for package detection."""
+
+    name: str | None = None
+
+
+class _CargoPackageSection(msgspec.Struct, omit_defaults=True):
+    """Typed subset of Cargo.toml [package] section."""
+
+    name: str | None = None
+
+
+class _CargoManifest(msgspec.Struct, omit_defaults=True):
+    """Typed subset of Cargo.toml used for package detection."""
+
+    package: _CargoPackageSection | None = None
+
+
+class _PyProjectSection(msgspec.Struct, omit_defaults=True):
+    """Typed subset of pyproject.toml [project] section."""
+
+    name: str | None = None
+
+
+class _PyProjectManifest(msgspec.Struct, omit_defaults=True):
+    """Typed subset of pyproject.toml used for package detection."""
+
+    project: _PyProjectSection | None = None
+
+
+class _ManifestGraphNode(msgspec.Struct, omit_defaults=True):
+    """One manifest row returned by GitHub dependency graph GraphQL."""
+
+    filename: str
+    parseable: bool | None = None
+    exceedsMaxSize: bool | None = None
+
+
+class _PageInfo(msgspec.Struct, omit_defaults=True):
+    """Page info shape for GraphQL pagination."""
+
+    hasNextPage: bool
+    endCursor: str | None = None
+
+
+class _DependencyGraphManifestConnection(msgspec.Struct, omit_defaults=True):
+    """GraphQL connection payload for dependencyGraphManifests."""
+
+    nodes: list[_ManifestGraphNode] | None = None
+    pageInfo: _PageInfo | None = None
+
+
+class _RepositoryGraphPayload(msgspec.Struct, omit_defaults=True):
+    """GraphQL repository wrapper used by manifest discovery."""
+
+    dependencyGraphManifests: _DependencyGraphManifestConnection | None = None
+
+
+class _GraphQLData(msgspec.Struct, omit_defaults=True):
+    """GraphQL top-level data envelope."""
+
+    repository: _RepositoryGraphPayload | None = None
+
+
+class _GraphQLError(msgspec.Struct, omit_defaults=True):
+    """GraphQL error payload used for logging diagnostics."""
+
+    message: str
+
+
+class _GraphQLResponse(msgspec.Struct, omit_defaults=True):
+    """GraphQL response envelope."""
+
+    data: _GraphQLData | None = None
+    errors: list[_GraphQLError] | None = None
+
+
+_DEPENDENCY_GRAPH_QUERY = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    dependencyGraphManifests(first: 100, after: $after) {
+      nodes {
+        filename
+        parseable
+        exceedsMaxSize
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+""".strip()
+
 
 # Module-level singletons
 _gh_client: Github | None = None
@@ -47,7 +173,6 @@ class PackageReference:
 
     system: str
     name: str
-    version: str = ""
     purl: str = ""
 
     @classmethod
@@ -57,7 +182,6 @@ class PackageReference:
         return cls(
             system=payload.get("system", ""),
             name=payload.get("name", ""),
-            version=payload.get("version", ""),
             purl=payload.get("purl", ""),
         )
 
@@ -169,55 +293,268 @@ def get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
 
 def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:
     """
-    Detect published packages by inspecting repo root for manifest files.
+    Detect published packages by scanning manifests from dependency graph GraphQL.
 
-    Returns a list of ``{system, name}`` dicts.
+    This scan avoids GitHub code-search parser limitations by querying
+    ``dependencyGraphManifests`` and then parsing only those manifest blobs.
     """
     gh = get_github_client()
-    packages: list[PackageReference] = []
+    repo_path = f"{owner}/{repo_name}"
+    package_refs: list[PackageReference] = []
+    seen_keys: set[tuple[str, str]] = set()
 
     try:
-        repo = gh.get_repo(f"{owner}/{repo_name}")
-        contents = repo.get_contents("")
-
-        if not isinstance(contents, list):
-            contents = [contents]
-
-        filenames = {c.name for c in contents}
-
-        if "Cargo.toml" in filenames:
-            packages.append(PackageReference(system="CARGO", name=repo_name))
-
-        if "package.json" in filenames:
-            # Try to read the actual package name from package.json.
-            try:
-                pj = repo.get_contents("package.json")
-                pkg_data = msgspec.json.decode(pj.decoded_content, type=dict[str, object])  # type: ignore[union-attr]
-                npm_name_obj = pkg_data.get("name")
-                npm_name = npm_name_obj if isinstance(npm_name_obj, str) else repo_name
-                packages.append(PackageReference(system="NPM", name=npm_name))
-
-            except GithubException, msgspec.DecodeError, msgspec.ValidationError, AttributeError, TypeError:
-                packages.append(PackageReference(system="NPM", name=repo_name))
-
-        if "pyproject.toml" in filenames or "setup.py" in filenames or "setup.cfg" in filenames:
-            packages.append(PackageReference(system="PYPI", name=repo_name))
-
-        if "pom.xml" in filenames:
-            packages.append(PackageReference(system="MAVEN", name=repo_name))
-
-        if "go.mod" in filenames:
-            packages.append(PackageReference(system="GO", name=f"github.com/{owner}/{repo_name}"))
-
-        if f"{repo_name}.gemspec" in filenames or "Gemfile" in filenames:
-            packages.append(PackageReference(system="RUBYGEMS", name=repo_name))
-
+        repo = gh.get_repo(repo_path)
     except GithubException as exc:
-        logger.warning(f"Failed to detect packages in {owner}/{repo_name}: {exc}")
+        logger.warning(f"Failed to access repo for package detection {repo_path}: {exc}")
 
-    # Keep the same shape produced by get_project_package_versions():
-    # {"system": "...", "name": "..."} plus optional keys.
-    return packages
+        return []
+
+    manifest_paths = _manifest_paths_from_graphql(owner, repo_name)
+
+    for path in manifest_paths:
+        system = _system_from_manifest_path(path)
+        if system is None:
+            continue
+
+        try:
+            manifest_text = _read_manifest_text(repo, path)
+        except GithubException as exc:
+            logger.warning(f"Failed to read manifest {path} in {repo_path}: {exc}")
+            continue
+
+        package_name = _extract_package_name(system, path, manifest_text, owner, repo_name)
+        if package_name is None:
+            continue
+
+        key = (system, package_name)
+        if key in seen_keys:
+            continue
+
+        seen_keys.add(key)
+        package_refs.append(PackageReference(system=system, name=package_name))
+
+    if not package_refs:
+        logger.info(f"detect_packages_from_repo: {repo_path} packages={{}}")
+        return []
+
+    counts_by_system: dict[str, int] = {}
+    for package_ref in package_refs:
+        counts_by_system[package_ref.system] = counts_by_system.get(package_ref.system, 0) + 1
+
+    logger.info(f"detect_packages_from_repo: {repo_path} packages={counts_by_system}")
+
+    return package_refs
+
+
+def _manifest_paths_from_graphql(owner: str, repo_name: str) -> list[str]:
+    """
+    Collect manifest paths from GitHub dependency graph manifests.
+
+    Skips ignored paths and non-parseable/oversized manifest entries.
+    """
+
+    repo_path = f"{owner}/{repo_name}"
+    manifest_paths: set[str] = set()
+    after: str | None = None
+
+    while True:
+        response = _run_dependency_graph_query(owner, repo_name, after=after)
+        if response is None:
+            return []
+
+        if response.errors:
+            joined_errors = "; ".join(error.message for error in response.errors)
+            logger.warning(f"GraphQL manifest query failed for {repo_path}: {joined_errors}")
+            return []
+
+        repository = response.data.repository if response.data is not None else None
+        manifests = repository.dependencyGraphManifests if repository is not None else None
+        if manifests is None:
+            return sorted(manifest_paths)
+
+        for node in manifests.nodes or []:
+            if node.parseable is False or node.exceedsMaxSize is True:
+                continue
+
+            path = node.filename
+            if not path or _is_skipped_manifest_path(path):
+                continue
+
+            basename = path.rsplit("/", 1)[-1].lower()
+            if basename in _MANIFEST_FILE_NAMES or basename.endswith(".gemspec"):
+                manifest_paths.add(path)
+
+        page_info = manifests.pageInfo
+        if page_info is None or not page_info.hasNextPage or not page_info.endCursor:
+            return sorted(manifest_paths)
+
+        after = page_info.endCursor
+
+
+def _run_dependency_graph_query(owner: str, repo_name: str, *, after: str | None) -> _GraphQLResponse | None:
+    """Run one dependencyGraphManifests GraphQL query through PyGithub's requester."""
+
+    gh = get_github_client()
+    requester = getattr(gh, "_Github__requester", None)
+    if requester is None:
+        logger.warning("PyGithub requester is unavailable for GraphQL manifest detection")
+        return None
+
+    variables: dict[str, str | None] = {
+        "owner": owner,
+        "name": repo_name,
+        "after": after,
+    }
+
+    try:
+        _, response_payload = requester.graphql_query(_DEPENDENCY_GRAPH_QUERY, variables)
+    except GithubException as exc:
+        logger.warning(f"GraphQL manifest query failed for {owner}/{repo_name}: {exc}")
+        return None
+
+    try:
+        return msgspec.convert(response_payload, type=_GraphQLResponse)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Invalid GraphQL manifest response for {owner}/{repo_name}: {exc}")
+        return None
+
+
+def _is_skipped_manifest_path(path: str) -> bool:
+    """
+    Return whether one path falls under ignored test/example folders.
+
+    This is a quick and dirty "best-effort" check that excludes e.g. `contest/` and `latest/`.
+    We'd rather miss a couple of uncommon manifest paths than have to read a lot of junk.
+    """
+    normalized_path = path.lower()
+    return any(substr in normalized_path for substr in _SKIPPED_PATH_SUBSTRINGS)
+
+
+def _system_from_manifest_path(path: str) -> str | None:
+    """
+    Resolve a package system from one manifest path.
+    """
+
+    lowered = path.lower()
+
+    match lowered:
+        case _ if lowered.endswith("cargo.toml"):
+            return "CARGO"
+        case _ if lowered.endswith("package.json"):
+            return "NPM"
+        case _ if lowered.endswith("pyproject.toml") or lowered.endswith("setup.py") or lowered.endswith("setup.cfg"):
+            return "PYPI"
+        case _ if lowered.endswith("pom.xml"):
+            return "MAVEN"
+        case _ if lowered.endswith("go.mod"):
+            return "GO"
+        case _ if lowered.endswith("gemfile") or lowered.endswith(".gemspec"):
+            return "RUBYGEMS"
+        case _ if lowered.endswith("pubspec.yaml"):
+            return "DART"
+        case _ if lowered.endswith("composer.json"):
+            return "COMPOSER"
+        case _:
+            return None
+
+
+def _read_manifest_text(repo: Any, path: str) -> str:
+    """
+    Read one manifest file from GitHub and decode it to UTF-8 text.
+    """
+
+    content = repo.get_contents(path)
+    raw = getattr(content, "decoded_content", b"")
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+
+    return ""
+
+
+def _extract_package_name(system: str, path: str, manifest_text: str, owner: str, repo_name: str) -> str | None:
+    """
+    Extract one package name from manifest content for a given ecosystem.
+    """
+
+    lowered_path = path.lower()
+
+    match system:
+        case "NPM":
+            compact_manifest = "".join(manifest_text.lower().split())
+            if '"private":true' in compact_manifest:
+                return None
+
+            try:
+                npm_manifest = msgspec.json.decode(manifest_text, type=_NpmManifest)
+            except msgspec.ValidationError:
+                return None
+
+            if npm_manifest.private is True:
+                return None
+
+            if not npm_manifest.version:
+                return None
+
+            return npm_manifest.name if npm_manifest.name else None
+
+        case "COMPOSER":
+            try:
+                composer_manifest = msgspec.json.decode(manifest_text, type=_ComposerManifest)
+            except msgspec.ValidationError:
+                return None
+
+            return composer_manifest.name if composer_manifest.name else None
+
+        case "DART":
+            name_match = re.search(r"^name\s*:\s*([A-Za-z0-9_.-]+)\s*$", manifest_text, flags=re.MULTILINE)
+            if name_match is not None:
+                return name_match.group(1)
+
+            return repo_name
+
+        case "GO":
+            for line in manifest_text.splitlines():
+                stripped_line = line.strip()
+                if not stripped_line.startswith("module"):
+                    continue
+
+                module_expr = stripped_line.split("//", 1)[0].strip()
+                module_match = re.fullmatch(r'module\s+(?:"([^"]+)"|([^\s]+))', module_expr)
+                if module_match is None:
+                    continue
+
+                quoted_value = module_match.group(1)
+                bare_value = module_match.group(2)
+                module_path = quoted_value if quoted_value is not None else bare_value
+                if module_path:
+                    return module_path
+
+            return f"github.com/{owner}/{repo_name}"
+
+        case "CARGO":
+            if "[package]" not in manifest_text:
+                return None
+
+            try:
+                cargo_manifest = msgspec.convert(tomllib.loads(manifest_text), type=_CargoManifest)
+            except tomllib.TOMLDecodeError, msgspec.ValidationError:
+                return repo_name
+
+            package_name = cargo_manifest.package.name if cargo_manifest.package is not None else None
+            return package_name if package_name else repo_name
+
+        case "PYPI" if lowered_path.endswith("pyproject.toml"):
+            try:
+                pyproject_manifest = msgspec.convert(tomllib.loads(manifest_text), type=_PyProjectManifest)
+            except tomllib.TOMLDecodeError, msgspec.ValidationError:
+                return repo_name
+
+            project_name = pyproject_manifest.project.name if pyproject_manifest.project is not None else None
+            return project_name if project_name else repo_name
+
+        case _:
+            return repo_name
 
 
 def latest_version_from_repo(owner: str, repo_name: str) -> str:

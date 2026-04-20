@@ -25,6 +25,10 @@ _STATUS_RE = re.compile(
 # Capture WARNING and ERROR lines for the detail section.
 _WARN_ERROR_RE = re.compile(r"^\S+ \S+ (?P<level>WARNING|ERROR)\s+\S+: (?P<message>.+)$")
 
+_UNSUPPORTED_ECOSYSTEM_RE = re.compile(
+    r"registry-crawl unsupported ecosystem: system=(?P<system>[A-Z0-9_+-]+) purls=(?P<purls>.+)$"
+)
+
 
 def parse_base_log_line(line: str) -> tuple[str, Any] | None:
     """
@@ -46,6 +50,15 @@ def parse_base_log_line(line: str) -> tuple[str, Any] | None:
             "failed": int(m.group("failed")),
             "cancelled": int(m.group("cancelled")),
             "aborted": int(m.group("aborted")),
+        }
+
+    unsupported_match = _UNSUPPORTED_ECOSYSTEM_RE.search(line)
+    if unsupported_match:
+        purls_text = unsupported_match.group("purls").strip()
+        purls = [purl for purl in purls_text.split(" ") if purl]
+        return "unsupported", {
+            "system": unsupported_match.group("system"),
+            "purls": purls,
         }
 
     wm = _WARN_ERROR_RE.search(line)

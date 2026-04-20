@@ -83,3 +83,5 @@ class Project(PgBase):
         init=False,
         repr=False,
     )
+
+    # TODO: write `async def has_published_packages()` for project_type check

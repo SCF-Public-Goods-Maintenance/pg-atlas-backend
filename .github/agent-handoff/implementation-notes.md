@@ -246,3 +246,38 @@ These conventions emerged while validating SBOM queue behavior locally with real
   - clean replay set `893-899` processed targeted queued rows without deadlocks;
   - final log showed `elapsed_s=19.17` for two drain rounds including background failed-artifact retries.
 - Practical guidance: when investigating SBOM worker concurrency, optimize both nested edge writes and external-repo upsert ordering; the latter can dominate deadlock behavior.
+
+## A10 Implementation Notes
+
+These conventions emerged during A10 adoption-signal wiring and apply to future crawler/metric work.
+
+### System taxonomy separation
+
+- `package-deps` (deps.dev) and `registry-crawl` (direct ecosystem registries) are intentionally separate paths.
+- deps.dev scope is fixed to seven systems (`PYPI`, `NPM`, `CARGO`, `MAVEN`, `GO`, `RUBYGEMS`, `NUGET`) and should not be extended in A10 code.
+- Direct registry crawling currently supports `DART` (pub.dev) and `COMPOSER` (Packagist) via `pg_atlas.crawlers.factory`.
+
+### Monorepo adoption downloads map-reduce
+
+- Registry crawls now persist per-package download snapshots under
+  `Repo.repo_metadata["adoption_downloads_by_purl"]`.
+- Map phase: each registry package crawl updates only its own PURL key.
+- Reduce phase: adoption materialization sums per-PURL values and writes the total back to `Repo.adoption_downloads` before percentile ranking.
+
+### Bootstrap queue topology
+
+- `bootstrap.yml` now runs four jobs:
+  - `crawl` (`opengrants` queue)
+  - `deps-dev` (`package-deps` queue)
+  - `registries` (`registry-crawl` queue)
+  - `metrics` (criticality + adoption materialization)
+- `deps-dev` and `registries` run in parallel after `crawl` completes; `metrics` depends on both.
+
+### Unsupported ecosystem observability
+
+- `crawl_github_repo` logs unsupported registry systems using a structured line:
+  `registry-crawl unsupported ecosystem: system=<SYSTEM> purls=<SPACE_SEPARATED_PURLS>`
+- `.github/scripts/parse-bootstrap-log.py` groups these by ecosystem and emits:
+  - `unsupported_ecosystem_group_count`
+  - `unsupported_ecosystem_purl_count`
+  - `unsupported_ecosystems` (grouped full PURL list lines)

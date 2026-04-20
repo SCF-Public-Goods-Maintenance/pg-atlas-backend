@@ -26,16 +26,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 from worker_log_utils import emit_github_output, parse_base_log_line
 
 
-def parse_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str], list[str]]:
+def parse_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str], list[str], dict[str, set[str]]]:
     """
     Parse a single log file.
 
     Returns:
-        A tuple of (status_counts_by_queue, warnings, errors).
+        A tuple of (status_counts_by_queue, warnings, errors, unsupported_purls).
     """
     status_counts: dict[str, dict[str, int]] = {}
     warnings: list[str] = []
     errors: list[str] = []
+    unsupported_purls: dict[str, set[str]] = {}
 
     with open(log_path) as f:
         for line in f:
@@ -51,8 +52,29 @@ def parse_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str], list
                 warnings.append(data)
             elif tag == "error":
                 errors.append(data)
+            elif tag == "unsupported":
+                system = data["system"]
+                purls = data["purls"]
+                unsupported_purls.setdefault(system, set()).update(purls)
 
-    return status_counts, warnings, errors
+    return status_counts, warnings, errors, unsupported_purls
+
+
+def _format_unsupported_ecosystems(unsupported_purls: dict[str, set[str]]) -> str:
+    """
+    Build one markdown-ready grouped summary for unsupported ecosystems.
+    """
+
+    if not unsupported_purls:
+        return "None"
+
+    lines: list[str] = []
+    for system in sorted(unsupported_purls):
+        purls = sorted(unsupported_purls[system])
+        joined = " ".join(purls)
+        lines.append(f"- {system} ({len(purls)}): {joined}")
+
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -64,14 +86,30 @@ def main() -> None:
     all_counts: dict[str, dict[str, int]] = {}
     all_warnings: list[str] = []
     all_errors: list[str] = []
+    all_unsupported_purls: dict[str, set[str]] = {}
 
     for path in sys.argv[1:]:
-        counts, warnings, errors = parse_log(path)
+        counts, warnings, errors, unsupported_purls = parse_log(path)
         all_counts.update(counts)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
+        for system, purls in unsupported_purls.items():
+            all_unsupported_purls.setdefault(system, set()).update(purls)
 
-    emit_github_output(all_counts, all_warnings, all_errors)
+    unsupported_group_count = len(all_unsupported_purls)
+    unsupported_purl_count = sum(len(values) for values in all_unsupported_purls.values())
+    unsupported_summary = _format_unsupported_ecosystems(all_unsupported_purls)
+
+    emit_github_output(
+        all_counts,
+        all_warnings,
+        all_errors,
+        extra_outputs={
+            "unsupported_ecosystem_group_count": str(unsupported_group_count),
+            "unsupported_ecosystem_purl_count": str(unsupported_purl_count),
+            "unsupported_ecosystems": unsupported_summary,
+        },
+    )
 
 
 if __name__ == "__main__":

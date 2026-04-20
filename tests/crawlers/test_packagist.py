@@ -68,6 +68,9 @@ async def test_fetch_package_parses_metadata(
     assert pkg.display_name == "soneso/stellar-php-sdk"
     assert pkg.latest_version == "1.9.4"
     assert pkg.repo_url == "https://github.com/Soneso/stellar-php-sdk.git"
+    assert pkg.releases
+    assert {release.version for release in pkg.releases} >= {"1.9.4", "1.8.0", "dev-main"}
+    assert all(release.purl == "pkg:composer/soneso/stellar-php-sdk" for release in pkg.releases)
 
 
 async def test_fetch_package_parses_dependencies(
@@ -104,7 +107,7 @@ async def test_fetch_package_parses_stats(
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
-    assert pkg.downloads == 1970  # monthly (last 30 days per spec)
+    assert pkg.downloads_30d == 1970  # monthly (last 30 days per spec)
     assert pkg.stars is None  # reserved for GitHub
     assert pkg.metadata["downloads_total"] == 46925
     assert pkg.metadata["download_count_30d"] == 1970
@@ -126,7 +129,7 @@ async def test_fetch_package_handles_missing_downloads(
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     assert pkg.canonical_id == "pkg:composer/soneso/stellar-php-sdk"
-    assert pkg.downloads is None
+    assert pkg.downloads_30d is None
 
 
 async def test_fetch_package_handles_malformed_downloads(
@@ -139,7 +142,7 @@ async def test_fetch_package_handles_malformed_downloads(
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     assert pkg.canonical_id == "pkg:composer/soneso/stellar-php-sdk"
-    assert pkg.downloads is None
+    assert pkg.downloads_30d is None
     assert "download_count_30d" not in pkg.metadata
     assert "downloads_daily" not in pkg.metadata
 
@@ -242,7 +245,7 @@ async def test_dev_suffix_version_skipped(
     packagist_downloads_data: dict[str, Any],
 ) -> None:
     """Versions ending with -dev are treated as dev branches."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "package": {
             "name": "test/dev-suffix",
             "versions": {
@@ -263,7 +266,7 @@ async def test_dev_only_fallback_first_branch(
     packagist_downloads_data: dict[str, Any],
 ) -> None:
     """When only non-main dev branches exist, first one is used."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "package": {
             "name": "test/dev-only",
             "versions": {
@@ -283,7 +286,7 @@ async def test_empty_versions_dict(
     packagist_downloads_data: dict[str, Any],
 ) -> None:
     """Package with no versions at all returns empty latest_version."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "package": {
             "name": "test/empty",
             "versions": {},
@@ -301,7 +304,7 @@ async def test_version_key_non_numeric_segment(
     packagist_downloads_data: dict[str, Any],
 ) -> None:
     """Version strings with non-numeric segments are handled gracefully."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "package": {
             "name": "test/alpha-ver",
             "versions": {
@@ -325,7 +328,7 @@ async def test_version_sorting_semver(
     packagist_downloads_data: dict[str, Any],
 ) -> None:
     """Verify 1.10.0 > 1.9.4 (not string sort)."""
-    package_data = {
+    package_data: dict[str, Any] = {
         "package": {
             "name": "test/semver-pkg",
             "favers": 0,

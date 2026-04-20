@@ -6,6 +6,9 @@ Provides ``RegistryCrawler`` — the base class that all concrete crawlers
 handling, rate limiting, vertex upsert, edge creation with confidence
 preservation, and per-package transaction boundaries.
 
+The name "crawler" does not really apply yet, since we don't traverse any
+of the found dependency edges. We might extend this behavior in the future.
+
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
 """
@@ -19,14 +22,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import msgspec
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from pg_atlas.db_models.base import EdgeConfidence
-from pg_atlas.db_models.depends_on import DependsOn
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
-from pg_atlas.db_models.vertex_ops import get_vertex
+from pg_atlas.db_models.release import Release, merge_releases
+from pg_atlas.db_models.repo_vertex import Repo
+from pg_atlas.db_models.vertex_ops import upsert_external_repo
+from pg_atlas.metrics.adoption import merge_download_into_repo_metadata
+from pg_atlas.procrastinate.upserts import find_repo_by_release_purl, upsert_depends_on
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +65,11 @@ class CrawledPackage:
     display_name: str
     latest_version: str
     repo_url: str | None
-    downloads: int | None
+    downloads_30d: int | None
     stars: int | None
     metadata: dict[str, Any]
     dependencies: list[CrawledDependency]
+    releases: list[Release]
 
 
 @dataclass
@@ -75,111 +80,18 @@ class CrawlResult:
     vertices_upserted: int = 0
     edges_created: int = 0
     edges_skipped: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list[str])
 
 
 # ---------------------------------------------------------------------------
-# Vertex upsert (self-contained — does NOT import from persist.py)
+# Exceptions
 # ---------------------------------------------------------------------------
 
 
-async def _upsert_vertex(
-    session: AsyncSession,
-    canonical_id: str,
-    display_name: str,
-    latest_version: str,
-    repo_url: str | None,
-) -> RepoVertex:
-    """
-    Upsert a RepoVertex, preserving the existing subtype.
-
-    - If a Repo exists with this canonical_id: update mutable fields, return it.
-    - If an ExternalRepo exists: update mutable fields, return it.
-    - If nothing exists: create as ExternalRepo and return it.
-
-    NEVER create a Repo — only SBOM ingestion creates Repos (via OIDC claims).
-    NEVER downgrade a Repo to ExternalRepo.
-    """
-    vertex = await get_vertex(session, canonical_id)
-
-    if vertex is not None:
-        # Both Repo and ExternalRepo have these attributes but RepoVertex (the
-        # JTI base) does not declare them, so we narrow the type for mypy.
-        if isinstance(vertex, (Repo, ExternalRepo)):
-            vertex.display_name = display_name
-            if latest_version:
-                vertex.latest_version = latest_version
-            if repo_url:
-                vertex.repo_url = repo_url
-        await session.flush()
-        return vertex
-
-    ext = ExternalRepo(
-        canonical_id=canonical_id,
-        display_name=display_name,
-        latest_version=latest_version,
-        repo_url=repo_url,
-    )
-    session.add(ext)
-    try:
-        async with session.begin_nested():
-            await session.flush()
-    except IntegrityError:
-        session.expunge(ext)
-        ext = await get_vertex(session, canonical_id)  # type: ignore[assignment]
-
-    return ext
+class SourceRepoNotFound(Exception): ...
 
 
-# ---------------------------------------------------------------------------
-# Edge upsert (never overwrites verified_sbom with inferred_shadow)
-# ---------------------------------------------------------------------------
-
-
-async def _upsert_edge(
-    session: AsyncSession,
-    in_vertex_id: int,
-    out_vertex_id: int,
-    version_range: str | None,
-) -> bool | None:
-    """
-    Create or update a DependsOn edge with inferred_shadow confidence.
-
-    Returns True if an edge was created, False if an inferred edge was updated,
-    or None if a verified_sbom edge was preserved (skipped).
-    """
-    existing = await session.execute(
-        select(DependsOn).where(
-            DependsOn.in_vertex_id == in_vertex_id,
-            DependsOn.out_vertex_id == out_vertex_id,
-        )
-    )
-    edge = existing.scalar_one_or_none()
-
-    if edge is None:
-        new_edge = DependsOn(
-            in_vertex_id=in_vertex_id,
-            out_vertex_id=out_vertex_id,
-            version_range=version_range or None,
-            confidence=EdgeConfidence.inferred_shadow,
-        )
-        session.add(new_edge)
-        try:
-            async with session.begin_nested():
-                await session.flush()
-        except IntegrityError as exc:
-            session.expunge(new_edge)
-            logger.debug(f"Edge {in_vertex_id}->{out_vertex_id} already exists: {exc}")
-            return None
-        return True
-
-    if edge.confidence == EdgeConfidence.inferred_shadow:
-        edge.version_range = version_range or None
-        await session.flush()
-        return False
-
-    # verified_sbom — leave untouched
-    return None
+class AllPackagesFailed(Exception): ...
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +106,15 @@ class RegistryCrawler(ABC):
     Concrete subclasses implement ``fetch_package`` and ``fetch_dependents`` for
     their specific registry API.  The shared ``crawl_and_persist`` method handles
     DB writes, transaction boundaries, and rate limiting.
+
+    Current write contract:
+    - crawler package canonical IDs stay as package PURLs
+    - a package must resolve to an existing source ``Repo`` by repository URL
+        (or release-PURL fallback)
+    - download counts are written only to
+        ``Repo.repo_metadata['adoption_downloads_by_purl']``
+    - scalar ``Repo.adoption_downloads`` is reduced and persisted later by
+        adoption materialization.
     """
 
     def __init__(
@@ -210,7 +131,11 @@ class RegistryCrawler(ABC):
 
     @abstractmethod
     async def fetch_package(self, package_name: str) -> CrawledPackage:
-        """Fetch package metadata from the registry API."""
+        """
+        Fetch package metadata from the registry API.
+
+        This SHOULD populate `releases[].release_date` and it MUST be `isoformat`.
+        """
         ...
 
     @abstractmethod
@@ -272,20 +197,30 @@ class RegistryCrawler(ABC):
             raise last_exc
         raise RuntimeError(f"Exhausted retries for {url}")
 
-    async def crawl_and_persist(self, package_names: list[str]) -> CrawlResult:
+    async def crawl_and_persist(
+        self,
+        package_names: list[str],
+    ) -> CrawlResult:
         """
-        Crawl a list of packages and persist vertices/edges to the database.
+        Crawl packages and persist source-repo edges + metadata.
 
         Each package is processed in its own transaction (commit per-package).
         Failures are logged and collected in ``CrawlResult.errors`` — the crawl
         continues with the remaining packages.
+
+        A package is counted as processed only if its source ``Repo`` can be
+        resolved and all writes commit successfully.
         """
         result = CrawlResult()
 
         for i, package_name in enumerate(package_names):
             async with self.session_factory() as session:
                 try:
-                    await self._process_package(session, package_name, result)
+                    await self._process_package(
+                        session,
+                        package_name,
+                        result,
+                    )
                     await session.commit()
                     result.packages_processed += 1
                 except Exception as exc:
@@ -306,35 +241,57 @@ class RegistryCrawler(ABC):
         result: CrawlResult,
     ) -> None:
         """
-        Fetch, upsert, and create edges for a single package.
+        Merge package metadata into the source Repo and write dependency edges.
+
+        The package vertex itself is not promoted to ``Repo`` in this path.
+        Instead, dependency graph edges are anchored on the resolved source
+        ``Repo`` vertex.
 
         This runs inside a session context managed by ``crawl_and_persist``.
         """
         crawled = await self.fetch_package(package_name)
+        source_repo: Repo | None = None
+        if crawled.repo_url:
+            package_repo_url = crawled.repo_url.removesuffix(".git")
+            source_repo = await session.scalar(select(Repo).where(Repo.repo_url == package_repo_url))
 
-        # Upsert the main package vertex
-        vertex = await _upsert_vertex(
-            session,
-            canonical_id=crawled.canonical_id,
-            display_name=crawled.display_name,
-            latest_version=crawled.latest_version,
-            repo_url=crawled.repo_url,
-        )
-        result.vertices_upserted += 1
+        if not source_repo:
+            repo_match = await find_repo_by_release_purl(crawled.canonical_id)
+            if repo_match:
+                vertex_id, _, _ = repo_match
+                source_repo = await session.get(Repo, vertex_id)
 
-        # Write adoption data only if this is a Repo (Rule 1)
-        if isinstance(vertex, Repo):
-            if crawled.downloads is not None:
-                vertex.adoption_downloads = crawled.downloads
-            if crawled.stars is not None:
-                vertex.adoption_stars = crawled.stars
-            if crawled.metadata:
-                vertex.repo_metadata = crawled.metadata
+        if not source_repo:
+            raise SourceRepoNotFound(f"No source repo found for package {package_name}")
+
+        if crawled.downloads_30d is not None:
+            source_repo.repo_metadata = merge_download_into_repo_metadata(
+                source_repo.repo_metadata,
+                package_purl=crawled.canonical_id,
+                downloads=crawled.downloads_30d,
+                repo_canonical_id=source_repo.canonical_id,
+            )
+
+        package_releases = crawled.releases
+        # ensure that `crawled.canonical_id` is in the releases
+        if not any(release.purl == crawled.canonical_id for release in package_releases):
+            package_releases = [
+                Release(
+                    purl=crawled.canonical_id,
+                    version=crawled.latest_version,
+                    release_date="",
+                ),
+                *package_releases,
+            ]
+
+        source_repo.releases = merge_releases(source_repo.releases, package_releases)
+
+        if crawled.downloads_30d is not None or package_releases:
             await session.flush()
 
         # Forward dependencies: this package depends on each dep
         for dep in crawled.dependencies:
-            dep_vertex = await _upsert_vertex(
+            dep_vertex = await upsert_external_repo(
                 session,
                 canonical_id=dep.canonical_id,
                 display_name=dep.display_name,
@@ -343,21 +300,21 @@ class RegistryCrawler(ABC):
             )
             result.vertices_upserted += 1
 
-            edge_result = await _upsert_edge(
+            edge_result = await upsert_depends_on(
                 session,
-                in_vertex_id=vertex.id,
+                in_vertex_id=source_repo.id,
                 out_vertex_id=dep_vertex.id,
                 version_range=dep.version_range,
             )
             if edge_result is True:
                 result.edges_created += 1
-            elif edge_result is None:
+            else:
                 result.edges_skipped += 1
 
         # Reverse dependents: each dependent depends on this package
         dependents = await self.fetch_dependents(package_name)
         for dependent in dependents:
-            dep_vertex = await _upsert_vertex(
+            dep_vertex = await upsert_external_repo(
                 session,
                 canonical_id=dependent.canonical_id,
                 display_name=dependent.display_name,
@@ -366,13 +323,27 @@ class RegistryCrawler(ABC):
             )
             result.vertices_upserted += 1
 
-            edge_result = await _upsert_edge(
+            edge_result = await upsert_depends_on(
                 session,
                 in_vertex_id=dep_vertex.id,
-                out_vertex_id=vertex.id,
+                out_vertex_id=source_repo.id,
                 version_range=None,
             )
             if edge_result is True:
                 result.edges_created += 1
-            elif edge_result is None:
+            else:
                 result.edges_skipped += 1
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def as_str_key_dict(value: Any) -> dict[str, Any]:
+    """Return a dict with only string keys; otherwise return an empty dict."""
+
+    try:
+        return msgspec.convert(value, type=dict[str, Any])
+    except msgspec.ValidationError:
+        return {}

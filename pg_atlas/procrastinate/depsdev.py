@@ -18,6 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
+from abc import ABC
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -42,6 +43,7 @@ from pg_atlas.deps_dev.lib.deps_dev.v3alpha import (
     System,
     VersionKey,
 )
+from pg_atlas.ingestion.persist import strip_purl_version
 
 logger = logging.getLogger(__name__)
 
@@ -79,43 +81,24 @@ class DepsDevError(Exception):
 
 
 @dataclass
-class DepsDevVersionInfo:
-    """A version entry returned by deps.dev GetPackage."""
-
-    version: str
-    purl: str
-    published_at: str | None
-    is_default: bool
+class _SystemNameBase(ABC):
+    system: str
+    name: str
 
 
 @dataclass
-class ProjectPackageVersion:
+class ProjectPackageVersion(_SystemNameBase):
     """A project package/version mapping returned by deps.dev."""
 
-    system: str
-    name: str
     version: str
     purl: str
 
 
 @dataclass
-class DepsDevPackageInfo:
-    """Info about a package from deps.dev GetPackage."""
+class ProjectPackage(_SystemNameBase):
+    """A distinct project package derived from ProjectPackageVersion."""
 
-    system: str
-    name: str
     purl: str
-    default_version: str
-    versions: list[DepsDevVersionInfo] = field(default_factory=list)
-
-
-@dataclass
-class DepsDevRequirement:
-    """A single unresolved requirement (dependency) from GetRequirements."""
-
-    system: str
-    name: str
-    version_constraint: str
 
 
 @dataclass
@@ -127,7 +110,59 @@ class DepsDevProjectInfo:
     forks_count: int
     license: str
     description: str
-    package_versions: list[ProjectPackageVersion] = field(default_factory=list)
+    packages: list[ProjectPackage] = field(default_factory=list[ProjectPackage])
+
+    async def populate_packages(self, stub: InsightsStub | None = None) -> None:
+        """
+        Populate ``packages`` with unique versionless package identities.
+
+        ``GetProjectPackageVersions`` returns one row per version, but
+        downstream crawl orchestration needs one package identity per
+        ``(system, name)`` pair. Version metadata is fetched later via
+        ``get_package`` when building release lists.
+        """
+
+        package_versions = await _get_project_package_versions(self.project_id, stub=stub)
+        deduped_packages: dict[tuple[str, str], ProjectPackage] = {}
+
+        for package_version in package_versions:
+            key = (package_version.system, package_version.name)
+            if key in deduped_packages:
+                continue
+
+            deduped_packages[key] = ProjectPackage(
+                system=package_version.system,
+                name=package_version.name,
+                purl=strip_purl_version(package_version.purl),
+            )
+
+        self.packages = sorted(deduped_packages.values(), key=lambda package: package.purl)
+
+
+@dataclass
+class DepsDevVersionInfo:
+    """A version entry returned by deps.dev GetPackage."""
+
+    version: str
+    purl: str
+    published_at: str | None
+    is_default: bool
+
+
+@dataclass
+class DepsDevPackageInfo(_SystemNameBase):
+    """Info about a package from deps.dev GetPackage."""
+
+    purl: str
+    default_version: str
+    versions: list[DepsDevVersionInfo] = field(default_factory=list[DepsDevVersionInfo])
+
+
+@dataclass
+class DepsDevRequirement(_SystemNameBase):
+    """A single unresolved requirement (dependency) from GetRequirements."""
+
+    version_constraint: str
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +447,7 @@ async def _get_project_batch_page(
     return list(batch.responses), batch.next_page_token
 
 
-async def get_project_package_versions(project_id: str, *, stub: InsightsStub | None = None) -> list[ProjectPackageVersion]:
+async def _get_project_package_versions(project_id: str, *, stub: InsightsStub | None) -> list[ProjectPackageVersion]:
     """
     Fetch package-version mappings for one project.
 
@@ -500,7 +535,7 @@ async def get_project_batch(project_ids: list[str], *, stub: InsightsStub | None
                 forks_count=proj.forks_count,
                 license=proj.license,
                 description=proj.description,
-                package_versions=[],
+                packages=[],
             )
 
         if not next_token:

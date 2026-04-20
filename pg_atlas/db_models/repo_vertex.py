@@ -24,7 +24,8 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from pg_atlas.db_models.base import PgBase, RepoVertexType, Visibility, canonical_id, enum_values, intpk
+from pg_atlas.db_models.base import PgBase, ReleaseListJSONB, RepoVertexType, Visibility, canonical_id, enum_values, intpk
+from pg_atlas.db_models.release import Release
 
 if TYPE_CHECKING:
     from pg_atlas.db_models.contributed_to import ContributedTo
@@ -121,7 +122,7 @@ class Repo(RepoVertex):
     adoption_forks: Mapped[int | None] = mapped_column(default=None)
 
     # --- flexible data ---
-    releases: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, default=None)
+    releases: Mapped[list[Release] | None] = mapped_column(ReleaseListJSONB(), default=None)
     # NB: 'metadata' is reserved by SQLAlchemy DeclarativeBase; the Python attribute
     # is named 'repo_metadata' while the DB column is named 'metadata'.
     repo_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, default=None)
@@ -208,7 +209,7 @@ class ExternalRepo(RepoVertex):
     criticality_score: Mapped[int | None] = mapped_column(default=None)
 
     # --- flexible data ---
-    releases: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, default=None)
+    releases: Mapped[list[Release] | None] = mapped_column(ReleaseListJSONB(), default=None)
 
     # --- audit ---
     updated_at: Mapped[dt.datetime] = mapped_column(

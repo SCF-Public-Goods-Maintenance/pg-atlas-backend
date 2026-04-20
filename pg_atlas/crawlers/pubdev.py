@@ -17,20 +17,28 @@ import logging
 from typing import Any
 
 import httpx
+import msgspec
+from pydantic import TypeAdapter, ValidationError
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler
+from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.db_models.release import Release
 
 logger = logging.getLogger(__name__)
+
+
+_DEPENDENCIES_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+_WEEKLY_DOWNLOADS_ADAPTER: TypeAdapter[list[float]] = TypeAdapter(list[float])
 
 
 class PubDevCrawler(RegistryCrawler):
     """
     Crawler for pub.dev (Dart/Flutter package registry).
 
-    ``adoption_downloads`` is set to the 30-day download count from the
-    score endpoint, matching the spec definition (last 30 days).  Additional
-    download breakdowns are stored in metadata (``download_count_4w``,
-    ``download_count_12w``, ``download_count_52w``).
+    ``downloads_30d`` is captured on ``CrawledPackage`` from pub.dev metrics.
+    The base crawler persists that value under the source repo metadata PURL
+    map; scalar adoption downloads are reduced later during materialization.
+    Additional download breakdowns are stored in package metadata
+    (``download_count_4w``, ``download_count_12w``, ``download_count_52w``).
     """
 
     REGISTRY = "pub.dev"
@@ -82,10 +90,20 @@ class PubDevCrawler(RegistryCrawler):
         while url and pages_fetched < max_pages and len(dependents) < max_dependents:
             pages_fetched += 1
             resp = await self._request_with_retry(url)
-            data: dict[str, Any] = resp.json()
+            data = as_str_key_dict(resp.json())
 
-            for entry in data.get("packages", []):
-                name = entry.get("package", "")
+            packages_obj = data.get("packages")
+            packages: list[object] = []
+            if isinstance(packages_obj, list):
+                try:
+                    packages = msgspec.convert(packages_obj, type=list[object])
+                except msgspec.ValidationError:
+                    packages = []
+
+            for entry_obj in packages:
+                entry = as_str_key_dict(entry_obj)
+                name_obj = entry.get("package")
+                name = name_obj if isinstance(name_obj, str) else ""
                 if name:
                     dependents.append(
                         CrawledDependent(
@@ -94,7 +112,8 @@ class PubDevCrawler(RegistryCrawler):
                         )
                     )
 
-            url = data.get("next", "")
+            next_url = data.get("next")
+            url = next_url if isinstance(next_url, str) else ""
 
         if len(dependents) >= max_dependents:
             logger.warning(f"Truncated dependents for {package_name} at {max_dependents}")
@@ -103,23 +122,33 @@ class PubDevCrawler(RegistryCrawler):
 
     def _parse_package(self, pkg_data: dict[str, Any], metrics_data: dict[str, Any]) -> CrawledPackage:
         """Parse pub.dev API responses into a CrawledPackage."""
-        name = pkg_data.get("name", "")
-        latest = pkg_data.get("latest", {})
-        version = latest.get("version", "")
-        pubspec = latest.get("pubspec", {})
+        name_obj = pkg_data.get("name")
+        name = name_obj if isinstance(name_obj, str) else ""
+        package_purl = f"pkg:pub/{name.lower()}"
+        latest = as_str_key_dict(pkg_data.get("latest"))
+        version_obj = latest.get("version")
+        version = version_obj if isinstance(version_obj, str) else ""
+        pubspec = as_str_key_dict(latest.get("pubspec"))
 
         homepage = pubspec.get("homepage") or pubspec.get("repository")
         repo_url: str | None = homepage if isinstance(homepage, str) else None
 
         # Parse runtime dependencies only (not dev_dependencies or dependency_overrides)
-        raw_deps = pubspec.get("dependencies") or {}
+        raw_deps_obj = pubspec.get("dependencies")
+        try:
+            raw_deps = _DEPENDENCIES_ADAPTER.validate_python(raw_deps_obj)
+        except ValidationError:
+            raw_deps = {}
+
         dependencies: list[CrawledDependency] = []
         for dep_name, dep_constraint in raw_deps.items():
             if dep_name.lower() in self.FRAMEWORK_PACKAGES:
                 continue
+
             # SDK dependencies like {"sdk": "flutter"} are dicts, not version strings
             if isinstance(dep_constraint, dict):
                 continue
+
             version_range = dep_constraint if isinstance(dep_constraint, str) else None
             dependencies.append(
                 CrawledDependency(
@@ -130,7 +159,7 @@ class PubDevCrawler(RegistryCrawler):
             )
 
         # Extract score data (nested under "score" in metrics response)
-        score = metrics_data.get("score", {})
+        score = as_str_key_dict(metrics_data.get("score"))
         downloads_30d = score.get("downloadCount30Days")
         pub_points = score.get("grantedPoints")
         pub_points_max = score.get("maxPoints")
@@ -140,11 +169,15 @@ class PubDevCrawler(RegistryCrawler):
             metadata["download_count_30d"] = downloads_30d
 
         # Extract weekly download history from scorecard
-        scorecard = metrics_data.get("scorecard", {})
-        wvd = scorecard.get("weeklyVersionDownloads", {})
-        weekly_downloads = wvd.get("totalWeeklyDownloads")
-        is_valid = isinstance(weekly_downloads, list) and weekly_downloads
-        if is_valid and all(isinstance(x, (int, float)) for x in weekly_downloads):
+        scorecard = as_str_key_dict(metrics_data.get("scorecard"))
+        wvd = as_str_key_dict(scorecard.get("weeklyVersionDownloads"))
+        weekly_downloads_obj = wvd.get("totalWeeklyDownloads")
+        try:
+            weekly_downloads = _WEEKLY_DOWNLOADS_ADAPTER.validate_python(weekly_downloads_obj)
+        except ValidationError:
+            weekly_downloads = []
+
+        if weekly_downloads:
             metadata["download_count_4w"] = sum(weekly_downloads[:4])
             metadata["download_count_12w"] = sum(weekly_downloads[:12])
             metadata["download_count_52w"] = sum(weekly_downloads[:52])
@@ -154,13 +187,36 @@ class PubDevCrawler(RegistryCrawler):
         if pub_points_max is not None:
             metadata["pub_points_max"] = pub_points_max
 
+        releases: list[Release] = []
+        versions_obj = pkg_data.get("versions")
+        if isinstance(versions_obj, list):
+            try:
+                versions: list[object] = msgspec.convert(versions_obj, type=list[object])
+            except msgspec.ValidationError:
+                versions = []
+
+            for version_payload_obj in versions:
+                if not isinstance(version_payload_obj, dict):
+                    continue
+
+                version_payload = as_str_key_dict(version_payload_obj)
+
+                version_value = version_payload.get("version")
+                if not isinstance(version_value, str) or not version_value:
+                    continue
+
+                published_value = version_payload.get("published")
+                release_date = published_value if isinstance(published_value, str) else ""
+                releases.append(Release(purl=package_purl, version=version_value, release_date=release_date))
+
         return CrawledPackage(
-            canonical_id=f"pkg:pub/{name.lower()}",
+            canonical_id=package_purl,
             display_name=name,
             latest_version=version,
             repo_url=repo_url,
-            downloads=downloads_30d,
+            downloads_30d=downloads_30d,
             stars=None,
             metadata=metadata,
             dependencies=dependencies,
+            releases=releases,
         )

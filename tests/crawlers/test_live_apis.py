@@ -66,9 +66,9 @@ async def test_pubdev_live_metrics(live_client: httpx.AsyncClient) -> None:
     crawler = PubDevCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
 
-    if pkg.downloads is not None:
-        assert isinstance(pkg.downloads, int)
-        assert pkg.downloads >= 0
+    if pkg.downloads_30d is not None:
+        assert isinstance(pkg.downloads_30d, int)
+        assert pkg.downloads_30d >= 0
 
     # Weekly aggregations should be present from scorecard
     assert isinstance(pkg.metadata.get("download_count_4w"), int)
@@ -109,9 +109,9 @@ async def test_packagist_live_downloads(live_client: httpx.AsyncClient) -> None:
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
 
     # downloads may be None if downloads endpoint fails, but should be int if present
-    if pkg.downloads is not None:
-        assert isinstance(pkg.downloads, int)
-        assert pkg.downloads >= 0
+    if pkg.downloads_30d is not None:
+        assert isinstance(pkg.downloads_30d, int)
+        assert pkg.downloads_30d >= 0
 
 
 async def test_packagist_live_dependents(live_client: httpx.AsyncClient) -> None:
