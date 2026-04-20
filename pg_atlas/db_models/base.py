@@ -97,14 +97,28 @@ class ReleaseListJSONB(TypeDecorator[list[Release] | None]):
         if value is None:
             return None
 
-        return msgspec.to_builtins(value)
+        payload = msgspec.to_builtins(value)
+
+        return msgspec.convert(payload, type=list[dict[str, str]])
 
     def process_result_value(self, value: Any, dialect: Any) -> list[Release] | None:
         """Deserialize JSON dictionaries into ``Release`` structs."""
         if value is None:
             return None
 
-        return msgspec.convert(value, list[Release])
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                row = msgspec.convert(item, type=dict[str, object])
+                if row.get("release_date") is None:
+                    row["release_date"] = ""
+
+                normalized.append(row)
+                continue
+
+            normalized.append(item)
+
+        return msgspec.convert(normalized, list[Release])
 
 
 # ---------------------------------------------------------------------------

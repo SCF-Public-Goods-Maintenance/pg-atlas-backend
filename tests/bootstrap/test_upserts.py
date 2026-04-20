@@ -22,7 +22,7 @@ from pg_atlas.db_models.base import EdgeConfidence, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
-from pg_atlas.procrastinate.upserts import absorb_external_repo, find_repo_by_release_purl
+from pg_atlas.procrastinate.upserts import absorb_external_repo, find_repo_by_release_purl, upsert_depends_on
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -279,7 +279,121 @@ async def test_upsert_repo_union_merges_releases(
     await session.reset()
     repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
     assert repo.releases is not None
-    assert {(release.purl, release.version) for release in repo.releases} == {
-        ("pkg:pub/release-merge", "1.0.0"),
-        ("pkg:pub/release-merge", "1.1.0"),
-    }
+    assert [release.version for release in repo.releases] == ["1.1.0", "1.0.0"]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_upsert_depends_on_insert_update_and_noop(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    factory, session = upsert_test_env
+    del factory
+
+    source = ExternalRepo(
+        canonical_id="pkg:npm/upsert-source",
+        display_name="source",
+        latest_version="1.0.0",
+    )
+    target = ExternalRepo(
+        canonical_id="pkg:npm/upsert-target",
+        display_name="target",
+        latest_version="1.0.0",
+    )
+    session.add_all([source, target])
+    await session.flush()
+
+    inserted = await upsert_depends_on(
+        session=session,
+        in_vertex_id=source.id,
+        out_vertex_id=target.id,
+        version_range="^1.0",
+        confidence=EdgeConfidence.inferred_shadow,
+    )
+    await session.flush()
+
+    updated = await upsert_depends_on(
+        session=session,
+        in_vertex_id=source.id,
+        out_vertex_id=target.id,
+        version_range="^2.0",
+        confidence=EdgeConfidence.inferred_shadow,
+    )
+    await session.flush()
+
+    noop = await upsert_depends_on(
+        session=session,
+        in_vertex_id=source.id,
+        out_vertex_id=target.id,
+        version_range="^2.0",
+        confidence=EdgeConfidence.inferred_shadow,
+    )
+
+    await session.commit()
+    await session.refresh(source)
+    await session.refresh(target)
+
+    edge = (
+        await session.execute(
+            select(DependsOn).where(
+                DependsOn.in_vertex_id == source.id,
+                DependsOn.out_vertex_id == target.id,
+            )
+        )
+    ).scalar_one()
+
+    assert inserted is True
+    assert updated is True
+    assert noop is False
+    assert edge.version_range == "^2.0"
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_upsert_depends_on_preserves_verified_confidence(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    factory, session = upsert_test_env
+    del factory
+
+    source = ExternalRepo(
+        canonical_id="pkg:npm/upsert-source-verified",
+        display_name="source",
+        latest_version="1.0.0",
+    )
+    target = ExternalRepo(
+        canonical_id="pkg:npm/upsert-target-verified",
+        display_name="target",
+        latest_version="1.0.0",
+    )
+    session.add_all([source, target])
+    await session.flush()
+
+    await upsert_depends_on(
+        session=session,
+        in_vertex_id=source.id,
+        out_vertex_id=target.id,
+        version_range="^1.0",
+        confidence=EdgeConfidence.verified_sbom,
+    )
+    await session.flush()
+
+    changed = await upsert_depends_on(
+        session=session,
+        in_vertex_id=source.id,
+        out_vertex_id=target.id,
+        version_range="^2.0",
+        confidence=EdgeConfidence.inferred_shadow,
+    )
+    await session.commit()
+
+    edge = (
+        await session.execute(
+            select(DependsOn).where(
+                DependsOn.in_vertex_id == source.id,
+                DependsOn.out_vertex_id == target.id,
+            )
+        )
+    ).scalar_one()
+
+    assert changed is True
+    assert edge.version_range == "^2.0"
+    assert edge.confidence == EdgeConfidence.verified_sbom

@@ -43,6 +43,7 @@ from pg_atlas.deps_dev.lib.deps_dev.v3alpha import (
     System,
     VersionKey,
 )
+from pg_atlas.ingestion.persist import strip_purl_version
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +113,30 @@ class DepsDevProjectInfo:
     packages: list[ProjectPackage] = field(default_factory=list[ProjectPackage])
 
     async def populate_packages(self, stub: InsightsStub | None = None) -> None:
+        """
+        Populate ``packages`` with unique versionless package identities.
+
+        ``GetProjectPackageVersions`` returns one row per version, but
+        downstream crawl orchestration needs one package identity per
+        ``(system, name)`` pair. Version metadata is fetched later via
+        ``get_package`` when building release lists.
+        """
+
         package_versions = await _get_project_package_versions(self.project_id, stub=stub)
-        # TODO: deduplicate and sort by purl, uses `strip_purl_version`
-        # self.packages = deduped-versions
-        print(package_versions)  # I put this here only to satisfy ruff
+        deduped_packages: dict[tuple[str, str], ProjectPackage] = {}
+
+        for package_version in package_versions:
+            key = (package_version.system, package_version.name)
+            if key in deduped_packages:
+                continue
+
+            deduped_packages[key] = ProjectPackage(
+                system=package_version.system,
+                name=package_version.name,
+                purl=strip_purl_version(package_version.purl),
+            )
+
+        self.packages = sorted(deduped_packages.values(), key=lambda package: package.purl)
 
 
 @dataclass

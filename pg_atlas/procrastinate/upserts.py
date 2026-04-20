@@ -23,7 +23,8 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, case, delete, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.base import (
@@ -34,7 +35,7 @@ from pg_atlas.db_models.base import (
 )
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
-from pg_atlas.db_models.release import Release, merge_releases
+from pg_atlas.db_models.release import Release, merge_releases, sorted_releases_desc
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.db_models.vertex_ops import get_vertex
@@ -212,6 +213,7 @@ async def upsert_repo(
             return repo_id
 
         # New vertex — insert.
+        sorted_releases = sorted_releases_desc(releases or [])
         repo = Repo(
             canonical_id=canonical_id,
             display_name=display_name,
@@ -222,7 +224,7 @@ async def upsert_repo(
             latest_commit_date=latest_commit_date,
             adoption_stars=adoption_stars,
             adoption_forks=adoption_forks,
-            releases=releases,
+            releases=sorted_releases,
             repo_metadata=repo_metadata,
         )
         session.add(repo)
@@ -524,37 +526,39 @@ async def upsert_depends_on(
     confidence: EdgeConfidence = EdgeConfidence.inferred_shadow,
 ) -> bool:
     """
-    Insert a ``DependsOn`` edge if it does not already exist.
+    Insert a ``DependsOn`` edge atomically.
 
-    Only the ``version_range`` is updated on existing edges.
-    Returns ``True`` if an edge was inserted or updated.
+    On conflict, updates mutable fields while preserving stronger confidence.
+    Returns ``True`` when a row is inserted or updated, ``False`` for no-op.
     """
-    result = await session.execute(
-        select(DependsOn).where(
-            DependsOn.in_vertex_id == in_vertex_id,
-            DependsOn.out_vertex_id == out_vertex_id,
-        )
-    )
-    existing = result.scalar_one_or_none()
-
-    if existing is not None:
-        if existing.version_range != version_range:
-            existing.version_range = version_range
-            await session.flush()
-            return True
-
-        return False
-
-    edge = DependsOn(
+    stmt = insert(DependsOn).values(
         in_vertex_id=in_vertex_id,
         out_vertex_id=out_vertex_id,
         version_range=version_range,
         confidence=confidence,
     )
-    session.add(edge)
-    await session.flush()
+    upsert_stmt = stmt.on_conflict_do_update(
+        index_elements=[DependsOn.in_vertex_id, DependsOn.out_vertex_id],
+        set_={
+            "version_range": stmt.excluded.version_range,
+            "confidence": case(
+                (DependsOn.confidence == EdgeConfidence.verified_sbom, DependsOn.confidence),
+                else_=stmt.excluded.confidence,
+            ),
+        },
+        where=or_(
+            DependsOn.version_range.is_distinct_from(stmt.excluded.version_range),
+            and_(
+                DependsOn.confidence != EdgeConfidence.verified_sbom,
+                DependsOn.confidence != stmt.excluded.confidence,
+            ),
+        ),
+    )
+    result = await session.execute(upsert_stmt)
+    rowcount_obj = getattr(result, "rowcount", 0)
+    rowcount = rowcount_obj if isinstance(rowcount_obj, int) else 0
 
-    return True
+    return rowcount > 0
 
 
 # ---------------------------------------------------------------------------

@@ -173,7 +173,6 @@ class PackageReference:
 
     system: str
     name: str
-    version: str = ""
     purl: str = ""
 
     @classmethod
@@ -183,7 +182,6 @@ class PackageReference:
         return cls(
             system=payload.get("system", ""),
             name=payload.get("name", ""),
-            version=payload.get("version", ""),
             purl=payload.get("purl", ""),
         )
 
