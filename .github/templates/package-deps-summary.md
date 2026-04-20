@@ -1,11 +1,10 @@
-<!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
-## SBOM Queue Processing
+## deps.dev — Package Dependencies Queue
 <!-- markdownlint-enable MD041 -->
 
 | Queue | Succeeded | Failed | Pending | Cancelled |
 | ----- | --------: | -----: | ------: | --------: |
-| `sbom` | {sbom_succeeded} | {sbom_failed} | {sbom_todo} | {sbom_cancelled} |
+| `package-deps` | {package_deps_succeeded} | {package_deps_failed} | {package_deps_todo} | {package_deps_cancelled} |
 
 - **Trigger**: {trigger}
 - **Run**: [{run_id}]({server_url}/{repository}/actions/runs/{run_id})
@@ -25,13 +24,3 @@
 {warning_detail}
 
 </details>
-
-### Parsed SPDX Documents
-
-{spdx_details}
-
-### Criticality Materialization
-
-| Dep nodes seen | Active nodes scored | Duration (s) |
-| -------------: | ------------------: | -----------: |
-| {criticality_dep_nodes_seen} | {criticality_active_nodes_scored} | {criticality_duration_seconds} |

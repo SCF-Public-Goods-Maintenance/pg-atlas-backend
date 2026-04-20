@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
 ## Gitlog Queue Processing
 <!-- markdownlint-enable MD041 -->
@@ -13,9 +14,19 @@
 - **First rate-limit hit after N repos**: {first_rate_limit_hit_after_n_repos}
 - **Total rate-limit hits**: {total_rate_limit_hits}
 
-### Worker errors
+<details open>
+<summary>Errors ({error_count})</summary>
 
 {error_detail}
+
+</details>
+
+<details>
+<summary>Warnings ({warning_count})</summary>
+
+{warning_detail}
+
+</details>
 
 ### Pony factor materialization
 

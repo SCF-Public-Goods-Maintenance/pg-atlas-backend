@@ -32,11 +32,15 @@ def parse_log(log_path: str) -> tuple[dict[str, dict[str, int]], list[str], list
 
     Returns:
         A tuple of (status_counts_by_queue, warnings, errors, spdx_parsed_lines).
+        All collections are empty if the file does not exist.
     """
     status_counts: dict[str, dict[str, int]] = {}
     warnings: list[str] = []
     errors: list[str] = []
     spdx_parsed_lines: list[str] = []
+
+    if not Path(log_path).exists():
+        return status_counts, warnings, errors, spdx_parsed_lines
 
     with open(log_path) as f:
         for line in f:

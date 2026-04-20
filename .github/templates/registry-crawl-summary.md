@@ -1,16 +1,21 @@
 <!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
-## SBOM Queue Processing
+## Registries — Registry Crawl Queue
 <!-- markdownlint-enable MD041 -->
 
 | Queue | Succeeded | Failed | Pending | Cancelled |
 | ----- | --------: | -----: | ------: | --------: |
-| `sbom` | {sbom_succeeded} | {sbom_failed} | {sbom_todo} | {sbom_cancelled} |
+| `registry-crawl` | {registry_crawl_succeeded} | {registry_crawl_failed} | {registry_crawl_todo} | {registry_crawl_cancelled} |
 
 - **Trigger**: {trigger}
 - **Run**: [{run_id}]({server_url}/{repository}/actions/runs/{run_id})
 - **Finished**: {finished}
 - **Warnings**: {warning_count} | **Errors**: {error_count}
+- **Unsupported ecosystems**: {unsupported_ecosystem_group_count} groups / {unsupported_ecosystem_purl_count} packages
+
+### Unsupported Ecosystems
+
+{unsupported_ecosystems}
 
 <details open>
 <summary>Errors ({error_count})</summary>
@@ -25,13 +30,3 @@
 {warning_detail}
 
 </details>
-
-### Parsed SPDX Documents
-
-{spdx_details}
-
-### Criticality Materialization
-
-| Dep nodes seen | Active nodes scored | Duration (s) |
-| -------------: | ------------------: | -----------: |
-| {criticality_dep_nodes_seen} | {criticality_active_nodes_scored} | {criticality_duration_seconds} |
