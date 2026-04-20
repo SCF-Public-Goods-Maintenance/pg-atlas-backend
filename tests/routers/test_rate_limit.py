@@ -21,8 +21,8 @@ class RecordingLimiter:
     """Minimal async limiter fake that tracks calls per client identity."""
 
     limit_per_key: int
-    calls: list[tuple[str, bool]] = field(default_factory=list)
-    counts: dict[str, int] = field(default_factory=dict)
+    calls: list[tuple[str, bool]] = field(default_factory=list[tuple[str, bool]])
+    counts: dict[str, int] = field(default_factory=dict[str, int])
 
     async def try_acquire_async(
         self,
