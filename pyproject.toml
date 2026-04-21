@@ -27,6 +27,8 @@ dependencies = [
     "numpy>=1.26",
     "msgspec>=0.21.0",
     "pyrate-limiter>=4.1.0",
+    "pypistats>=1.13.0",
+    "packaging>=26.0",
 ]
 
 [dependency-groups]

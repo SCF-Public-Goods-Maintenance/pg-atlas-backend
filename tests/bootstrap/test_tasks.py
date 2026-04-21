@@ -280,7 +280,11 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
         adoption_forks=44,
     )
 
-    assert defer_mock.call_count == 1
+    deps_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_deps]
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+
+    assert len(deps_defer_calls) == 1
+    assert len(registry_defer_calls) == 1
 
 
 async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any) -> None:
@@ -308,7 +312,11 @@ async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any)
     # 1 upsert for github repo; per-package loop calls absorb, not upsert_repo.
     assert upsert_repo_mock.call_count == 1
     assert absorb_mock.call_count == 2
-    assert defer_mock.call_count == 2
+    deps_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_deps]
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+
+    assert len(deps_defer_calls) == 2
+    assert len(registry_defer_calls) == 1
 
 
 async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> None:
@@ -507,3 +515,48 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: 
 
     build_crawler_mock.assert_called_once()
     fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["soneso/stellar-php-sdk"])
+
+
+@pytest.mark.parametrize(
+    ("system", "package_name"),
+    [
+        ("NPM", "lodash"),
+        ("CARGO", "serde"),
+        ("PYPI", "requests"),
+    ],
+)
+async def test_crawl_github_repo_supports_new_registry_systems_without_warning(
+    mocker: Any,
+    caplog: pytest.LogCaptureFixture,
+    system: str,
+    package_name: str,
+) -> None:
+    """Supported direct-registry systems should enqueue registry crawls without unsupported warnings."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system=system, name=package_name)],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
+
+    with caplog.at_level("WARNING"):
+        await crawl_github_repo(
+            owner="test-org",
+            repo="test-repo",
+            project_id=1,
+            packages=[],
+            adoption_stars=123,
+            adoption_forks=44,
+        )
+
+    assert "registry-crawl unsupported ecosystem" not in caplog.text
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == system
+    assert registry_defer_calls[0].kwargs["package_names"] == [package_name]

@@ -146,15 +146,25 @@ def _unique_suffix() -> str:
     return uuid.uuid4().hex[:8]
 
 
+@pytest.mark.parametrize(
+    "package_canonical_id",
+    [
+        "pkg:pub/my-sdk",
+        "pkg:npm/my-sdk",
+        "pkg:cargo/my-sdk",
+        "pkg:pypi/my-sdk",
+    ],
+)
 async def test_crawl_writes_downloads_to_source_repo_metadata(
     db_session_factory: async_sessionmaker[AsyncSession],
+    package_canonical_id: str,
 ) -> None:
     """Crawler should write download counts into source repo metadata map only."""
 
     suffix = _unique_suffix()
     source_repo_url = f"https://github.com/test-org/source-repo-{suffix}"
     source_repo_canonical_id = f"pkg:github/test-org/source-repo-{suffix}"
-    package_canonical_id = f"pkg:pub/my-sdk-{suffix}"
+    package_canonical_id = f"{package_canonical_id}-{suffix}"
 
     async with db_session_factory() as session:
         await _seed_source_repo(

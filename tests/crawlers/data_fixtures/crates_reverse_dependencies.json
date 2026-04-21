@@ -1,0 +1,47 @@
+{
+  "dependencies": [
+    {
+      "id": 14077245,
+      "version_id": 654541,
+      "crate_id": "serde",
+      "req": "^1",
+      "optional": false,
+      "default_features": true,
+      "features": [],
+      "target": null,
+      "kind": "normal",
+      "downloads": 7981325
+    },
+    {
+      "id": 14077246,
+      "version_id": 961817,
+      "crate_id": "serde",
+      "req": "^1",
+      "optional": false,
+      "default_features": true,
+      "features": [],
+      "target": null,
+      "kind": "build",
+      "downloads": 42787
+    }
+  ],
+  "versions": [
+    {
+      "id": 654541,
+      "crate": "podcast",
+      "num": "0.20.0",
+      "created_at": "2022-11-01T01:35:24.143212Z",
+      "repository": "https://github.com/njaremko/podcast"
+    },
+    {
+      "id": 961817,
+      "crate": "libvpx-native-sys",
+      "num": "5.0.13",
+      "created_at": "2023-11-20T20:15:27.868152Z",
+      "repository": "https://github.com/kornelski/rust-vpx"
+    }
+  ],
+  "meta": {
+    "total": 12
+  }
+}

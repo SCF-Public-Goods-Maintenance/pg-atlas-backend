@@ -21,8 +21,11 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pg_atlas.crawlers.cargo import CargoCrawler
+from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
+from pg_atlas.crawlers.pypi import PypiCrawler
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("PG_ATLAS_TEST_LIVE_APIS"),
@@ -122,3 +125,44 @@ async def test_packagist_live_dependents(live_client: httpx.AsyncClient) -> None
     assert isinstance(dependents, list)
     for dep in dependents:
         assert dep.canonical_id.startswith("pkg:composer/")
+
+
+# ---------------------------------------------------------------------------
+# npm / crates.io / PyPI live tests
+# ---------------------------------------------------------------------------
+
+
+async def test_npm_live_fetch(live_client: httpx.AsyncClient) -> None:
+    """Fetch lodash from the live npm APIs and validate the parsed structure."""
+
+    crawler = NpmCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
+    pkg = await crawler.fetch_package("lodash")
+
+    assert pkg.canonical_id == "pkg:npm/lodash"
+    assert pkg.display_name == "lodash"
+    assert pkg.latest_version
+    assert isinstance(pkg.dependencies, list)
+
+
+async def test_cargo_live_fetch(live_client: httpx.AsyncClient) -> None:
+    """Fetch serde from the live crates.io APIs and validate the parsed structure."""
+
+    crawler = CargoCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
+    pkg = await crawler.fetch_package("serde")
+
+    assert pkg.canonical_id == "pkg:cargo/serde"
+    assert pkg.display_name == "serde"
+    assert pkg.latest_version
+    assert isinstance(pkg.dependencies, list)
+
+
+async def test_pypi_live_fetch(live_client: httpx.AsyncClient) -> None:
+    """Fetch requests from live PyPI and PyPIStats and validate the parsed structure."""
+
+    crawler = PypiCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
+    pkg = await crawler.fetch_package("requests")
+
+    assert pkg.canonical_id == "pkg:pypi/requests"
+    assert pkg.display_name == "requests"
+    assert pkg.latest_version
+    assert isinstance(pkg.dependencies, list)

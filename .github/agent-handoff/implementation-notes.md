@@ -255,7 +255,19 @@ These conventions emerged during A10 adoption-signal wiring and apply to future 
 
 - `package-deps` (deps.dev) and `registry-crawl` (direct ecosystem registries) are intentionally separate paths.
 - deps.dev scope is fixed to seven systems (`PYPI`, `NPM`, `CARGO`, `MAVEN`, `GO`, `RUBYGEMS`, `NUGET`) and should not be extended in A10 code.
-- Direct registry crawling currently supports `DART` (pub.dev) and `COMPOSER` (Packagist) via `pg_atlas.crawlers.factory`.
+- Direct registry crawling currently supports `DART` (pub.dev), `COMPOSER` (Packagist), `NPM`,
+  `CARGO`, and `PYPI` via `pg_atlas.crawlers.factory`.
+
+### Registry-specific A10 conventions
+
+- NPM and PyPI intentionally leave reverse dependents empty for now; keep the explicit TODO in the
+  crawler implementation until a practical first-party API exists.
+- Cargo reverse dependents paginate with the same 50-page / 500-item ceiling used for Packagist
+  validation runs.
+- PyPI download totals come from the PyPIStats `recent` endpoint with
+  `period=month&mirrors=true`; the `pypistats` package is still the source of truth for endpoint
+  semantics, but the crawler calls the endpoint through `_request_with_retry()` because the package
+  wrapper does not expose the `mirrors` argument on `recent()`.
 
 ### Monorepo adoption downloads map-reduce
 

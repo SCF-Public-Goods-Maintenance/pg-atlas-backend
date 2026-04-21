@@ -84,6 +84,48 @@ def packagist_dependents_empty_data() -> dict[str, Any]:
 
 
 @pytest.fixture
+def npm_package_data() -> dict[str, Any]:
+    """npm registry metadata fixture."""
+    return _load_fixture("npm_package.json")
+
+
+@pytest.fixture
+def npm_downloads_data() -> dict[str, Any]:
+    """npm downloads API response fixture."""
+    return _load_fixture("npm_downloads.json")
+
+
+@pytest.fixture
+def crates_package_data() -> dict[str, Any]:
+    """crates.io crate metadata fixture."""
+    return _load_fixture("crates_package.json")
+
+
+@pytest.fixture
+def crates_dependencies_data() -> dict[str, Any]:
+    """crates.io version dependency fixture."""
+    return _load_fixture("crates_dependencies.json")
+
+
+@pytest.fixture
+def crates_reverse_dependencies_data() -> dict[str, Any]:
+    """crates.io reverse dependencies fixture."""
+    return _load_fixture("crates_reverse_dependencies.json")
+
+
+@pytest.fixture
+def pypi_package_data() -> dict[str, Any]:
+    """PyPI project JSON fixture."""
+    return _load_fixture("pypi_package.json")
+
+
+@pytest.fixture
+def pypi_stats_recent_data() -> dict[str, Any]:
+    """PyPIStats recent-downloads JSON fixture."""
+    return _load_fixture("pypi_stats_recent.json")
+
+
+@pytest.fixture
 def mock_http_client() -> AsyncMock:
     """Mock httpx.AsyncClient for unit tests."""
     return AsyncMock(spec=httpx.AsyncClient)

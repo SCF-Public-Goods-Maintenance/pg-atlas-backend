@@ -28,7 +28,25 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     """Parse arguments, configure the crawler, and run the crawl."""
     parser = argparse.ArgumentParser(description="PG Atlas registry crawler")
-    parser.add_argument("registry", choices=["pubdev", "packagist", "dart", "composer", "flutter", "php"])
+    parser.add_argument(
+        "registry",
+        choices=[
+            "pubdev",
+            "packagist",
+            "dart",
+            "composer",
+            "flutter",
+            "php",
+            "npm",
+            "node",
+            "nodejs",
+            "cargo",
+            "crates",
+            "cratesio",
+            "pypi",
+            "pip",
+        ],
+    )
     parser.add_argument("packages", nargs="+", help="Package names to crawl")
     args = parser.parse_args()
 

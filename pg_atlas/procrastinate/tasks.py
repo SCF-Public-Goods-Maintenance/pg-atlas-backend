@@ -76,7 +76,7 @@ from pg_atlas.procrastinate.upserts import (
 logger = logging.getLogger(__name__)
 
 # TODO: refactor into single source of truth; should live in crawlers and depsdev.
-REGISTRY_CRAWL_SYSTEMS = frozenset({"DART", "COMPOSER"})
+REGISTRY_CRAWL_SYSTEMS = frozenset({"DART", "COMPOSER", "NPM", "CARGO", "PYPI"})
 DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "RUBYGEMS", "NUGET"})
 
 
@@ -405,21 +405,19 @@ async def crawl_github_repo(
     5. Group registry-crawl packages by registry system and defer one
         ``crawl_package_registry`` task per supported system.
 
-    Supported direct-registry crawl systems are intentionally limited to
-    ``DART`` and ``COMPOSER``. Other ecosystems are logged as unsupported for
-    observability.
+    Registry-supported ecosystems are crawled directly for adoption signals,
+    even when they also flow through deps.dev for release and dependency data.
+    Ecosystems without a direct registry crawler are logged for observability.
     """
     logger.info(f"crawl_github_repo: {owner}/{repo} (project_id={project_id})")
 
     # ----- Proceed with Deps.dev packages, or detect published packages from repo manifests -----
     package_refs = [PackageReference.from_payload(pkg) for pkg in packages]
-    received_depsdev_payload = bool(package_refs)
     if not package_refs:
         package_refs = detect_packages_from_repo(owner, repo)
         logger.info(f"Detected {len(package_refs)} packages in {owner}/{repo}")
 
-    depsdev_packages, registry_packages, misc_packages = _partition_package_refs(package_refs)
-    mixed_package_list = bool(depsdev_packages) and bool(registry_packages or misc_packages)
+    depsdev_packages, registry_packages, unsupported_registry_packages = _partition_package_refs(package_refs)
 
     # ----- Build releases from deps.dev-supported package info -----
     releases: list[Release] = []
@@ -539,14 +537,7 @@ async def crawl_github_repo(
         if enqueued:
             deferred_registry_tasks += 1
 
-    warning_packages = list(misc_packages)
-    if mixed_package_list:
-        warning_packages.extend(depsdev_packages)
-
-    if received_depsdev_payload and not mixed_package_list:
-        warning_packages = list(misc_packages)
-
-    unsupported_registry_purls = _build_registry_warning_purls(warning_packages)
+    unsupported_registry_purls = _build_registry_warning_purls(unsupported_registry_packages)
     for system, purls in sorted(unsupported_registry_purls.items()):
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
@@ -787,27 +778,30 @@ def _partition_package_refs(
     """
     Split package references by processing path.
 
-    Returns ``(depsdev_packages, registry_packages, misc_packages)``.
+    Returns ``(depsdev_packages, registry_packages, unsupported_registry_packages)``.
+
+    One package reference may appear in both the deps.dev and registry lists
+    when the ecosystem supports both flows. The third list contains only
+    packages that lack a direct registry crawler.
     """
 
     depsdev_packages: list[PackageReference] = []
     registry_packages: list[PackageReference] = []
-    misc_packages: list[PackageReference] = []
+    unsupported_registry_packages: list[PackageReference] = []
 
     for package_ref in package_refs:
         system = package_ref.system.upper()
         if system in DEPSDEV_SUPPORTED_SYSTEMS:
             depsdev_packages.append(package_ref)
-            continue
 
         normalized_registry_system = normalize_registry_system(system)
         if normalized_registry_system in REGISTRY_CRAWL_SYSTEMS:
             registry_packages.append(package_ref)
             continue
 
-        misc_packages.append(package_ref)
+        unsupported_registry_packages.append(package_ref)
 
-    return depsdev_packages, registry_packages, misc_packages
+    return depsdev_packages, registry_packages, unsupported_registry_packages
 
 
 def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[str, set[str]]:

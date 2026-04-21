@@ -16,8 +16,11 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.crawlers.base import RegistryCrawler
+from pg_atlas.crawlers.cargo import CargoCrawler
+from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
+from pg_atlas.crawlers.pypi import PypiCrawler
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,12 @@ def normalize_registry_system(system: str) -> str | None:
             return "DART"
         case "COMPOSER" | "PHP" | "PACKAGIST":
             return "COMPOSER"
+        case "NPM" | "NODE" | "NODEJS":
+            return "NPM"
+        case "CARGO" | "CRATES" | "CRATESIO":
+            return "CARGO"
+        case "PYPI" | "PIP":
+            return "PYPI"
         case _:
             return None
 
@@ -65,6 +74,27 @@ def build_registry_crawler(
             )
         case "COMPOSER":
             return PackagistCrawler(
+                client=client,
+                session_factory=session_factory,
+                rate_limit=rate_limit,
+                max_retries=max_retries,
+            )
+        case "NPM":
+            return NpmCrawler(
+                client=client,
+                session_factory=session_factory,
+                rate_limit=rate_limit,
+                max_retries=max_retries,
+            )
+        case "CARGO":
+            return CargoCrawler(
+                client=client,
+                session_factory=session_factory,
+                rate_limit=rate_limit,
+                max_retries=max_retries,
+            )
+        case "PYPI":
+            return PypiCrawler(
                 client=client,
                 session_factory=session_factory,
                 rate_limit=rate_limit,

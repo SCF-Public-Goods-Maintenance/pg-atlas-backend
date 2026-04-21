@@ -178,9 +178,9 @@ class PubDevCrawler(RegistryCrawler):
             weekly_downloads = []
 
         if weekly_downloads:
-            metadata["download_count_4w"] = sum(weekly_downloads[:4])
-            metadata["download_count_12w"] = sum(weekly_downloads[:12])
-            metadata["download_count_52w"] = sum(weekly_downloads[:52])
+            metadata["download_count_4w"] = int(sum(weekly_downloads[:4]))
+            metadata["download_count_12w"] = int(sum(weekly_downloads[:12]))
+            metadata["download_count_52w"] = int(sum(weekly_downloads[:52]))
 
         if pub_points is not None:
             metadata["pub_points"] = pub_points
