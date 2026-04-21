@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.5.0...v0.6.0) (2026-04-21)
+
+
+### Features
+
+* **api:** add rate limiting and readiness health check ([#61](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/61)) ([34ff94f](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/34ff94fd862cd55f59b8a1153d92f7990e77476c))
+* **API:** add server-side sorting, category filter, and round filter to Projects and Repos ([#49](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/49)) ([3d5a866](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/3d5a866719416e544fa078a933320c7f760397d3))
+* **crawlers:** fetch and materialize download counts from package registries ([#62](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/62)) ([52a316f](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/52a316f27ecc1f0d22980c008767f3babd6b8048)), closes [#23](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/23)
+* **gitlog:** schedule repo updates with a dormancy-based cadence ([#47](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/47)) ([3fd48d7](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/3fd48d7ba78c76dde7a15eaef2a7beecb4fd8dfa))
+* **ingestion:** trigger criticality recompute from SBOM and bootstrap ([#56](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/56)) ([c2ee63a](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/c2ee63a7f6d5de658b077085d6228652b103f85e))
+* **metrics:** materialize A9 repo/project criticality ([#50](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/50)) ([7ed7751](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/7ed77519cb674b4b4c284a1f21e1d8a249be1d0c))
+* **metrics:** materialize pony factor from gitlog artifacts ([#57](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/57)) ([2df92b5](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/2df92b510685bca423369a4ff07bc6a64de8765d))
+* **metrics:** materialize project adoption score ([#58](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/58)) ([9c437c4](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/9c437c4b09aaf66b993a3115530953e25e0c5603))
+
+
+### Bug Fixes
+
+* **gitlog:** add Filebase S3 credentials to worker step ([09f587a](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/09f587aef8bb16cc251c1ed55e760b61bf232e52))
+* **procrastinate:** patch logging handlers in tee helper ([e36fe2e](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/e36fe2e408e7c84692b8506178e8e4b44ba285f5))
+* **workers:** always materialize and summarize ([97fbd44](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/97fbd4488b08ac547d594879a6ebabc807941ec5))
+
+
+### Performance Improvements
+
+* **metrics:** do bulk updates, no ORM UoW, and keep data columnar ([e25aa7a](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/e25aa7a2c8392291ad60cc9072629b9e572b013e))
+* **metrics:** reduce materialize criticality and pony row locks and WAL churn ([58052d7](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/58052d7beab864da39ce5f9bb54c8c8388f43037))
+
 ## [0.5.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.4.1...v0.5.0) (2026-04-12)
 
 
