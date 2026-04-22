@@ -62,7 +62,7 @@ from pg_atlas.procrastinate.github import (
     latest_version_from_repo,
     list_org_repos,
 )
-from pg_atlas.procrastinate.opengrants import fetch_scf_projects
+from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
     associate_repo_with_project,
@@ -188,7 +188,10 @@ async def process_gitlog_batch(repo_ids: list[int], seed_run_ordinal: int = 0) -
 
 
 @app.task(queue="opengrants", queueing_lock="sync_opengrants")
-async def sync_opengrants(extended_universe: bool = False) -> None:
+async def sync_opengrants(
+    extended_universe: bool = False,
+    canonical_ids: list[str] | None = None,
+) -> None:
     """
     Root bootstrap task: fetch all SCF projects and fan out.
 
@@ -200,7 +203,20 @@ async def sync_opengrants(extended_universe: bool = False) -> None:
     git_mapping = _load_git_mapping()
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        projects = await fetch_scf_projects(client)
+        projects: list[ScfProject] = await fetch_scf_projects(client)
+
+    # ----- Continue only with selected projects -----
+    # use cases: testing and targeted reprocessing
+    selected_canonical_ids = canonical_ids or []
+    if selected_canonical_ids:
+        requested_ids = set(selected_canonical_ids)
+        projects = [project for project in projects if project.canonical_id in requested_ids]
+
+        available_ids = {project.canonical_id for project in projects}
+        missing_ids = requested_ids.difference(available_ids)
+        if missing_ids:
+            missing_ids_text = ", ".join(sorted(missing_ids))
+            raise ValueError(f"sync_opengrants: canonical_id not found in OpenGrants results: {missing_ids_text}")
 
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 

@@ -124,7 +124,28 @@ async def test_seed_defers_sync_opengrants(mocker: pytest_mock.MockerFixture) ->
     await seed()
 
     mark_mock.assert_awaited_once_with(queue_name="opengrants")
-    task_mock.defer_async.assert_called_once()
+    task_mock.defer_async.assert_called_once_with(canonical_ids=[])
+
+
+async def test_seed_defers_sync_opengrants_with_project_filter(mocker: pytest_mock.MockerFixture) -> None:
+    from pg_atlas.procrastinate.seed_opengrants import seed
+
+    mocker.patch(
+        "pg_atlas.procrastinate.seed_opengrants.mark_stalled_jobs_failed",
+        new=mocker.AsyncMock(return_value=0),
+    )
+    app_mock = mocker.patch("pg_atlas.procrastinate.seed_opengrants.app")
+    ctx = mocker.AsyncMock()
+    app_mock.open_async.return_value = ctx
+
+    task_mock = mocker.patch("pg_atlas.procrastinate.tasks.sync_opengrants")
+    task_mock.defer_async = mocker.AsyncMock(return_value=1)
+
+    await seed(canonical_id=["daoip-5:scf:project:python_stellar_sdk", "daoip-5:scf:project:stellarchain.io"])
+
+    task_mock.defer_async.assert_called_once_with(
+        canonical_ids=["daoip-5:scf:project:python_stellar_sdk", "daoip-5:scf:project:stellarchain.io"]
+    )
 
 
 async def test_seed_gitlog_defers_batches(mocker: pytest_mock.MockerFixture) -> None:

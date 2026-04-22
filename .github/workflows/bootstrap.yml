@@ -18,6 +18,11 @@ on:
   schedule:
     - cron: "11 10 * * 2"   # weekly, Tuesday 10:11 UTC
   workflow_dispatch:
+    inputs:
+      projects:
+        description: Optional project filter (takes space-separated canonical IDs)
+        required: false
+        type: string
 
 concurrency:
   group: shadow
@@ -49,7 +54,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Queue bootstrap tasks
-        run: uv run python -m pg_atlas.procrastinate.seed_opengrants
+        run: uv run python -m pg_atlas.procrastinate.seed_opengrants ${{ github.event.inputs.projects }}
 
       - name: Run worker — opengrants queue
         timeout-minutes: 320
