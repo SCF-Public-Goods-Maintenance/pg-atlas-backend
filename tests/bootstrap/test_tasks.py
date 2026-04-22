@@ -69,6 +69,7 @@ def test_purl_type_for_system() -> None:
 def test_load_git_mapping() -> None:
     mapping = _load_git_mapping()
     assert "daoip-5:scf:project:python_stellar_sdk" in mapping
+    assert "daoip-5:scf:project:stellarchain.io" in mapping
 
 
 async def test_defer_with_lock_handles_already_enqueued(mocker: Any) -> None:
