@@ -123,6 +123,67 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
     assert first_call["category"] == "Developer Tooling"
 
 
+async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
+    projects = [
+        ScfProject(
+            canonical_id="daoip-5:scf:project:python_stellar_sdk",
+            display_name="Python SDK",
+            activity_status=ActivityStatus.live,
+            git_owner_url="https://github.com/stellar",
+            git_repo_url="https://github.com/stellar/python-stellar-sdk",
+            category="Developer Tooling",
+        ),
+        ScfProject(
+            canonical_id="daoip-5:scf:project:stellarchain.io",
+            display_name="StellarChain",
+            activity_status=ActivityStatus.live,
+            git_owner_url="https://github.com/stellarchain",
+            git_repo_url="https://github.com/stellarchain/web",
+            category="Developer Tooling",
+        ),
+    ]
+
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
+    mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
+    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+
+    await sync_opengrants(canonical_ids=["daoip-5:scf:project:python_stellar_sdk"])
+
+    defer_mock.assert_awaited_once()
+    deferred_call: dict[str, Any] = defer_mock.call_args.kwargs
+    assert deferred_call["project_canonical_id"] == "daoip-5:scf:project:python_stellar_sdk"
+
+
+async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> None:
+    projects = [
+        ScfProject(
+            canonical_id="daoip-5:scf:project:python_stellar_sdk",
+            display_name="Python SDK",
+            activity_status=ActivityStatus.live,
+            git_owner_url="https://github.com/stellar",
+            git_repo_url="https://github.com/stellar/python-stellar-sdk",
+            category="Developer Tooling",
+        )
+    ]
+
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
+    mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
+    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+
+    with pytest.raises(ValueError, match="not found") as exc_info:
+        await sync_opengrants(
+            canonical_ids=[
+                "daoip-5:scf:project:python_stellar_sdk",
+                "daoip-5:scf:project:missing_one",
+                "daoip-5:scf:project:missing_two",
+            ]
+        )
+
+    assert "daoip-5:scf:project:missing_one" in str(exc_info.value)
+    assert "daoip-5:scf:project:missing_two" in str(exc_info.value)
+    defer_mock.assert_not_awaited()
+
+
 async def test_process_gitlog_batch_calls_runtime(mocker: Any) -> None:
     runtime_mock = mocker.patch("pg_atlas.procrastinate.tasks.process_gitlog_repo_batch", new=mocker.AsyncMock())
 
