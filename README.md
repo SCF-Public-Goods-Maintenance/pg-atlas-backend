@@ -1,6 +1,13 @@
 # PG Atlas Backend
 
-Backend for [PG Atlas](https://scf-public-goods-maintenance.github.io/pg-atlas) — the metrics
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/SCF-Public-Goods-Maintenance/pg-atlas-backend)
+[![GitHub contributors](https://img.shields.io/github/contributors/SCF-Public-Goods-Maintenance/pg-atlas-backend?logo=github)](https://www.pgatlas.xyz/repos/pkg%3Agithub%2FSCF-Public-Goods-Maintenance%2Fpg-atlas-backend)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/SCF-Public-Goods-Maintenance/pg-atlas-backend/ci.yml?branch=main&logo=github&logoColor=lightsalmon&label=CI)](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/actions/workflows/ci.yml)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/SCF-Public-Goods-Maintenance/pg-atlas-backend/bootstrap.yml?branch=main&logo=github&logoColor=deeppink&label=bootstrap)](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/actions/workflows/bootstrap.yml)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/SCF-Public-Goods-Maintenance/pg-atlas-backend/gitlog-queue.yml?branch=main&logo=github&logoColor=aqua&label=gitlog)](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/actions/workflows/gitlog-queue.yml)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/SCF-Public-Goods-Maintenance/pg-atlas-backend/sbom-queue.yml?branch=main&logo=github&logoColor=darkorchid&label=SBOM)](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/actions/workflows/sbom-queue.yml)
+
+Backend for [PG Atlas](https://www.pgatlas.xyz) — the metrics
 backbone for the SCF Public Goods dependency graph. Provides the ingestion pipeline, storage layer,
 metric computation engine, and REST API.
 
