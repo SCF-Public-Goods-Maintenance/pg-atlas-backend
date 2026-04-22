@@ -85,7 +85,7 @@ DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "R
 # ---------------------------------------------------------------------------
 
 #: Path to the manually-curated project → git URL mapping.
-_MAPPING_PATH = Path(__file__).parent / "project-git-mapping.yml"
+_MAPPING_PATH = Path(__file__).parent.parent / "data" / "project-git-mapping.yml"
 
 _MAX_RELEASE_ENTRIES = 555
 
@@ -205,8 +205,8 @@ async def sync_opengrants(extended_universe: bool = False) -> None:
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 
     for proj in projects:
-        # Enrich from manual mapping when org.stellar.communityfund.code was missing.
-        if proj.git_owner_url is None and proj.canonical_id in git_mapping:
+        # Enrich from manual mapping when an override is present.
+        if proj.canonical_id in git_mapping:
             mapping = git_mapping[proj.canonical_id]
             proj.git_owner_url = mapping.get("git_owner_url")
             proj.git_repo_url = mapping.get("git_repo_url")

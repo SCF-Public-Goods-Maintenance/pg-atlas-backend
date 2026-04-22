@@ -1,7 +1,9 @@
 # project-git-mapping.yml
 #
 # Manually curated mapping of OpenGrants projectId → GitHub URLs.
-# Used by sync_opengrants to enrich projects where org.stellar.communityfund.code is missing.
+# Used by sync_opengrants to enrich projects where org.stellar.communityfund.code is missing,
+# or when an outdated repo url is present and needs to be overridden with a new repo,
+# or with a full owner repo list.
 #
 # Structure:
 #   <projectId>:
@@ -19,6 +21,10 @@
 daoip-5:scf:project:python_stellar_sdk:
   git_owner_url: "https://github.com/StellarCN"
   repo_name: "py-stellar-base"
+
+daoip-5:scf:project:stellarchain.io:
+  git_owner_url: "https://github.com/stellarchain"
+  repo_name:
 
 # --- Placeholder entries (need manual review) ---
 # Add DAOIP-5 project ID keys below as they are discovered during testing.
