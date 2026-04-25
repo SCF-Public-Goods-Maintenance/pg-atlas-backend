@@ -20,7 +20,7 @@ from pg_atlas.crawlers.cargo import CargoCrawler
 from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
-from pg_atlas.crawlers.pypi import PypiCrawler
+from pg_atlas.crawlers.pypi import PyPICrawler
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def build_registry_crawler(
                 max_retries=max_retries,
             )
         case "PYPI":
-            return PypiCrawler(
+            return PyPICrawler(
                 client=client,
                 session_factory=session_factory,
                 rate_limit=rate_limit,

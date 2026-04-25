@@ -1,7 +1,8 @@
 """
 Tests for the PyPI registry crawler.
 
-Unit tests use mocked HTTP responses and monkeypatched PyPIStats calls.
+Unit tests mock HTTP responses by stubbing ``httpx.AsyncClient.get`` for both
+the PyPI JSON API and the PyPIStats endpoint.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -13,8 +14,9 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
+from pytest import MonkeyPatch
 
-from pg_atlas.crawlers.pypi import PypiCrawler
+from pg_atlas.crawlers.pypi import PyPICrawler
 
 
 def _response(
@@ -31,11 +33,11 @@ def _response(
     )
 
 
-def _make_crawler(client: AsyncMock) -> PypiCrawler:
+def _make_crawler(client: AsyncMock) -> PyPICrawler:
     """Create a PyPI crawler backed by mocked HTTP and DB clients."""
 
     session_factory = AsyncMock()
-    return PypiCrawler(
+    return PyPICrawler(
         client=client,
         session_factory=session_factory,
         rate_limit=0.0,
@@ -87,6 +89,7 @@ async def test_fetch_package_parses_metadata_dependencies_and_downloads(
 async def test_fetch_package_handles_stats_failure(
     mock_http_client: AsyncMock,
     pypi_package_data: dict[str, Any],
+    monkeypatch: MonkeyPatch,
 ) -> None:
     """A PyPIStats failure leaves the package crawl usable with metadata-only fields."""
 
@@ -98,6 +101,12 @@ async def test_fetch_package_handles_stats_failure(
             httpx.TimeoutException("boom"),
         ]
     )
+
+    # patch asyncio.sleep to be a no-op
+    async def no_sleep(wait: float): ...
+
+    monkeypatch.setattr("pg_atlas.crawlers.base.asyncio.sleep", no_sleep)
+
     crawler = _make_crawler(mock_http_client)
     pkg = await crawler.fetch_package("requests")
 

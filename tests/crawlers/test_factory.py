@@ -14,7 +14,7 @@ import pytest
 from pg_atlas.crawlers.cargo import CargoCrawler
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.crawlers.npm import NpmCrawler
-from pg_atlas.crawlers.pypi import PypiCrawler
+from pg_atlas.crawlers.pypi import PyPICrawler
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ def test_normalize_registry_system_supports_new_aliases(alias: str, canonical: s
     [
         ("NPM", NpmCrawler),
         ("CARGO", CargoCrawler),
-        ("PYPI", PypiCrawler),
+        ("PYPI", PyPICrawler),
     ],
 )
 def test_build_registry_crawler_supports_new_systems(system: str, crawler_type: type[object]) -> None:

@@ -26,6 +26,7 @@ import msgspec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pg_atlas.api_metadata import VERSION
 from pg_atlas.db_models.release import Release, merge_releases
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.db_models.vertex_ops import upsert_external_repo
@@ -34,6 +35,7 @@ from pg_atlas.procrastinate.upserts import find_repo_by_release_purl, upsert_dep
 
 logger = logging.getLogger(__name__)
 
+USER_AGENT = f"pg-atlas-crawler/{VERSION}"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -91,6 +93,9 @@ class SourceRepoNotFound(Exception): ...
 
 
 class AllPackagesFailed(Exception): ...
+
+
+class ExhaustedRetries(Exception): ...
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +199,7 @@ class RegistryCrawler(ABC):
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError(f"Exhausted retries for {url}")
+        raise ExhaustedRetries(f"Exhausted retries for {url}")
 
     async def crawl_and_persist(
         self,

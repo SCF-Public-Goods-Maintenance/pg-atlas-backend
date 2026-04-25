@@ -21,11 +21,12 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pg_atlas.crawlers.base import USER_AGENT
 from pg_atlas.crawlers.cargo import CargoCrawler
 from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
-from pg_atlas.crawlers.pypi import PypiCrawler
+from pg_atlas.crawlers.pypi import PyPICrawler
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("PG_ATLAS_TEST_LIVE_APIS"),
@@ -39,7 +40,7 @@ async def live_client() -> AsyncGenerator[httpx.AsyncClient, None]:
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(30.0, connect=10.0),
         follow_redirects=True,
-        headers={"User-Agent": "pg-atlas-crawler-test/0.1"},
+        headers={"User-Agent": USER_AGENT},
     ) as client:
         yield client
 
@@ -159,7 +160,7 @@ async def test_cargo_live_fetch(live_client: httpx.AsyncClient) -> None:
 async def test_pypi_live_fetch(live_client: httpx.AsyncClient) -> None:
     """Fetch requests from live PyPI and PyPIStats and validate the parsed structure."""
 
-    crawler = PypiCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
+    crawler = PyPICrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("requests")
 
     assert pkg.canonical_id == "pkg:pypi/requests"

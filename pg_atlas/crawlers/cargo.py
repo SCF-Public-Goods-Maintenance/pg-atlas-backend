@@ -18,7 +18,14 @@ from typing import Any
 
 import httpx
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+    as_str_key_dict,
+)
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 
 logger = logging.getLogger(__name__)
@@ -81,7 +88,7 @@ class CargoCrawler(RegistryCrawler):
                 resp = await self._request_with_rate_limit(
                     f"{self.BASE_URL}/{package_name}/reverse_dependencies?page={page}&per_page={self.DEPENDENTS_PER_PAGE}"
                 )
-            except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+            except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
                 logger.warning(f"Failed to fetch crates.io dependents for {package_name}: {exc}")
 
                 return list(dependents_by_canonical_id.values())

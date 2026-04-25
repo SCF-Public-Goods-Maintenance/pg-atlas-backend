@@ -20,7 +20,14 @@ import httpx
 import msgspec
 from pydantic import TypeAdapter, ValidationError
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+    as_str_key_dict,
+)
 from pg_atlas.db_models.release import Release
 
 logger = logging.getLogger(__name__)
@@ -70,7 +77,7 @@ class PubDevCrawler(RegistryCrawler):
         try:
             metrics_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/metrics")
             metrics_data = metrics_resp.json()
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch metrics for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, metrics_data)

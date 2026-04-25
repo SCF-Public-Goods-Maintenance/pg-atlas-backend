@@ -260,9 +260,9 @@ These conventions emerged during A10 adoption-signal wiring and apply to future 
 
 ### Registry-specific A10 conventions
 
-- NPM and PyPI intentionally leave reverse dependents empty for now; keep the explicit TODO in the
+- NPM and PyPI intentionally leave dependents empty for now; keep the explicit TODO in the
   crawler implementation until a practical first-party API exists.
-- Cargo reverse dependents paginate with the same 50-page / 500-item ceiling used for Packagist
+- Cargo dependents paginate with the same 50-page / 500-item ceiling used for Packagist
   validation runs.
 - PyPI download totals come from the PyPIStats `recent` endpoint with
   `period=month&mirrors=true`; the `pypistats` package is still the source of truth for endpoint

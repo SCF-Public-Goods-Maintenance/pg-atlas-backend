@@ -14,10 +14,18 @@ import logging
 import re
 from typing import Any
 
-import pypistats
+import httpx
+import pypistats  # pyright: ignore[reportMissingTypeStubs]
 from packaging.requirements import InvalidRequirement, Requirement
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+    as_str_key_dict,
+)
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 
 logger = logging.getLogger(__name__)
@@ -25,7 +33,7 @@ logger = logging.getLogger(__name__)
 _PYPI_NAME_NORMALIZER = re.compile(r"[-_.]+")
 
 
-class PypiCrawler(RegistryCrawler):
+class PyPICrawler(RegistryCrawler):
     """
     Crawler for the official PyPI JSON API plus PyPIStats.
 
@@ -58,16 +66,15 @@ class PypiCrawler(RegistryCrawler):
         """
         Fetch mirror-inclusive monthly download totals from PyPIStats.
 
-        The ``pypistats`` package exposes the API base URL and user-agent string,
-        but its ``recent()`` wrapper does not currently surface the ``mirrors``
-        query parameter. Use the underlying API endpoint directly so the crawler
-        can request the exact semantics required by A10.
+        The ``pypistats`` package does not expose download counts from mirrors.
+        We replicate its endpoint semantics here, and depend on the package only
+        to conveniently reference API changes and sync them to our custom implementation.
         """
 
         stats_url = f"{pypistats.BASE_URL}packages/{package_name}/recent?period=month&mirrors=true"
         try:
             stats_resp = await self._request_with_retry(stats_url)
-        except Exception as exc:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch PyPIStats downloads for {package_name}: {exc}")
 
             return None, {}

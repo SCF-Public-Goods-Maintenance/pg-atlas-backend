@@ -17,7 +17,14 @@ from urllib.parse import quote
 
 import httpx
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+    as_str_key_dict,
+)
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 
 logger = logging.getLogger(__name__)
@@ -49,7 +56,7 @@ class NpmCrawler(RegistryCrawler):
         try:
             downloads_resp = await self._request_with_retry(f"{self.DOWNLOADS_BASE_URL}/{escaped_name}")
             downloads = downloads_resp.json()
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch npm downloads for {package_name}: {exc}")
 
         return self._parse_package(metadata, downloads)
