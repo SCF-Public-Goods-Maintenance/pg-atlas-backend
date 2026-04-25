@@ -137,6 +137,9 @@ When you have validated that a deliverable has been completed, update `implement
 - **A8 complete**: SBOM post-validation processing now runs in a dedicated Procrastinate `sbom`
   queue, with parser and semantic-hash hot-path optimizations (`msgspec` +
   `JsonLikeDictParser`) and canonical unwrapped SPDX artifact storage for new submissions.
+- **A9 complete**: Criticality materialization (`pg_atlas/metrics/materialize_criticality.py`)
+  is triggered in bootstrap and sbom-queue, and Pony factor materialization
+  (`pg_atlas/metrics/materialize_pony.py`) is triggered in gitlog-queue.
 - **A10 complete**: Direct registry crawling now supports `NPM`, `CARGO`, and `PYPI` alongside
   `DART` and `COMPOSER`; bootstrap writes per-package download snapshots into
   `Repo.repo_metadata["adoption_downloads_by_purl"]` for later adoption materialization.

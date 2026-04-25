@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from typing import Any
 
 import httpx
+import msgspec
 
 from pg_atlas.crawlers.base import (
     CrawledDependency,
@@ -24,11 +26,102 @@ from pg_atlas.crawlers.base import (
     CrawledPackage,
     ExhaustedRetries,
     RegistryCrawler,
-    as_str_key_dict,
 )
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 
 logger = logging.getLogger(__name__)
+
+
+class _CargoCratePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    name: str = ""
+    repository: str | None = None
+    homepage: str | None = None
+    documentation: str | None = None
+    max_stable_version: str = ""
+    max_version: str = ""
+    recent_downloads: int | float | None = None
+
+
+class _CargoVersionPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    num: str = ""
+    created_at: str = ""
+
+
+class _CargoMetadataPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    crate: _CargoCratePayload = msgspec.field(default_factory=_CargoCratePayload)
+    versions: list[_CargoVersionPayload] = msgspec.field(default_factory=list[_CargoVersionPayload])
+
+
+class _CargoDependencyPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    crate_id: str = ""
+    req: str | None = None
+    kind: str = ""
+
+
+class _CargoDependencyListPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    dependencies: list[_CargoDependencyPayload] = msgspec.field(default_factory=list[_CargoDependencyPayload])
+
+
+class _CargoReverseDependencyPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    version_id: int | None = None
+    kind: str = ""
+
+
+class _CargoReverseVersionPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    id: int | None = None
+    crate: str = ""
+
+
+class _CargoReverseMetaPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    total: int = 0
+
+
+class _CargoReverseDependenciesPagePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    dependencies: list[_CargoReverseDependencyPayload] = msgspec.field(default_factory=list[_CargoReverseDependencyPayload])
+    versions: list[_CargoReverseVersionPayload] = msgspec.field(default_factory=list[_CargoReverseVersionPayload])
+    meta: _CargoReverseMetaPayload = msgspec.field(default_factory=_CargoReverseMetaPayload)
+
+
+def _decode_cargo_metadata_payload(content: bytes, package_name: str) -> _CargoMetadataPayload:
+    try:
+        return msgspec.json.decode(content, type=_CargoMetadataPayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode crates.io metadata payload for {package_name}: {exc}")
+
+        return _CargoMetadataPayload()
+
+
+def _decode_cargo_dependency_payload(content: bytes, package_name: str) -> _CargoDependencyListPayload:
+    try:
+        return msgspec.json.decode(content, type=_CargoDependencyListPayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode crates.io dependency payload for {package_name}: {exc}")
+
+        return _CargoDependencyListPayload()
+
+
+def _decode_cargo_reverse_dependencies_page(content: bytes, package_name: str) -> _CargoReverseDependenciesPagePayload:
+    try:
+        return msgspec.json.decode(content, type=_CargoReverseDependenciesPagePayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode crates.io reverse dependencies payload for {package_name}: {exc}")
+
+        return _CargoReverseDependenciesPagePayload()
+
+
+def _normalize_download_count(value: int | float | None, field_name: str, package_name: str) -> int | None:
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    if math.isfinite(value):
+        return int(value)
+
+    logger.warning(f"Ignoring non-numeric {field_name} value for {package_name}: {value}")
+
+    return None
 
 
 class CargoCrawler(RegistryCrawler):
@@ -65,16 +158,15 @@ class CargoCrawler(RegistryCrawler):
         """Fetch crate metadata plus dependency information for the newest version."""
 
         metadata_resp = await self._request_with_rate_limit(f"{self.BASE_URL}/{package_name}")
-        metadata: dict[str, Any] = metadata_resp.json()
+        metadata = _decode_cargo_metadata_payload(metadata_resp.content, package_name)
 
-        crate = as_str_key_dict(metadata.get("crate"))
-        selected_version = _selected_cargo_version(crate)
-        dependency_payload: dict[str, Any] = {}
+        selected_version = _selected_cargo_version(metadata.crate)
+        dependency_payload = _CargoDependencyListPayload()
         if selected_version:
             dependency_resp = await self._request_with_rate_limit(
                 f"{self.BASE_URL}/{package_name}/{selected_version}/dependencies"
             )
-            dependency_payload = dependency_resp.json()
+            dependency_payload = _decode_cargo_dependency_payload(dependency_resp.content, package_name)
 
         return self._parse_package(metadata, dependency_payload)
 
@@ -93,23 +185,19 @@ class CargoCrawler(RegistryCrawler):
 
                 return list(dependents_by_canonical_id.values())
 
-            payload: dict[str, Any] = resp.json()
+            payload = _decode_cargo_reverse_dependencies_page(resp.content, package_name)
             version_crates = _dependent_version_crates(payload)
-            dependencies_obj = payload.get("dependencies")
-            dependencies: list[object] = dependencies_obj if isinstance(dependencies_obj, list) else []
 
-            for dependency_obj in dependencies:
-                dependency = as_str_key_dict(dependency_obj)
-                kind_obj = dependency.get("kind")
-                kind = kind_obj if isinstance(kind_obj, str) else ""
+            for dependency in payload.dependencies:
+                kind = dependency.kind
                 if kind and kind != "normal":
                     continue
 
-                version_id_obj = dependency.get("version_id")
-                if not isinstance(version_id_obj, int):
+                version_id = dependency.version_id
+                if version_id is None:
                     continue
 
-                dependent_name = version_crates.get(version_id_obj)
+                dependent_name = version_crates.get(version_id)
                 if not dependent_name or dependent_name == package_name:
                     continue
 
@@ -127,9 +215,7 @@ class CargoCrawler(RegistryCrawler):
 
                     return list(dependents_by_canonical_id.values())
 
-            meta = as_str_key_dict(payload.get("meta"))
-            total_obj = meta.get("total")
-            total = total_obj if isinstance(total_obj, int) else 0
+            total = payload.meta.total
             if page * self.DEPENDENTS_PER_PAGE >= total:
                 break
 
@@ -149,61 +235,49 @@ class CargoCrawler(RegistryCrawler):
 
     def _parse_package(
         self,
-        metadata: dict[str, Any],
-        dependency_payload: dict[str, Any],
+        metadata: _CargoMetadataPayload,
+        dependency_payload: _CargoDependencyListPayload,
     ) -> CrawledPackage:
         """Parse crates.io metadata into the shared crawler contract."""
 
-        crate = as_str_key_dict(metadata.get("crate"))
-        name_obj = crate.get("name")
-        name = name_obj if isinstance(name_obj, str) else ""
+        crate = metadata.crate
+        name = crate.name
         package_purl = f"pkg:cargo/{name}"
 
         releases: list[Release] = []
-        versions_obj = metadata.get("versions")
-        versions: list[object] = versions_obj if isinstance(versions_obj, list) else []
-        for version_obj in versions:
-            version = as_str_key_dict(version_obj)
-            release_version_obj = version.get("num")
-            if not isinstance(release_version_obj, str) or not release_version_obj:
+        for version in metadata.versions:
+            release_version = version.num
+            if not release_version:
                 continue
 
-            created_at_obj = version.get("created_at")
-            release_date = created_at_obj if isinstance(created_at_obj, str) else ""
-            releases.append(Release(purl=package_purl, version=release_version_obj, release_date=release_date))
+            releases.append(Release(purl=package_purl, version=release_version, release_date=version.created_at))
 
         releases = sorted_releases_desc(releases)
         latest_version = preferred_latest_version(releases) or _selected_cargo_version(crate)
 
         dependencies: list[CrawledDependency] = []
-        dependencies_obj = dependency_payload.get("dependencies")
-        dependency_rows: list[object] = dependencies_obj if isinstance(dependencies_obj, list) else []
-        for dependency_obj in dependency_rows:
-            dependency = as_str_key_dict(dependency_obj)
-            kind_obj = dependency.get("kind")
-            kind = kind_obj if isinstance(kind_obj, str) else ""
+        for dependency in dependency_payload.dependencies:
+            kind = dependency.kind
             if kind and kind != "normal":
                 continue
 
-            dependency_name_obj = dependency.get("crate_id")
-            if not isinstance(dependency_name_obj, str) or not dependency_name_obj:
+            dependency_name = dependency.crate_id
+            if not dependency_name:
                 continue
 
-            requirement_obj = dependency.get("req")
-            version_range = requirement_obj if isinstance(requirement_obj, str) else None
             dependencies.append(
                 CrawledDependency(
-                    canonical_id=f"pkg:cargo/{dependency_name_obj}",
-                    display_name=dependency_name_obj,
-                    version_range=version_range,
+                    canonical_id=f"pkg:cargo/{dependency_name}",
+                    display_name=dependency_name,
+                    version_range=dependency.req,
                 )
             )
 
         downloads_30d = _downloads_30d(crate)
         package_metadata: dict[str, Any] = {}
-        recent_downloads_obj = crate.get("recent_downloads")
-        if isinstance(recent_downloads_obj, int):
-            package_metadata["recent_downloads_90d"] = recent_downloads_obj
+        recent_downloads_90d = _normalize_download_count(crate.recent_downloads, "recent_downloads", name)
+        if recent_downloads_90d is not None:
+            package_metadata["recent_downloads_90d"] = recent_downloads_90d
 
         if downloads_30d is not None:
             package_metadata["download_count_30d"] = downloads_30d
@@ -221,52 +295,47 @@ class CargoCrawler(RegistryCrawler):
         )
 
 
-def _selected_cargo_version(crate: dict[str, Any]) -> str:
+def _selected_cargo_version(crate: _CargoCratePayload) -> str:
     """Select the version to query for dependency metadata."""
 
-    stable_version_obj = crate.get("max_stable_version")
-    if isinstance(stable_version_obj, str) and stable_version_obj:
-        return stable_version_obj
+    if crate.max_stable_version:
+        return crate.max_stable_version
 
-    max_version_obj = crate.get("max_version")
-    if isinstance(max_version_obj, str):
-        return max_version_obj
+    if crate.max_version:
+        return crate.max_version
 
     return ""
 
 
-def _downloads_30d(crate: dict[str, Any]) -> int | None:
+def _downloads_30d(crate: _CargoCratePayload) -> int | None:
     """Convert crates.io recent downloads (90 days) into the issue-defined 30-day approximation."""
 
-    recent_downloads_obj = crate.get("recent_downloads")
-    if not isinstance(recent_downloads_obj, int):
+    recent_downloads = _normalize_download_count(crate.recent_downloads, "recent_downloads", crate.name)
+    if recent_downloads is None:
         return None
 
-    return recent_downloads_obj // 3
+    return recent_downloads // 3
 
 
-def _cargo_repo_url(crate: dict[str, Any]) -> str | None:
+def _cargo_repo_url(crate: _CargoCratePayload) -> str | None:
     """Extract the most repository-like URL from crates.io metadata."""
 
-    for key in ("repository", "homepage", "documentation"):
-        value = crate.get(key)
-        if isinstance(value, str) and value:
+    for value in (crate.repository, crate.homepage, crate.documentation):
+        if value:
             return value
 
     return None
 
 
-def _dependent_version_crates(payload: dict[str, Any]) -> dict[int, str]:
+def _dependent_version_crates(payload: _CargoReverseDependenciesPagePayload) -> dict[int, str]:
     """Build a lookup from version ID to dependent crate name."""
 
-    versions_obj = payload.get("versions")
-    versions: list[object] = versions_obj if isinstance(versions_obj, list) else []
     version_crates: dict[int, str] = {}
-    for version_obj in versions:
-        version = as_str_key_dict(version_obj)
-        version_id_obj = version.get("id")
-        crate_name_obj = version.get("crate")
-        if isinstance(version_id_obj, int) and isinstance(crate_name_obj, str) and crate_name_obj:
-            version_crates[version_id_obj] = crate_name_obj
+    for version in payload.versions:
+        version_id = version.id
+        if version_id is None or not version.crate:
+            continue
+
+        version_crates[version_id] = version.crate
 
     return version_crates

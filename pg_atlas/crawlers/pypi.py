@@ -11,10 +11,12 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any
 
 import httpx
+import msgspec
 import pypistats  # pyright: ignore[reportMissingTypeStubs]
 from packaging.requirements import InvalidRequirement, Requirement
 
@@ -24,13 +26,72 @@ from pg_atlas.crawlers.base import (
     CrawledPackage,
     ExhaustedRetries,
     RegistryCrawler,
-    as_str_key_dict,
 )
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 
 logger = logging.getLogger(__name__)
 
 _PYPI_NAME_NORMALIZER = re.compile(r"[-_.]+")
+
+
+class _PyPIInfoPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    name: str = ""
+    version: str = ""
+    requires_dist: list[str] = msgspec.field(default_factory=list[str])
+    project_urls: dict[str, str] = msgspec.field(default_factory=dict[str, str])
+    home_page: str | None = None
+
+
+class _PyPIReleaseFilePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    upload_time_iso_8601: str | None = None
+
+
+class _PyPIPackagePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    info: _PyPIInfoPayload = msgspec.field(default_factory=_PyPIInfoPayload)
+    releases: dict[str, list[_PyPIReleaseFilePayload]] = msgspec.field(
+        default_factory=dict[str, list[_PyPIReleaseFilePayload]]
+    )
+
+
+class _PyPIStatsRecentDataPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    last_month: int | float | None = None
+
+
+class _PyPIStatsRecentPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    data: _PyPIStatsRecentDataPayload = msgspec.field(default_factory=_PyPIStatsRecentDataPayload)
+
+
+def _decode_pypi_package_payload(content: bytes, package_name: str) -> _PyPIPackagePayload:
+    try:
+        return msgspec.json.decode(content, type=_PyPIPackagePayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode PyPI package payload for {package_name}: {exc}")
+
+        return _PyPIPackagePayload()
+
+
+def _decode_pypi_stats_payload(content: bytes, package_name: str) -> _PyPIStatsRecentPayload:
+    try:
+        return msgspec.json.decode(content, type=_PyPIStatsRecentPayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode PyPIStats payload for {package_name}: {exc}")
+
+        return _PyPIStatsRecentPayload()
+
+
+def _normalize_download_count(value: int | float | None, package_name: str, field_name: str) -> int | None:
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    if math.isfinite(value):
+        return int(value)
+
+    logger.warning(f"Ignoring non-numeric {field_name} value for {package_name}: {value}")
+
+    return None
 
 
 class PyPICrawler(RegistryCrawler):
@@ -49,7 +110,7 @@ class PyPICrawler(RegistryCrawler):
         """Fetch project metadata from PyPI and download counts from PyPIStats."""
 
         metadata_resp = await self._request_with_retry(f"{self.BASE_URL}/{package_name}/json")
-        metadata: dict[str, Any] = metadata_resp.json()
+        metadata = _decode_pypi_package_payload(metadata_resp.content, package_name)
         downloads_30d, stats_metadata = await self._fetch_downloads_30d(package_name)
         return self._parse_package(metadata, downloads_30d, stats_metadata)
 
@@ -79,15 +140,14 @@ class PyPICrawler(RegistryCrawler):
 
             return None, {}
 
-        stats_payload: dict[str, Any] = stats_resp.json()
-        stats_data = as_str_key_dict(stats_payload.get("data"))
-        downloads_30d_obj = stats_data.get("last_month")
-        if not isinstance(downloads_30d_obj, int):
-            logger.warning(f"Unexpected PyPIStats recent payload for {package_name}: {stats_payload!r}")
+        stats_payload = _decode_pypi_stats_payload(stats_resp.content, package_name)
+        downloads_30d = _normalize_download_count(stats_payload.data.last_month, package_name, "last_month")
+        if downloads_30d is None:
+            logger.warning(f"Unexpected PyPIStats recent payload for {package_name}")
 
             return None, {}
 
-        return downloads_30d_obj, {
+        return downloads_30d, {
             "download_source": "pypistats",
             "download_period": "month",
             "download_mirror_policy": "with_mirrors",
@@ -95,24 +155,18 @@ class PyPICrawler(RegistryCrawler):
 
     def _parse_package(
         self,
-        metadata: dict[str, Any],
+        metadata: _PyPIPackagePayload,
         downloads_30d: int | None,
         stats_metadata: dict[str, Any],
     ) -> CrawledPackage:
         """Parse PyPI JSON and PyPIStats payloads into the shared crawler contract."""
 
-        info = as_str_key_dict(metadata.get("info"))
-        name_obj = info.get("name")
-        name = name_obj if isinstance(name_obj, str) else ""
+        info = metadata.info
+        name = info.name
         package_purl = f"pkg:pypi/{_normalize_pypi_name(name)}"
 
         dependencies: list[CrawledDependency] = []
-        requires_dist_obj = info.get("requires_dist")
-        requires_dist: list[object] = requires_dist_obj if isinstance(requires_dist_obj, list) else []
-        for requirement_obj in requires_dist:
-            if not isinstance(requirement_obj, str):
-                continue
-
+        for requirement_obj in info.requires_dist:
             try:
                 requirement = Requirement(requirement_obj)
             except InvalidRequirement:
@@ -133,22 +187,15 @@ class PyPICrawler(RegistryCrawler):
             )
 
         releases: list[Release] = []
-        releases_obj = metadata.get("releases")
-        release_map = as_str_key_dict(releases_obj)
-        for version, files_obj in release_map.items():
-            file_entries: list[object] = files_obj if isinstance(files_obj, list) else []
-            upload_times = [
-                file_entry["upload_time_iso_8601"]
-                for file_entry in file_entries
-                if isinstance(file_entry, dict) and isinstance(file_entry.get("upload_time_iso_8601"), str)
+        for version, file_entries in metadata.releases.items():
+            upload_times: list[str] = [
+                upload_time for file_entry in file_entries if (upload_time := file_entry.upload_time_iso_8601) is not None
             ]
             release_date = min(upload_times) if upload_times else ""
             releases.append(Release(purl=package_purl, version=version, release_date=release_date))
 
         releases = sorted_releases_desc(releases)
-        info_version_obj = info.get("version")
-        info_version = info_version_obj if isinstance(info_version_obj, str) else ""
-        latest_version = preferred_latest_version(releases) or info_version
+        latest_version = preferred_latest_version(releases) or info.version
 
         package_metadata = dict(stats_metadata)
         if downloads_30d is not None:
@@ -173,25 +220,24 @@ def _normalize_pypi_name(package_name: str) -> str:
     return _PYPI_NAME_NORMALIZER.sub("-", package_name).lower()
 
 
-def _extract_repo_url(info: dict[str, Any]) -> str | None:
+def _extract_repo_url(info: _PyPIInfoPayload) -> str | None:
     """Extract the most repository-like URL from PyPI project metadata."""
 
-    project_urls = as_str_key_dict(info.get("project_urls"))
+    project_urls = info.project_urls
     for key in ("Repository", "Source", "Source Code", "Homepage", "Home"):
         value = project_urls.get(key)
-        if isinstance(value, str) and value:
+        if value:
             return _normalize_repo_url(value)
 
     first_project_url = next(
-        (value for value in project_urls.values() if isinstance(value, str) and value),
+        (value for value in project_urls.values() if value),
         None,
     )
     if first_project_url:
         return _normalize_repo_url(first_project_url)
 
-    home_page_obj = info.get("home_page")
-    if isinstance(home_page_obj, str) and home_page_obj:
-        return _normalize_repo_url(home_page_obj)
+    if info.home_page:
+        return _normalize_repo_url(info.home_page)
 
     return None
 

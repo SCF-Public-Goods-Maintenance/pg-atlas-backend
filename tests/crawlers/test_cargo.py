@@ -110,3 +110,55 @@ async def test_fetch_dependents_paginates_and_filters_non_runtime_edges(
         "pkg:cargo/podcast",
         "pkg:cargo/versions-extra",
     ]
+
+
+async def test_fetch_package_handles_malformed_metadata_payload(
+    mock_http_client: AsyncMock,
+    caplog: Any,
+) -> None:
+    """Malformed metadata payload logs a warning and still returns a crawled package."""
+
+    malformed_metadata: dict[str, Any] = {
+        "crate": {
+            "name": ["serde"],
+            "recent_downloads": "bad-value",
+        },
+        "versions": "not-a-list",
+    }
+    mock_http_client.get = AsyncMock(side_effect=[_response(malformed_metadata)])
+    crawler = _make_crawler(mock_http_client)
+
+    with caplog.at_level("WARNING"):
+        pkg = await crawler.fetch_package("serde")
+
+    assert "Failed to decode crates.io metadata payload" in caplog.text
+    assert pkg.canonical_id == "pkg:cargo/"
+    assert pkg.dependencies == []
+    assert pkg.releases == []
+    assert pkg.downloads_30d is None
+
+
+async def test_fetch_dependents_handles_malformed_page_payload(
+    mock_http_client: AsyncMock,
+    caplog: Any,
+) -> None:
+    """Malformed reverse-dependency pages log warnings and return partial dependents."""
+
+    page_one: dict[str, Any] = {
+        "dependencies": [{"version_id": 1, "kind": "normal"}],
+        "versions": [{"id": 1, "crate": "dep-ok"}],
+        "meta": {"total": 20},
+    }
+    malformed_page_two: dict[str, Any] = {
+        "dependencies": "not-a-list",
+        "versions": [],
+        "meta": {"total": "unknown"},
+    }
+    mock_http_client.get = AsyncMock(side_effect=[_response(page_one), _response(malformed_page_two)])
+    crawler = _make_crawler(mock_http_client)
+
+    with caplog.at_level("WARNING"):
+        dependents = await crawler.fetch_dependents("serde")
+
+    assert "Failed to decode crates.io reverse dependencies payload" in caplog.text
+    assert [dependent.canonical_id for dependent in dependents] == ["pkg:cargo/dep-ok"]

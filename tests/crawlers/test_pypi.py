@@ -123,3 +123,71 @@ async def test_fetch_dependents_is_explicit_stub(mock_http_client: AsyncMock) ->
 
     assert dependents == []
     mock_http_client.get.assert_not_called()
+
+
+async def test_fetch_package_handles_malformed_pypi_payload(
+    mock_http_client: AsyncMock,
+    pypi_stats_recent_data: dict[str, Any],
+    caplog: Any,
+) -> None:
+    """Malformed PyPI package JSON logs warning and still returns a safe package payload."""
+
+    malformed_package_payload: dict[str, Any] = {
+        "info": {
+            "name": ["requests"],
+            "version": 123,
+            "requires_dist": "not-a-list",
+        },
+        "releases": "not-a-dict",
+    }
+    mock_http_client.get = AsyncMock(
+        side_effect=[
+            _response(malformed_package_payload, url="https://pypi.org/pypi/requests/json"),
+            _response(
+                pypi_stats_recent_data,
+                url="https://pypistats.org/api/packages/requests/recent?period=month&mirrors=true",
+            ),
+        ]
+    )
+    crawler = _make_crawler(mock_http_client)
+
+    with caplog.at_level("WARNING"):
+        pkg = await crawler.fetch_package("requests")
+
+    assert "Failed to decode PyPI package payload" in caplog.text
+    assert pkg.canonical_id == "pkg:pypi/"
+    assert pkg.dependencies == []
+    assert pkg.releases == []
+    assert pkg.downloads_30d == 350
+
+
+async def test_fetch_package_handles_malformed_pypistats_payload(
+    mock_http_client: AsyncMock,
+    pypi_package_data: dict[str, Any],
+    caplog: Any,
+) -> None:
+    """Malformed PyPIStats payload logs warning and proceeds without download counts."""
+
+    malformed_stats_payload: dict[str, Any] = {
+        "data": {
+            "last_month": "invalid",
+        }
+    }
+    mock_http_client.get = AsyncMock(
+        side_effect=[
+            _response(pypi_package_data, url="https://pypi.org/pypi/requests/json"),
+            _response(
+                malformed_stats_payload,
+                url="https://pypistats.org/api/packages/requests/recent?period=month&mirrors=true",
+            ),
+        ]
+    )
+    crawler = _make_crawler(mock_http_client)
+
+    with caplog.at_level("WARNING"):
+        pkg = await crawler.fetch_package("requests")
+
+    assert "Failed to decode PyPIStats payload" in caplog.text
+    assert pkg.canonical_id == "pkg:pypi/requests"
+    assert pkg.downloads_30d is None
+    assert "download_count_30d" not in pkg.metadata

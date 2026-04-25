@@ -269,6 +269,19 @@ These conventions emerged during A10 adoption-signal wiring and apply to future 
   semantics, but the crawler calls the endpoint through `_request_with_retry()` because the package
   wrapper does not expose the `mirrors` argument on `recent()`.
 
+### Msgspec payload decoding pattern
+
+- Registry crawler JSON responses are decoded immediately from response bytes using
+  `msgspec.json.decode(response.content, type=<TypedPayloadStruct>)`.
+- Each endpoint has a dedicated private typed payload model (`msgspec.Struct`) with
+  `forbid_unknown_fields=False` and defaults for optional fields.
+- Decoding is payload-level best effort: catch `msgspec.ValidationError`, log a warning, and
+  continue with a default payload object instead of raising.
+- Numeric normalization happens right after decode (for example `int | float | None` to `int | None`),
+  so downstream crawler logic consumes normalized ints and avoids ad-hoc coercion.
+- Runtime parsing code should read typed model attributes directly; avoid `dict[str, Any]`/
+  `list[object]` JSON walk patterns and avoid `typing.cast`.
+
 ### Monorepo adoption downloads map-reduce
 
 - Registry crawls now persist per-package download snapshots under
