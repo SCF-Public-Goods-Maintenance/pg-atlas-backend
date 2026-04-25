@@ -234,7 +234,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
 
     await process_project(
-        project_canonical_id="proj:1",
+        canonical_id="proj:1",
         display_name="Project 1",
         activity_status="live",
         git_owner_url="https://github.com/org",
@@ -414,7 +414,7 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
     crawl_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
 
     await process_project(
-        project_canonical_id="proj:edu",
+        canonical_id="proj:edu",
         display_name="Stellar Academy",
         activity_status="live",
         git_owner_url="https://github.com/stellar-academy",

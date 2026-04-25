@@ -246,7 +246,7 @@ async def sync_opengrants(
 
 @app.task(queue="opengrants")
 async def process_project(
-    project_canonical_id: str,
+    canonical_id: str,
     display_name: str,
     activity_status: str,
     git_owner_url: str | None,
@@ -270,14 +270,14 @@ async def process_project(
     Later in ``crawl_github_repo``, ``get_package`` is used to fetch default
     version and release metadata for these package identities.
     """
-    logger.info(f"process_project: {display_name} ({project_canonical_id})")
+    logger.info(f"process_project: {display_name} ({canonical_id})")
 
     status = ActivityStatus(activity_status)
 
     # ----- Education & Community: upsert project row only, skip crawling -----
     if category == "Education & Community":
         await upsert_project(
-            canonical_id=project_canonical_id,
+            canonical_id=canonical_id,
             display_name=display_name,
             project_type=ProjectType.scf_project,
             activity_status=status,
@@ -285,7 +285,7 @@ async def process_project(
             category=category,
             project_metadata=project_metadata,
         )
-        logger.info(f"process_project: skipping crawl for Education & Community project {project_canonical_id}")
+        logger.info(f"process_project: skipping crawl for Education & Community project {canonical_id}")
 
         return
 
@@ -324,7 +324,7 @@ async def process_project(
                         logger.warning(f"GetProjectPackageVersions failed for {project_key}: {exc}")
 
         except DepsDevError as exc:
-            logger.warning(f"GetProjectBatch failed for {project_canonical_id}: {exc}")
+            logger.warning(f"GetProjectBatch failed for {canonical_id}: {exc}")
 
     # ----- Determine project type -----
     has_packages = any(info.packages for info in depsdev_projects.values()) if depsdev_projects else False
@@ -332,7 +332,7 @@ async def process_project(
 
     # ----- Upsert Project row -----
     project_id = await upsert_project(
-        canonical_id=project_canonical_id,
+        canonical_id=canonical_id,
         display_name=display_name,
         project_type=project_type,
         activity_status=status,
@@ -344,7 +344,7 @@ async def process_project(
     # ----- Defer crawl_github_repo for each repo to crawl -----
     repo_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
     await crawl_github_repo.batch_defer_async(*repo_batch_data)
-    logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {project_canonical_id}")
+    logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {canonical_id}")
 
 
 # ---------------------------------------------------------------------------
