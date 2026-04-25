@@ -20,6 +20,7 @@ from pg_atlas.crawlers.base import (
     CrawledDependent,
     CrawledPackage,
     CrawlResult,
+    ExhaustedRetries,
     RegistryCrawler,
 )
 
@@ -153,7 +154,7 @@ async def test_request_with_retry_exhausted_429(mock_http_client: AsyncMock) -> 
     )
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=3)
 
-    with pytest.raises(RuntimeError, match="Exhausted retries"):
+    with pytest.raises(ExhaustedRetries, match="Exhausted retries"):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 3
 

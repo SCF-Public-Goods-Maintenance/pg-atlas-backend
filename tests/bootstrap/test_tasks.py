@@ -113,14 +113,17 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             }
         },
     )
-    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants()
 
-    assert defer_mock.call_count == 2
-    first_call: dict[str, Any] = defer_mock.call_args_list[0].kwargs
-    assert first_call["git_owner_url"] == "https://github.com/enriched"
-    assert first_call["category"] == "Developer Tooling"
+    defer_mock.assert_awaited_once()
+    defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
+    assert len(defer_data) == 2
+    assert defer_data[0]["git_owner_url"] == "https://github.com/enriched"
+    assert defer_data[0]["category"] == "Developer Tooling"
+    assert defer_data[1]["git_repo_url"] == "https://github.com/a/b"
+    assert defer_data[1]["category"] == "Smart Contracts"
 
 
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
@@ -145,13 +148,14 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
     mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
-    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants(canonical_ids=["daoip-5:scf:project:python_stellar_sdk"])
 
     defer_mock.assert_awaited_once()
-    deferred_call: dict[str, Any] = defer_mock.call_args.kwargs
-    assert deferred_call["project_canonical_id"] == "daoip-5:scf:project:python_stellar_sdk"
+    defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
+    assert len(defer_data) == 1
+    assert defer_data[0]["canonical_id"] == "daoip-5:scf:project:python_stellar_sdk"
 
 
 async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> None:
@@ -227,7 +231,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         ),
     )
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
-    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
 
     await process_project(
         project_canonical_id="proj:1",
@@ -240,8 +244,10 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     )
 
     assert upsert_project_mock.call_args.kwargs["project_type"] == ProjectType.public_good
-    call_kwargs: dict[str, Any] = crawl_defer_mock.call_args.kwargs
-    assert call_kwargs["packages"] == [
+    crawl_defer_mock.assert_awaited_once()
+    defer_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args_list[0].args
+    assert len(defer_data) == 1
+    assert defer_data[0]["packages"] == [
         {
             "system": "PYPI",
             "name": "stellar-sdk",

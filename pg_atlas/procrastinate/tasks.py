@@ -35,7 +35,7 @@ from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import select
 
 from pg_atlas.config import settings
-from pg_atlas.crawlers.base import AllPackagesFailed
+from pg_atlas.crawlers.base import USER_AGENT, AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
@@ -220,6 +220,7 @@ async def sync_opengrants(
 
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 
+    project_batch_data: list[dict[str, Any]] = []
     for proj in projects:
         # Enrich from manual mapping when an override is present.
         if proj.canonical_id in git_mapping:
@@ -227,18 +228,15 @@ async def sync_opengrants(
             proj.git_owner_url = mapping.get("git_owner_url")
             proj.git_repo_url = mapping.get("git_repo_url")
 
-        await process_project.defer_async(
-            project_canonical_id=proj.canonical_id,
-            display_name=proj.display_name,
-            activity_status=proj.activity_status.value,
-            git_owner_url=proj.git_owner_url,
-            git_repo_url=proj.git_repo_url,
-            category=proj.category,
-            project_metadata=proj.project_metadata,
-            extended_universe=extended_universe,
+        project_batch_data.append(
+            {
+                **asdict(proj),
+                "extended_universe": extended_universe,
+            }
         )
 
-    logger.info(f"sync_opengrants: deferred {len(projects)} process_project tasks")
+    await process_project.batch_defer_async(*project_batch_data)
+    logger.info(f"sync_opengrants: deferred {len(project_batch_data)} process_project tasks")
 
 
 # ---------------------------------------------------------------------------
@@ -344,38 +342,8 @@ async def process_project(
     )
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
-    for repo_info in repos_to_crawl:
-        repo_full = repo_info.full_name
-        depsdev_key = f"github.com/{repo_full}".lower()
-        depsdev_info = depsdev_projects.get(depsdev_key)
-
-        packages: list[ProjectPackage] = []
-        adoption_stars = repo_info.stars
-        adoption_forks = repo_info.forks
-        # normalize datetime to UTC before DB persistence
-        pushed_at_utc: dt.datetime | None = None
-        if repo_info.pushed_at:
-            pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
-
-        if depsdev_info:
-            packages = depsdev_info.packages
-            adoption_stars = max(adoption_stars, depsdev_info.stars_count)
-            adoption_forks = max(adoption_forks, depsdev_info.forks_count)
-
-        parts = repo_full.split("/", 1)
-        repo_owner = parts[0]
-        repo_name = parts[1] if len(parts) > 1 else repo_full
-
-        await crawl_github_repo.defer_async(
-            owner=repo_owner,
-            repo=repo_name,
-            project_id=project_id,
-            packages=[asdict(pkg) for pkg in packages],
-            pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
-            adoption_stars=adoption_stars,
-            adoption_forks=adoption_forks,
-        )
-
+    repo_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
+    await crawl_github_repo.batch_defer_async(*repo_batch_data)
     logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {project_canonical_id}")
 
 
@@ -581,7 +549,7 @@ async def crawl_package_registry(
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
         follow_redirects=True,
-        headers={"User-Agent": "pg-atlas-crawler/0.1"},
+        headers={"User-Agent": USER_AGENT},
     ) as client:
         crawler = build_registry_crawler(
             normalized_system,
@@ -833,3 +801,43 @@ def _load_git_mapping() -> dict[str, dict[str, str]]:
         data: dict[str, dict[str, str]] = yaml.safe_load(f) or {}
 
     return data
+
+
+# ---------------------------------------------------------------------------
+# Batch defer helpers
+# ---------------------------------------------------------------------------
+
+
+def build_repo_defer_data(
+    repo_info: GitHubRepoMetadata, project_id: int, projects_info: dict[str, DepsDevProjectInfo]
+) -> dict[str, Any]:
+    repo_full = repo_info.full_name
+    depsdev_key = f"github.com/{repo_full}".lower()
+    depsdev_info = projects_info.get(depsdev_key)
+
+    packages: list[ProjectPackage] = []
+    adoption_stars = repo_info.stars
+    adoption_forks = repo_info.forks
+    # normalize datetime to UTC before DB persistence
+    pushed_at_utc: dt.datetime | None = None
+    if repo_info.pushed_at:
+        pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
+
+    if depsdev_info:
+        packages = depsdev_info.packages
+        adoption_stars = max(adoption_stars, depsdev_info.stars_count)
+        adoption_forks = max(adoption_forks, depsdev_info.forks_count)
+
+    parts = repo_full.split("/", 1)
+    repo_owner = parts[0]
+    repo_name = parts[1] if len(parts) > 1 else repo_full
+
+    return dict(
+        owner=repo_owner,
+        repo=repo_name,
+        project_id=project_id,
+        packages=[asdict(pkg) for pkg in packages],
+        pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
+        adoption_stars=adoption_stars,
+        adoption_forks=adoption_forks,
+    )
