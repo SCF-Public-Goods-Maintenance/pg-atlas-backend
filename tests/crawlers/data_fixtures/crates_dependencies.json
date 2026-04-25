@@ -1,0 +1,22 @@
+{
+  "dependencies": [
+    {
+      "crate_id": "serde_core",
+      "req": "=1.0.228",
+      "kind": "normal",
+      "optional": false
+    },
+    {
+      "crate_id": "serde_derive",
+      "req": "^1",
+      "kind": "normal",
+      "optional": true
+    },
+    {
+      "crate_id": "tempfile",
+      "req": "^3",
+      "kind": "dev",
+      "optional": false
+    }
+  ]
+}

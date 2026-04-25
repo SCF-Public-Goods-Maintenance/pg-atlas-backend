@@ -314,3 +314,55 @@ async def test_fetch_dependents_stops_paginating_at_limit(
     # All 600 from the single page are returned, but the "next" page is not fetched
     assert len(dependents) == 600
     assert mock_http_client.get.call_count == 1
+
+
+async def test_fetch_package_handles_malformed_package_payload(
+    mock_http_client: AsyncMock,
+    pubdev_metrics_data: dict[str, Any],
+    caplog: Any,
+) -> None:
+    """Malformed package payload logs warning and still returns a safe package result."""
+
+    malformed_package_data: dict[str, Any] = {
+        "name": ["stellar_flutter_sdk"],
+        "latest": "invalid",
+        "versions": "invalid",
+    }
+    mock_http_client.get = AsyncMock(side_effect=[_response(malformed_package_data), _response(pubdev_metrics_data)])
+    crawler = _make_crawler(mock_http_client)
+
+    with caplog.at_level("WARNING"):
+        pkg = await crawler.fetch_package("stellar_flutter_sdk")
+
+    assert "Failed to decode pub.dev package payload" in caplog.text
+    assert pkg.canonical_id == "pkg:pub/"
+    assert pkg.dependencies == []
+    assert pkg.releases == []
+
+
+async def test_fetch_package_converts_float_download_metrics(
+    mock_http_client: AsyncMock,
+    pubdev_package_data: dict[str, Any],
+) -> None:
+    """Float metrics are normalized to int at decode boundary."""
+
+    metrics_with_floats: dict[str, Any] = {
+        "score": {
+            "downloadCount30Days": 1469.9,
+            "grantedPoints": 140.0,
+            "maxPoints": 160.0,
+        },
+        "scorecard": {
+            "weeklyVersionDownloads": {
+                "totalWeeklyDownloads": [10.2, 20.8, 30.0, 40.4],
+            }
+        },
+    }
+    mock_http_client.get = AsyncMock(side_effect=[_response(pubdev_package_data), _response(metrics_with_floats)])
+    crawler = _make_crawler(mock_http_client)
+    pkg = await crawler.fetch_package("stellar_flutter_sdk")
+
+    assert pkg.downloads_30d == 1469
+    assert pkg.metadata["download_count_4w"] == 100
+    assert pkg.metadata["pub_points"] == 140
+    assert pkg.metadata["pub_points_max"] == 160

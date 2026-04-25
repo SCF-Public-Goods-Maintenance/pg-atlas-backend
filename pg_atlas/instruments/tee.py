@@ -17,7 +17,7 @@ import logging
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TextIO, TypeAlias
+from typing import Protocol, TextIO, TypeAlias, TypeGuard
 
 
 class _StreamTee(io.TextIOBase):
@@ -56,8 +56,11 @@ class _StreamTee(io.TextIOBase):
         return getattr(self._primary, name)
 
 
-_StreamHandlerText: TypeAlias = logging.StreamHandler[io.TextIOBase]
-_StreamHandlerPatch: TypeAlias = tuple[_StreamHandlerText, io.TextIOBase]
+class _HasTextStream(Protocol):
+    stream: io.TextIOBase
+
+
+_StreamHandlerPatch: TypeAlias = tuple[_HasTextStream, io.TextIOBase]
 
 
 def _iter_loggers() -> Iterator[logging.Logger]:
@@ -68,18 +71,24 @@ def _iter_loggers() -> Iterator[logging.Logger]:
             yield logger
 
 
-def _patch_stream_handlers(original_stream: object, replacement: io.TextIOBase) -> list[_StreamHandlerPatch]:
+def _is_text_stream_handler(handler: object) -> TypeGuard[_HasTextStream]:
+    if not isinstance(handler, logging.StreamHandler):
+        return False
+
+    stream = getattr(handler, "stream", None)  # pyright: ignore[reportUnknownArgumentType]
+    return isinstance(stream, io.TextIOBase)
+
+
+def _patch_stream_handlers(original_stream: TextIO | io.TextIOBase, replacement: io.TextIOBase) -> list[_StreamHandlerPatch]:
     patched: list[_StreamHandlerPatch] = []
 
     for logger in _iter_loggers():
         for handler in logger.handlers:
-            if not isinstance(handler, logging.StreamHandler):
+            if not _is_text_stream_handler(handler):
                 continue
 
-            if handler.stream is original_stream:  # pyright: ignore[reportUnknownMemberType]
-                patched.append(
-                    (handler, handler.stream)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-                )
+            if handler.stream is original_stream:
+                patched.append((handler, handler.stream))
                 handler.stream = replacement
 
     return patched

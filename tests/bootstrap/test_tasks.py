@@ -113,14 +113,17 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
             }
         },
     )
-    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants()
 
-    assert defer_mock.call_count == 2
-    first_call: dict[str, Any] = defer_mock.call_args_list[0].kwargs
-    assert first_call["git_owner_url"] == "https://github.com/enriched"
-    assert first_call["category"] == "Developer Tooling"
+    defer_mock.assert_awaited_once()
+    defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
+    assert len(defer_data) == 2
+    assert defer_data[0]["git_owner_url"] == "https://github.com/enriched"
+    assert defer_data[0]["category"] == "Developer Tooling"
+    assert defer_data[1]["git_repo_url"] == "https://github.com/a/b"
+    assert defer_data[1]["category"] == "Smart Contracts"
 
 
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
@@ -145,13 +148,14 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
     mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
-    defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants(canonical_ids=["daoip-5:scf:project:python_stellar_sdk"])
 
     defer_mock.assert_awaited_once()
-    deferred_call: dict[str, Any] = defer_mock.call_args.kwargs
-    assert deferred_call["project_canonical_id"] == "daoip-5:scf:project:python_stellar_sdk"
+    defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
+    assert len(defer_data) == 1
+    assert defer_data[0]["canonical_id"] == "daoip-5:scf:project:python_stellar_sdk"
 
 
 async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> None:
@@ -227,7 +231,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         ),
     )
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
-    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "defer_async", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
 
     await process_project(
         project_canonical_id="proj:1",
@@ -240,8 +244,10 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     )
 
     assert upsert_project_mock.call_args.kwargs["project_type"] == ProjectType.public_good
-    call_kwargs: dict[str, Any] = crawl_defer_mock.call_args.kwargs
-    assert call_kwargs["packages"] == [
+    crawl_defer_mock.assert_awaited_once()
+    defer_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args_list[0].args
+    assert len(defer_data) == 1
+    assert defer_data[0]["packages"] == [
         {
             "system": "PYPI",
             "name": "stellar-sdk",
@@ -280,7 +286,11 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
         adoption_forks=44,
     )
 
-    assert defer_mock.call_count == 1
+    deps_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_deps]
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+
+    assert len(deps_defer_calls) == 1
+    assert len(registry_defer_calls) == 1
 
 
 async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any) -> None:
@@ -308,7 +318,11 @@ async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any)
     # 1 upsert for github repo; per-package loop calls absorb, not upsert_repo.
     assert upsert_repo_mock.call_count == 1
     assert absorb_mock.call_count == 2
-    assert defer_mock.call_count == 2
+    deps_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_deps]
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+
+    assert len(deps_defer_calls) == 2
+    assert len(registry_defer_calls) == 1
 
 
 async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> None:
@@ -507,3 +521,48 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: 
 
     build_crawler_mock.assert_called_once()
     fake_crawler.crawl_and_persist.assert_awaited_once_with(package_names=["soneso/stellar-php-sdk"])
+
+
+@pytest.mark.parametrize(
+    ("system", "package_name"),
+    [
+        ("NPM", "lodash"),
+        ("CARGO", "serde"),
+        ("PYPI", "requests"),
+    ],
+)
+async def test_crawl_github_repo_supports_new_registry_systems_without_warning(
+    mocker: Any,
+    caplog: pytest.LogCaptureFixture,
+    system: str,
+    package_name: str,
+) -> None:
+    """Supported direct-registry systems should enqueue registry crawls without unsupported warnings."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.detect_packages_from_repo",
+        return_value=[PackageReference(system=system, name=package_name)],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
+    mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
+
+    with caplog.at_level("WARNING"):
+        await crawl_github_repo(
+            owner="test-org",
+            repo="test-repo",
+            project_id=1,
+            packages=[],
+            adoption_stars=123,
+            adoption_forks=44,
+        )
+
+    assert "registry-crawl unsupported ecosystem" not in caplog.text
+
+    registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
+    assert len(registry_defer_calls) == 1
+    assert registry_defer_calls[0].kwargs["system"] == system
+    assert registry_defer_calls[0].kwargs["package_names"] == [package_name]

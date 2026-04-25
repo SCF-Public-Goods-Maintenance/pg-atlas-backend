@@ -1,0 +1,43 @@
+{
+  "info": {
+    "name": "requests",
+    "version": "2.33.1",
+    "downloads": {
+      "last_day": -1,
+      "last_month": -1,
+      "last_week": -1
+    },
+    "requires_dist": [
+      "charset_normalizer<4,>=2",
+      "idna<4,>=2.5",
+      "PySocks!=1.5.7,>=1.5.6; extra == \"socks\"",
+      "colorama>=0.4; sys_platform == \"win32\""
+    ],
+    "project_urls": {
+      "Documentation": "https://requests.readthedocs.io",
+      "Source": "https://github.com/psf/requests"
+    },
+    "home_page": null
+  },
+  "releases": {
+    "2.33.1": [
+      {
+        "upload_time_iso_8601": "2026-03-30T16:09:13.830020Z",
+        "filename": "requests-2.33.1-py3-none-any.whl",
+        "packagetype": "bdist_wheel"
+      },
+      {
+        "upload_time_iso_8601": "2026-03-30T16:09:15.531306Z",
+        "filename": "requests-2.33.1.tar.gz",
+        "packagetype": "sdist"
+      }
+    ],
+    "2.33.0": [
+      {
+        "upload_time_iso_8601": "2026-03-01T10:00:00.000000Z",
+        "filename": "requests-2.33.0-py3-none-any.whl",
+        "packagetype": "bdist_wheel"
+      }
+    ]
+  }
+}

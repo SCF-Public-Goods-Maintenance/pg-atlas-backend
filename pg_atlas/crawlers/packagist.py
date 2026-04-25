@@ -18,7 +18,14 @@ from typing import Any
 
 import httpx
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+    as_str_key_dict,
+)
 from pg_atlas.db_models.release import Release
 
 logger = logging.getLogger(__name__)
@@ -76,7 +83,7 @@ class PackagistCrawler(RegistryCrawler):
         try:
             dl_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/downloads.json")
             downloads_data = dl_resp.json()
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch downloads for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, downloads_data)
@@ -90,7 +97,7 @@ class PackagistCrawler(RegistryCrawler):
         """
         try:
             resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/dependents.json")
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch dependents for {package_name}: {exc}")
             return []
 

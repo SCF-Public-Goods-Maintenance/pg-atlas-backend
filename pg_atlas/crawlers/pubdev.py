@@ -14,20 +14,71 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
-from typing import Any
+import math
 
 import httpx
 import msgspec
-from pydantic import TypeAdapter, ValidationError
 
-from pg_atlas.crawlers.base import CrawledDependency, CrawledDependent, CrawledPackage, RegistryCrawler, as_str_key_dict
+from pg_atlas.crawlers.base import (
+    CrawledDependency,
+    CrawledDependent,
+    CrawledPackage,
+    ExhaustedRetries,
+    RegistryCrawler,
+)
 from pg_atlas.db_models.release import Release
 
 logger = logging.getLogger(__name__)
 
 
-_DEPENDENCIES_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
-_WEEKLY_DOWNLOADS_ADAPTER: TypeAdapter[list[float]] = TypeAdapter(list[float])
+class _PubDevPubspecPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    homepage: str | None = None
+    repository: str | None = None
+    dependencies: dict[str, object] = msgspec.field(default_factory=dict[str, object])
+
+
+class _PubDevLatestPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    version: str = ""
+    pubspec: _PubDevPubspecPayload = msgspec.field(default_factory=_PubDevPubspecPayload)
+
+
+class _PubDevVersionPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    version: str = ""
+    published: str = ""
+
+
+class _PubDevPackagePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    name: str = ""
+    latest: _PubDevLatestPayload = msgspec.field(default_factory=_PubDevLatestPayload)
+    versions: list[_PubDevVersionPayload] = msgspec.field(default_factory=list[_PubDevVersionPayload])
+
+
+class _PubDevScorePayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    downloadCount30Days: int | float | None = None
+    grantedPoints: int | float | None = None
+    maxPoints: int | float | None = None
+
+
+class _PubDevWeeklyDownloadsPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    totalWeeklyDownloads: list[int | float] = msgspec.field(default_factory=list[int | float])
+
+
+class _PubDevScorecardPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    weeklyVersionDownloads: _PubDevWeeklyDownloadsPayload = msgspec.field(default_factory=_PubDevWeeklyDownloadsPayload)
+
+
+class _PubDevMetricsPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    score: _PubDevScorePayload = msgspec.field(default_factory=_PubDevScorePayload)
+    scorecard: _PubDevScorecardPayload = msgspec.field(default_factory=_PubDevScorecardPayload)
+
+
+class _PubDevDependentPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    package: str = ""
+
+
+class _PubDevDependentsPayload(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=False):
+    packages: list[_PubDevDependentPayload] = msgspec.field(default_factory=list[_PubDevDependentPayload])
+    next: str = ""
 
 
 class PubDevCrawler(RegistryCrawler):
@@ -60,17 +111,17 @@ class PubDevCrawler(RegistryCrawler):
         Fetch package metadata and metrics from pub.dev.
 
         Makes two API calls:
-        1. GET /api/packages/{name} — metadata, versions, dependencies
-        2. GET /api/packages/{name}/metrics — scores, downloads, weekly history
+        1. GET /api/packages/{name} - metadata, versions, dependencies
+        2. GET /api/packages/{name}/metrics - scores, downloads, weekly history
         """
         pkg_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}")
-        pkg_data: dict[str, Any] = pkg_resp.json()
+        pkg_data = _decode_pubdev_package_payload(pkg_resp.content, package_name)
 
-        metrics_data: dict[str, Any] = {}
+        metrics_data = _PubDevMetricsPayload()
         try:
             metrics_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/metrics")
-            metrics_data = metrics_resp.json()
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+            metrics_data = _decode_pubdev_metrics_payload(metrics_resp.content, package_name)
+        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch metrics for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, metrics_data)
@@ -90,58 +141,36 @@ class PubDevCrawler(RegistryCrawler):
         while url and pages_fetched < max_pages and len(dependents) < max_dependents:
             pages_fetched += 1
             resp = await self._request_with_retry(url)
-            data = as_str_key_dict(resp.json())
+            data = _decode_pubdev_dependents_payload(resp.content, package_name)
 
-            packages_obj = data.get("packages")
-            packages: list[object] = []
-            if isinstance(packages_obj, list):
-                try:
-                    packages = msgspec.convert(packages_obj, type=list[object])
-                except msgspec.ValidationError:
-                    packages = []
-
-            for entry_obj in packages:
-                entry = as_str_key_dict(entry_obj)
-                name_obj = entry.get("package")
-                name = name_obj if isinstance(name_obj, str) else ""
-                if name:
+            for entry in data.packages:
+                if entry.package:
                     dependents.append(
                         CrawledDependent(
-                            canonical_id=f"pkg:pub/{name.lower()}",
-                            display_name=name,
+                            canonical_id=f"pkg:pub/{entry.package.lower()}",
+                            display_name=entry.package,
                         )
                     )
 
-            next_url = data.get("next")
-            url = next_url if isinstance(next_url, str) else ""
+            url = data.next
 
         if len(dependents) >= max_dependents:
             logger.warning(f"Truncated dependents for {package_name} at {max_dependents}")
 
         return dependents
 
-    def _parse_package(self, pkg_data: dict[str, Any], metrics_data: dict[str, Any]) -> CrawledPackage:
+    def _parse_package(self, pkg_data: _PubDevPackagePayload, metrics_data: _PubDevMetricsPayload) -> CrawledPackage:
         """Parse pub.dev API responses into a CrawledPackage."""
-        name_obj = pkg_data.get("name")
-        name = name_obj if isinstance(name_obj, str) else ""
+        name = pkg_data.name
         package_purl = f"pkg:pub/{name.lower()}"
-        latest = as_str_key_dict(pkg_data.get("latest"))
-        version_obj = latest.get("version")
-        version = version_obj if isinstance(version_obj, str) else ""
-        pubspec = as_str_key_dict(latest.get("pubspec"))
-
-        homepage = pubspec.get("homepage") or pubspec.get("repository")
-        repo_url: str | None = homepage if isinstance(homepage, str) else None
+        latest = pkg_data.latest
+        version = latest.version
+        pubspec = latest.pubspec
+        repo_url = pubspec.homepage or pubspec.repository
 
         # Parse runtime dependencies only (not dev_dependencies or dependency_overrides)
-        raw_deps_obj = pubspec.get("dependencies")
-        try:
-            raw_deps = _DEPENDENCIES_ADAPTER.validate_python(raw_deps_obj)
-        except ValidationError:
-            raw_deps = {}
-
         dependencies: list[CrawledDependency] = []
-        for dep_name, dep_constraint in raw_deps.items():
+        for dep_name, dep_constraint in pubspec.dependencies.items():
             if dep_name.lower() in self.FRAMEWORK_PACKAGES:
                 continue
 
@@ -158,25 +187,19 @@ class PubDevCrawler(RegistryCrawler):
                 )
             )
 
-        # Extract score data (nested under "score" in metrics response)
-        score = as_str_key_dict(metrics_data.get("score"))
-        downloads_30d = score.get("downloadCount30Days")
-        pub_points = score.get("grantedPoints")
-        pub_points_max = score.get("maxPoints")
+        score = metrics_data.score
+        downloads_30d = _normalize_download_count(score.downloadCount30Days, name, "downloadCount30Days")
+        pub_points = _normalize_download_count(score.grantedPoints, name, "grantedPoints")
+        pub_points_max = _normalize_download_count(score.maxPoints, name, "maxPoints")
 
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, int] = {}
         if downloads_30d is not None:
             metadata["download_count_30d"] = downloads_30d
 
-        # Extract weekly download history from scorecard
-        scorecard = as_str_key_dict(metrics_data.get("scorecard"))
-        wvd = as_str_key_dict(scorecard.get("weeklyVersionDownloads"))
-        weekly_downloads_obj = wvd.get("totalWeeklyDownloads")
-        try:
-            weekly_downloads = _WEEKLY_DOWNLOADS_ADAPTER.validate_python(weekly_downloads_obj)
-        except ValidationError:
-            weekly_downloads = []
-
+        weekly_downloads = _normalize_weekly_downloads(
+            metrics_data.scorecard.weeklyVersionDownloads.totalWeeklyDownloads,
+            name,
+        )
         if weekly_downloads:
             metadata["download_count_4w"] = sum(weekly_downloads[:4])
             metadata["download_count_12w"] = sum(weekly_downloads[:12])
@@ -184,30 +207,22 @@ class PubDevCrawler(RegistryCrawler):
 
         if pub_points is not None:
             metadata["pub_points"] = pub_points
+
         if pub_points_max is not None:
             metadata["pub_points_max"] = pub_points_max
 
         releases: list[Release] = []
-        versions_obj = pkg_data.get("versions")
-        if isinstance(versions_obj, list):
-            try:
-                versions: list[object] = msgspec.convert(versions_obj, type=list[object])
-            except msgspec.ValidationError:
-                versions = []
+        for version_payload in pkg_data.versions:
+            if not version_payload.version:
+                continue
 
-            for version_payload_obj in versions:
-                if not isinstance(version_payload_obj, dict):
-                    continue
-
-                version_payload = as_str_key_dict(version_payload_obj)
-
-                version_value = version_payload.get("version")
-                if not isinstance(version_value, str) or not version_value:
-                    continue
-
-                published_value = version_payload.get("published")
-                release_date = published_value if isinstance(published_value, str) else ""
-                releases.append(Release(purl=package_purl, version=version_value, release_date=release_date))
+            releases.append(
+                Release(
+                    purl=package_purl,
+                    version=version_payload.version,
+                    release_date=version_payload.published,
+                )
+            )
 
         return CrawledPackage(
             canonical_id=package_purl,
@@ -219,3 +234,61 @@ class PubDevCrawler(RegistryCrawler):
             dependencies=dependencies,
             releases=releases,
         )
+
+
+def _decode_pubdev_package_payload(content: bytes, package_name: str) -> _PubDevPackagePayload:
+    try:
+        return msgspec.json.decode(content, type=_PubDevPackagePayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode pub.dev package payload for {package_name}: {exc}")
+
+        return _PubDevPackagePayload()
+
+
+def _decode_pubdev_metrics_payload(content: bytes, package_name: str) -> _PubDevMetricsPayload:
+    try:
+        return msgspec.json.decode(content, type=_PubDevMetricsPayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode pub.dev metrics payload for {package_name}: {exc}")
+
+        return _PubDevMetricsPayload()
+
+
+def _decode_pubdev_dependents_payload(content: bytes, package_name: str) -> _PubDevDependentsPayload:
+    try:
+        return msgspec.json.decode(content, type=_PubDevDependentsPayload)
+    except msgspec.ValidationError as exc:
+        logger.warning(f"Failed to decode pub.dev dependents payload for {package_name}: {exc}")
+
+        return _PubDevDependentsPayload()
+
+
+def _normalize_download_count(value: int | float | None, package_name: str, field_name: str) -> int | None:
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    if math.isfinite(value):
+        return int(value)
+
+    logger.warning(f"Ignoring non-numeric {field_name} value for {package_name}: {value}")
+
+    return None
+
+
+def _normalize_weekly_downloads(values: list[int | float], package_name: str) -> list[int]:
+    normalized: list[int] = []
+    for value in values:
+        if isinstance(value, int):
+            normalized.append(value)
+            continue
+
+        if math.isfinite(value):
+            normalized.append(int(value))
+            continue
+
+        logger.warning(f"Ignoring non-numeric weekly download value for {package_name}: {value}")
+
+    return normalized

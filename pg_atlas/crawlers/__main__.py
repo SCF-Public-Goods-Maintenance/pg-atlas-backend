@@ -19,6 +19,7 @@ import logging
 import httpx
 
 from pg_atlas.config import settings
+from pg_atlas.crawlers.base import USER_AGENT
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.db_models.session import get_session_factory
 
@@ -28,7 +29,25 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     """Parse arguments, configure the crawler, and run the crawl."""
     parser = argparse.ArgumentParser(description="PG Atlas registry crawler")
-    parser.add_argument("registry", choices=["pubdev", "packagist", "dart", "composer", "flutter", "php"])
+    parser.add_argument(
+        "registry",
+        choices=[
+            "pubdev",
+            "packagist",
+            "dart",
+            "composer",
+            "flutter",
+            "php",
+            "npm",
+            "node",
+            "nodejs",
+            "cargo",
+            "crates",
+            "cratesio",
+            "pypi",
+            "pip",
+        ],
+    )
     parser.add_argument("packages", nargs="+", help="Package names to crawl")
     args = parser.parse_args()
 
@@ -47,7 +66,7 @@ async def main() -> None:
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
         follow_redirects=True,
-        headers={"User-Agent": "pg-atlas-crawler/0.1"},
+        headers={"User-Agent": USER_AGENT},
     ) as client:
         crawler = build_registry_crawler(
             normalized_system,
