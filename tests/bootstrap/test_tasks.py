@@ -566,3 +566,197 @@ async def test_crawl_github_repo_supports_new_registry_systems_without_warning(
     assert len(registry_defer_calls) == 1
     assert registry_defer_calls[0].kwargs["system"] == system
     assert registry_defer_calls[0].kwargs["package_names"] == [package_name]
+
+
+# ---------------------------------------------------------------------------
+# Serialization regression — Procrastinate deferred payload shapes
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredPayloadJsonSerializable:
+    """
+    Regression guard for Procrastinate queue kwargs serialization.
+
+    Procrastinate serializes task kwargs to JSON via psycopg.  Any
+    non-JSON-serializable value (e.g. an ``enum.Enum`` that does not
+    inherit from ``str``) will raise a ``TypeError`` at enqueue time and
+    silently drop the job.  These tests catch that class of bug without
+    requiring a live database connection.
+    """
+
+    def _assert_json_round_trips(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """
+        Serialize *payload* to JSON and parse it back.
+
+        Raises ``TypeError`` / ``ValueError`` on the first non-serializable
+        value, which pytest surfaces as a test failure with a clear message.
+        """
+        import json
+
+        serialized = json.dumps(payload)
+
+        return dict(json.loads(serialized))  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------
+    # Shape 1: process_project  (regression — ActivityStatus was broken)
+    # ------------------------------------------------------------------
+
+    def test_process_project_payload_is_json_serializable(self) -> None:
+        """
+        Regression: ``ActivityStatus`` in ``asdict(ScfProject)`` must be a
+        plain ``str`` so that Procrastinate can serialize it to JSON.
+
+        Before ``ActivityStatus(str, enum.Enum)`` was introduced, this raised
+        ``TypeError: Object of type ActivityStatus is not JSON serializable``.
+        """
+        from dataclasses import asdict
+
+        from pg_atlas.db_models.base import ActivityStatus
+        from pg_atlas.procrastinate.opengrants import ScfProject
+
+        proj = ScfProject(
+            canonical_id="scf:project:test-123",
+            display_name="Test Project",
+            activity_status=ActivityStatus.live,
+            git_owner_url="https://github.com/test-org",
+            git_repo_url="https://github.com/test-org/test-repo",
+            category="Infrastructure",
+            project_metadata={"round": 25, "tags": ["defi"]},
+        )
+        payload = {**asdict(proj), "extended_universe": False}
+        data = self._assert_json_round_trips(payload)
+
+        # The value must survive the round-trip as a plain string.
+        assert isinstance(data["activity_status"], str), (
+            "activity_status must be a str after JSON round-trip; check that ActivityStatus inherits from str"
+        )
+        assert data["activity_status"] == "live"
+
+    def test_process_project_payload_all_activity_status_values(self) -> None:
+        """Every ``ActivityStatus`` member must be JSON serializable."""
+        from dataclasses import asdict
+
+        from pg_atlas.db_models.base import ActivityStatus
+        from pg_atlas.procrastinate.opengrants import ScfProject
+
+        for status in ActivityStatus:
+            proj = ScfProject(
+                canonical_id=f"scf:project:{status.value}",
+                display_name=f"Project {status.value}",
+                activity_status=status,
+                git_owner_url=None,
+                git_repo_url=None,
+            )
+            payload = {**asdict(proj), "extended_universe": False}
+            data = self._assert_json_round_trips(payload)
+            assert data["activity_status"] == status.value
+
+    # ------------------------------------------------------------------
+    # Shape 2: crawl_github_repo  (via build_repo_defer_data)
+    # ------------------------------------------------------------------
+
+    def test_build_repo_defer_data_payload_is_json_serializable(self) -> None:
+        """
+        ``build_repo_defer_data`` converts ``pushed_at`` datetime → isoformat
+        string and ``ProjectPackage`` instances → plain dicts; the resulting
+        payload must be JSON-serializable.
+        """
+        import datetime as dt
+
+        from pg_atlas.procrastinate.depsdev import ProjectPackage
+        from pg_atlas.procrastinate.github import GitHubRepoMetadata
+        from pg_atlas.procrastinate.tasks import build_repo_defer_data
+
+        pkg = ProjectPackage(system="PYPI", name="stellar-sdk", purl="pkg:pypi/stellar-sdk")
+        repo_info = GitHubRepoMetadata(
+            name="py-stellar-base",
+            full_name="StellarCN/py-stellar-base",
+            description="",
+            default_branch="main",
+            stars=999,
+            forks=42,
+            pushed_at=dt.datetime(2025, 6, 1, 12, 0, 0, tzinfo=dt.UTC),
+            language="Python",
+            topics=[],
+        )
+        # Minimal DepsDevProjectInfo stub — only the fields build_repo_defer_data reads.
+        from types import SimpleNamespace
+
+        depsdev_info = SimpleNamespace(packages=[pkg], stars_count=1000, forks_count=50)
+        payload = build_repo_defer_data(
+            repo_info, project_id=7, projects_info={"github.com/stellarcn/py-stellar-base": depsdev_info}
+        )  # type: ignore[arg-type]
+
+        data = self._assert_json_round_trips(payload)
+        assert data["owner"] == "StellarCN"
+        assert data["repo"] == "py-stellar-base"
+        assert isinstance(data["pushed_at_isodt"], str)
+        assert data["packages"] == [{"system": "PYPI", "name": "stellar-sdk", "purl": "pkg:pypi/stellar-sdk"}]
+
+    def test_build_repo_defer_data_payload_none_pushed_at(self) -> None:
+        """``pushed_at=None`` must produce a JSON-serializable ``None`` value."""
+        from pg_atlas.procrastinate.github import GitHubRepoMetadata
+        from pg_atlas.procrastinate.tasks import build_repo_defer_data
+
+        repo_info = GitHubRepoMetadata(
+            name="repo",
+            full_name="org/repo",
+            description="",
+            default_branch="main",
+            stars=0,
+            forks=0,
+            pushed_at=None,
+            language="",
+            topics=[],
+        )
+        payload = build_repo_defer_data(repo_info, project_id=1, projects_info={})
+        data = self._assert_json_round_trips(payload)
+        assert data["pushed_at_isodt"] is None
+
+    # ------------------------------------------------------------------
+    # Shape 3: crawl_package_deps
+    # ------------------------------------------------------------------
+
+    def test_crawl_package_deps_payload_is_json_serializable(self) -> None:
+        """Kwargs for ``crawl_package_deps`` are plain strings — confirm no regression."""
+        payload: dict[str, Any] = {
+            "system": "PYPI",
+            "package_name": "stellar-sdk",
+            "source_repo_canonical_id": "pkg:github/StellarCN/py-stellar-base",
+        }
+        data = self._assert_json_round_trips(payload)
+        assert data["system"] == "PYPI"
+
+    # ------------------------------------------------------------------
+    # Shape 4: crawl_package_registry
+    # ------------------------------------------------------------------
+
+    def test_crawl_package_registry_payload_is_json_serializable(self) -> None:
+        """``package_names`` is a sorted list of plain strings."""
+        payload: dict[str, Any] = {
+            "system": "NPM",
+            "package_names": ["@stellar/stellar-sdk", "bignumber.js"],
+        }
+        data = self._assert_json_round_trips(payload)
+        assert data["package_names"] == ["@stellar/stellar-sdk", "bignumber.js"]
+
+    # ------------------------------------------------------------------
+    # Shape 5: process_sbom_submission
+    # ------------------------------------------------------------------
+
+    def test_process_sbom_submission_payload_is_json_serializable(self) -> None:
+        """
+        ``expected_status`` is stored as ``SubmissionStatus.value`` (a plain
+        string) before being passed to ``defer_with_lock`` — confirm this
+        serializes correctly.
+        """
+        from pg_atlas.db_models.base import SubmissionStatus
+
+        for status in SubmissionStatus:
+            payload: dict[str, Any] = {
+                "submission_id": 42,
+                "expected_status": status.value,
+            }
+            data = self._assert_json_round_trips(payload)
+            assert isinstance(data["expected_status"], str)
+            assert data["expected_status"] == status.value

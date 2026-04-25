@@ -126,21 +126,21 @@ class ReleaseListJSONB(TypeDecorator[list[Release] | None]):
 # ---------------------------------------------------------------------------
 
 
-class RepoVertexType(enum.Enum):
+class RepoVertexType(str, enum.Enum):
     """Discriminator values for the RepoVertex joined-table-inheritance hierarchy."""
 
     repo = "repo"
     external_repo = "external-repo"
 
 
-class ProjectType(enum.Enum):
+class ProjectType(str, enum.Enum):
     """Classification of a Project within the PG Atlas universe."""
 
     public_good = "public-good"
     scf_project = "scf-project"
 
 
-class ActivityStatus(enum.Enum):
+class ActivityStatus(str, enum.Enum):
     """
     Lifecycle status of a Project.
 
@@ -154,21 +154,21 @@ class ActivityStatus(enum.Enum):
     non_responsive = "non-responsive"
 
 
-class Visibility(enum.Enum):
+class Visibility(str, enum.Enum):
     """Whether a Repo is publicly accessible (affects data collection scope)."""
 
     public = "public"
     private = "private"
 
 
-class EdgeConfidence(enum.Enum):
+class EdgeConfidence(str, enum.Enum):
     """How firmly an edge was established."""
 
     verified_sbom = "verified-sbom"
     inferred_shadow = "inferred-shadow"
 
 
-class SubmissionStatus(enum.Enum):
+class SubmissionStatus(str, enum.Enum):
     """Processing state of an artifact-linked audit record."""
 
     pending = "pending"
