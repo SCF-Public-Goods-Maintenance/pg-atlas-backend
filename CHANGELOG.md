@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.6.0...v0.7.0) (2026-04-26)
+
+
+### Features
+
+* **bootstrap:** new option to process only selected projects ([ddd92bf](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/ddd92bf25919dc833479bdf552f06b6069d2129a))
+* **crawlers:** add NPM, Cargo, and PyPI registry crawlers ([#66](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/66)) ([5b83c06](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/5b83c06e61aef4428ba4185d8ad93bf9e4e79c4f))
+
+
+### Bug Fixes
+
+* **DB:** make all DB model enums JSON serializable ([d527338](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/d5273387a76155433f8c445036bebbe98c5c8485))
+
+
+### Dependencies
+
+* upgrade all to apply mitigations ([1aab947](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/1aab947feeccc353e1aa8735079fa3f8f0c16e49))
+
+
+### Documentation
+
+* add deepwiki and github badges to readme ([1e47af3](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/1e47af368f9d03eb60743aafc8eb66ee384f240c))
+
 ## [0.6.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.5.0...v0.6.0) (2026-04-21)
 
 
