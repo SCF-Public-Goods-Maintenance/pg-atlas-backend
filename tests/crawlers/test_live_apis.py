@@ -4,8 +4,8 @@ Live API integration tests for registry crawlers.
 Validates that real API response structures match our parsing expectations.
 Skipped by default — enable with ``PG_ATLAS_TEST_LIVE_APIS=1``.
 
-These tests are the early warning system for API changes in pub.dev and
-Packagist. They make real HTTP requests and do NOT write to any database.
+These tests are the early warning system for API changes in package registry APIs.
+They make real HTTP requests and do NOT write to any database.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
