@@ -14,10 +14,23 @@ __all__ = (
     "DependenciesNode",
     "DependencyRelation",
     "Dependents",
+    "DockerHubRepoMetadata",
+    "Finding",
+    "FindingCooldown",
+    "FindingDeprecated",
+    "FindingLowUsage",
+    "FindingRisk",
+    "FindingType",
+    "Findings",
+    "FindingsBatch",
+    "FindingsBatchResponse",
+    "FindingsVersion",
     "GetAdvisoryRequest",
     "GetCapabilitiesRequest",
     "GetDependenciesRequest",
     "GetDependentsRequest",
+    "GetFindingsBatchRequest",
+    "GetFindingsRequest",
     "GetPackageRequest",
     "GetProjectBatchRequest",
     "GetProjectPackageVersionsRequest",
@@ -65,6 +78,7 @@ __all__ = (
     "RequirementsCargoFeature",
     "RequirementsGo",
     "RequirementsGoDependency",
+    "RequirementsGoReplace",
     "RequirementsMaven",
     "RequirementsMavenDependency",
     "RequirementsMavenProfile",
@@ -79,9 +93,12 @@ __all__ = (
     "RequirementsNpmBundle",
     "RequirementsNpmDependencies",
     "RequirementsNpmDependenciesDependency",
+    "RequirementsNpmDependenciesPeerDependencyMetadata",
     "RequirementsNuGet",
     "RequirementsNuGetDependencyGroup",
     "RequirementsNuGetDependencyGroupDependency",
+    "RequirementsNuGetFrameworkAssembly",
+    "RequirementsNuGetFrameworkReference",
     "RequirementsPyPi",
     "RequirementsPyPiDependency",
     "RequirementsPyPiExternalDependency",
@@ -96,9 +113,11 @@ __all__ = (
     "Version",
     "VersionBatch",
     "VersionBatchResponse",
+    "VersionCooldown",
     "VersionKey",
     "VersionLicense",
     "VersionProject",
+    "VersionProjectStatus",
 )
 
 import datetime
@@ -133,6 +152,105 @@ class DependencyRelation(betterproto2.Enum):
     INDIRECT = 3
 
 
+class FindingRisk(betterproto2.Enum):
+    UNSPECIFIED = 0
+
+    CRITICAL = 1
+    """
+    This finding represents a critical security risk, and should be
+    immediately actioned.
+    """
+
+    HIGH = 2
+    """
+    This finding represents a high security risk, and the relevant
+    package or version should be avoided if possible.
+    """
+
+    MEDIUM = 3
+    """
+    This finding represents a potential security risk.
+    """
+
+    LOW = 4
+    """
+    Currently unused but reserved for future use.
+    """
+
+    INFORMATIONAL = 5
+    """
+    This finding does not inherently convey a security risk and is
+    informational only. Recommended treatment varies based on the type
+    of the finding.
+    """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "RISK_UNSPECIFIED",
+            1: "RISK_CRITICAL",
+            2: "RISK_HIGH",
+            3: "RISK_MEDIUM",
+            4: "RISK_LOW",
+            5: "RISK_INFORMATIONAL",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "RISK_UNSPECIFIED": 0,
+            "RISK_CRITICAL": 1,
+            "RISK_HIGH": 2,
+            "RISK_MEDIUM": 3,
+            "RISK_LOW": 4,
+            "RISK_INFORMATIONAL": 5,
+        }
+
+
+class FindingType(betterproto2.Enum):
+    TYPE_UNSPECIFIED = 0
+
+    NOT_FOUND = 1
+    """
+    The package or version was not found. If the package is not found within
+    the specified ecosystem, or all versions have been deleted, this will be
+    a package-scoped finding. If the specified version was not found but the
+    package was, this will be a version-scoped finding.
+    """
+
+    MALICIOUS = 2
+    """
+    The package or version has a malicious advisory.
+    """
+
+    DEPRECATED = 3
+    """
+    The package or version has been marked as deprecated.
+    """
+
+    COOLDOWN = 4
+    """
+    The package or version is in cooldown. This is a security practice that
+    mitigates supply chain attacks by delaying the update of newly published
+    package versions.
+    """
+
+    LOW_USAGE = 5
+    """
+    The package has low usage.
+    """
+
+    VULNERABLE = 6
+    """
+    This package or version is affected by critical vulnerabilities.
+    """
+
+    REMEDIATION = 7
+    """
+    This version remediates a security vulnerability.
+    """
+
+
 class HashType(betterproto2.Enum):
     """
     HashType identifies a function used to produce a hash.
@@ -158,7 +276,8 @@ class ProjectRelationProvenance(betterproto2.Enum):
 
     SLSA_ATTESTATION = 1
     """
-    There is a SLSA attestation that links this package version to this project.
+    There is a SLSA attestation that links this package version to this
+    project.
     """
 
     GO_ORIGIN = 2
@@ -187,7 +306,8 @@ class ProjectRelationProvenance(betterproto2.Enum):
 
 class ProjectRelationType(betterproto2.Enum):
     """
-    ProjectRelationType specifies a relationship between a project and a package version.
+    ProjectRelationType specifies a relationship between a project and a package
+    version.
     """
 
     UNKNOWN_PROJECT_RELATION_TYPE = 0
@@ -329,7 +449,8 @@ default_message_pool.register_message("deps_dev.v3alpha", "Attestation", Attesta
 @dataclass(eq=False, repr=False)
 class Capabilities(betterproto2.Message):
     """
-    Capabilities holds identified capabilities and callpaths for a package version.
+    Capabilities holds identified capabilities and callpaths for a package
+    version.
     """
 
     capabilities: "list[CapabilitiesCapability]" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, repeated=True)
@@ -512,6 +633,235 @@ default_message_pool.register_message("deps_dev.v3alpha", "Dependents", Dependen
 
 
 @dataclass(eq=False, repr=False)
+class DockerHubRepoMetadata(betterproto2.Message):
+    date_registered: "datetime.datetime | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, unwrap=lambda: __google__protobuf__.Timestamp, optional=True
+    )
+    """
+    The date the image's repository was registered.
+    """
+
+    last_updated: "datetime.datetime | None" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, unwrap=lambda: __google__protobuf__.Timestamp, optional=True
+    )
+    """
+    The date the image's repository was last updated.
+    """
+
+    star_count: "int" = betterproto2.field(3, betterproto2.TYPE_INT64)
+    """
+    The number of stars.
+    """
+
+    pull_count: "int" = betterproto2.field(4, betterproto2.TYPE_INT64)
+    """
+    The number of times an image has been pulled.
+    """
+
+    is_official: "bool" = betterproto2.field(5, betterproto2.TYPE_BOOL)
+    """
+    Specifies if the image's repository is official, based on the registry.
+    An image is considered official if it is present in
+    https://github.com/docker-library/official-images.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "DockerHubRepoMetadata", DockerHubRepoMetadata)
+
+
+@dataclass(eq=False, repr=False)
+class Finding(betterproto2.Message):
+    """
+    Finding contains a single actionable finding.
+
+    Oneofs:
+        - context:
+    """
+
+    type: "FindingType" = betterproto2.field(1, betterproto2.TYPE_ENUM, default_factory=lambda: FindingType(0))
+    """
+    The type of finding indicates what specific thing was found.
+    """
+
+    risk: "FindingRisk" = betterproto2.field(2, betterproto2.TYPE_ENUM, default_factory=lambda: FindingRisk(0))
+    """
+    The risk level of the finding indicates how urgent it is to action.
+    """
+
+    deprecated_context: "FindingDeprecated | None" = betterproto2.field(
+        3, betterproto2.TYPE_MESSAGE, optional=True, group="context"
+    )
+
+    cooldown_context: "FindingCooldown | None" = betterproto2.field(
+        4, betterproto2.TYPE_MESSAGE, optional=True, group="context"
+    )
+
+    low_usage_context: "FindingLowUsage | None" = betterproto2.field(
+        5, betterproto2.TYPE_MESSAGE, optional=True, group="context"
+    )
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Finding", Finding)
+
+
+@dataclass(eq=False, repr=False)
+class FindingCooldown(betterproto2.Message):
+    end: "datetime.datetime | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, unwrap=lambda: __google__protobuf__.Timestamp, optional=True
+    )
+    """
+    The point in time until which this version is in cooldown.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Finding.Cooldown", FindingCooldown)
+
+
+@dataclass(eq=False, repr=False)
+class FindingDeprecated(betterproto2.Message):
+    reason: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    A human-readable description of why the package/version was deprecated.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Finding.Deprecated", FindingDeprecated)
+
+
+@dataclass(eq=False, repr=False)
+class FindingLowUsage(betterproto2.Message):
+    alternative_packages: "list[str]" = betterproto2.field(1, betterproto2.TYPE_STRING, repeated=True)
+    """
+    Packages with similar names that have higher usage.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Finding.LowUsage", FindingLowUsage)
+
+
+@dataclass(eq=False, repr=False)
+class Findings(betterproto2.Message):
+    """
+    Findings contains package and version findings which are relevant to
+    safe dependency management.
+
+    Oneofs:
+        - key: The package or version which was requested. The package and version name
+            may differ from what was specified in the request, due to canonicalization.
+    """
+
+    package_key: "PackageKey | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True, group="key")
+
+    version_key: "VersionKey | None" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, optional=True, group="key")
+
+    recommended_versions: "list[FindingsVersion]" = betterproto2.field(3, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    A set of low risk versions recommended for use. May be empty.
+    """
+
+    requested_version: "FindingsVersion | None" = betterproto2.field(4, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    If a specific version was requested, findings that apply to that version.
+    May be empty.
+    """
+
+    default_version: "FindingsVersion | None" = betterproto2.field(5, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The version that is installed when no version is specified. The precise
+    meaning of this is system-specific, but it is commonly the version with
+    the greatest version number, ignoring pre-release versions.
+    """
+
+    package_findings: "list[Finding]" = betterproto2.field(6, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    Findings which are package-scoped and apply to every version of this
+    package. For example, if there is a MALICIOUS package finding, all
+    versions in the package are malicious.
+    Package-scoped findings are usually also included within the
+    findings for each version.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Findings", Findings)
+
+
+@dataclass(eq=False, repr=False)
+class FindingsVersion(betterproto2.Message):
+    """
+    Findings for a particular package version.
+    """
+
+    version_key: "VersionKey | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The version these findings apply to. The package and version name may
+    differ from what was specified in the request, due to canonicalization.
+    """
+
+    is_default: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    If true, this is the default version of the package: the version that is
+    installed when no version is specified. The precise meaning of this is
+    system-specific, but it is commonly the version with the greatest
+    version number, ignoring pre-release versions.
+    """
+
+    findings: "list[Finding]" = betterproto2.field(3, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    All findings associated with this package version, including all
+    findings in package_findings.
+    """
+
+    cooldown_end: "datetime.datetime | None" = betterproto2.field(
+        4, betterproto2.TYPE_MESSAGE, unwrap=lambda: __google__protobuf__.Timestamp, optional=True
+    )
+    """
+    The point in time until which this version is in cooldown.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Findings.Version", FindingsVersion)
+
+
+@dataclass(eq=False, repr=False)
+class FindingsBatch(betterproto2.Message):
+    """
+    FindingsBatch contains a batch of findings information. If there is more
+    findings information to be returned, a page token is included in the
+    response.
+    """
+
+    responses: "list[FindingsBatchResponse]" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    The findings for this page.
+    """
+
+    next_page_token: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    If set, this batch is not the full result set. This page token
+    may be used to fetch more results in a subsequent request.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "FindingsBatch", FindingsBatch)
+
+
+@dataclass(eq=False, repr=False)
+class FindingsBatchResponse(betterproto2.Message):
+    request: "GetFindingsRequest | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The uncanonicalized request.
+    """
+
+    findings: "Findings | None" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The findings for the requested package/version.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "FindingsBatch.Response", FindingsBatchResponse)
+
+
+@dataclass(eq=False, repr=False)
 class GetAdvisoryRequest(betterproto2.Message):
     """
     GetAdvisoryRequest identifies a security advisory for which to return
@@ -561,6 +911,47 @@ class GetDependentsRequest(betterproto2.Message):
 
 
 default_message_pool.register_message("deps_dev.v3alpha", "GetDependentsRequest", GetDependentsRequest)
+
+
+@dataclass(eq=False, repr=False)
+class GetFindingsBatchRequest(betterproto2.Message):
+    """
+    GetFindingsBatchRequest identifies a batch of packages/versions for which to
+    return findings.
+    """
+
+    requests: "list[GetFindingsRequest]" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    The batch list of packages/versions to return findings for.
+    Up to 5000 requests are allowed in a single batch.
+    """
+
+    page_token: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    If set, request the next page of the result set. It must be set to the
+    page token provided by the previous findings batch response. All other
+    request fields must be the same as in the initial request.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "GetFindingsBatchRequest", GetFindingsBatchRequest)
+
+
+@dataclass(eq=False, repr=False)
+class GetFindingsRequest(betterproto2.Message):
+    """
+    GetFindings identifies a package to get findings for.
+
+    Oneofs:
+        - key:
+    """
+
+    package_key: "PackageKey | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True, group="key")
+
+    version_key: "VersionKey | None" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, optional=True, group="key")
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "GetFindingsRequest", GetFindingsRequest)
 
 
 @dataclass(eq=False, repr=False)
@@ -672,7 +1063,8 @@ default_message_pool.register_message("deps_dev.v3alpha", "GetVersionBatchReques
 @dataclass(eq=False, repr=False)
 class GetVersionRequest(betterproto2.Message):
     """
-    GetVersionRequest identifies a package version for which to return information.
+    GetVersionRequest identifies a package version for which to return
+    information.
     """
 
     version_key: "VersionKey | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True)
@@ -785,6 +1177,11 @@ class PackageVersion(betterproto2.Message):
     is_deprecated: "bool" = betterproto2.field(5, betterproto2.TYPE_BOOL)
     """
     If true, this version has been marked as deprecated.
+    """
+
+    deprecated_reason: "str" = betterproto2.field(6, betterproto2.TYPE_STRING)
+    """
+    The reason why this version is deprecated.
     """
 
 
@@ -1220,12 +1617,14 @@ class PurlLookupResult(betterproto2.Message):
     """
     PurlLookupResult holds information corresponding to the queried purl,
     which may be either package, or package version.
-    Only one field will be populated, which depends on the form of the queried purl.
+    Only one field will be populated, which depends on the form of the queried
+    purl.
     """
 
     package: "Package | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True)
     """
-    Package result (as from GetPackage) for purls that do not include a version.
+    Package result (as from GetPackage) for purls that do not include a
+    version.
     """
 
     version: "Version | None" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, optional=True)
@@ -1280,6 +1679,12 @@ class QueryContainerImagesResultResult(betterproto2.Message):
     """
     An image repository (eg. 'tensorflow') referring to collection of
     images.
+    """
+
+    docker_metadata: "DockerHubRepoMetadata | None" = betterproto2.field(3, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The DockerHub-specific repository metadata. Only populated if this image
+    is available on DockerHub.
     """
 
 
@@ -1349,7 +1754,8 @@ default_message_pool.register_message("deps_dev.v3alpha", "QueryResult.Result", 
 class QueryResultResultArtifact(betterproto2.Message):
     """
     An artifact is content associated with a package version, such as a JAR
-    file. Currently supported for npm, Cargo, Maven, NuGet, PyPI and RubyGems.
+    file. Currently supported for npm, Cargo, Maven, NuGet, PyPI and
+    RubyGems.
     """
 
     url: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
@@ -1522,18 +1928,67 @@ class RequirementsGo(betterproto2.Message):
 
     indirect_dependencies: "list[RequirementsGoDependency]" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, repeated=True)
 
+    replaces: "list[RequirementsGoReplace]" = betterproto2.field(3, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    Replace represents a replace directive in a go.mod file, which replaces
+    the contents of a module with contents found elsewhere.
+    See https://go.dev/ref/mod#go-mod-file-replace
+    """
+
+    excludes: "list[RequirementsGoDependency]" = betterproto2.field(4, betterproto2.TYPE_MESSAGE, repeated=True)
+    """
+    Excludes represents exclude directives in a go.mod file, which specify
+    versions of a module that are ignored.
+    See https://go.dev/ref/mod#go-mod-file-exclude.
+
+    Note: Before Go 1.16, excluded versions resulted in the next higher
+    available version being silently chosen and not committed to go.mod,
+    leading to non-deterministic builds. From Go 1.16 onwards, the
+    substituting dependency must be explicitly captured in go.mod.
+    """
+
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.Go", RequirementsGo)
 
 
 @dataclass(eq=False, repr=False)
 class RequirementsGoDependency(betterproto2.Message):
+    """
+    Dependency represents a module requirement in a go.mod file.
+    The requirement field contains the version query (e.g. "v1.2.3").
+    See https://go.dev/ref/mod#go-mod-file-require
+    """
+
     name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
 
     requirement: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
 
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.Go.Dependency", RequirementsGoDependency)
+
+
+@dataclass(eq=False, repr=False)
+class RequirementsGoReplace(betterproto2.Message):
+    src: "RequirementsGoDependency | None" = betterproto2.field(1, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The module to be replaced. The version (in the requirement field) is
+    optional. If omitted, *all* versions of the module are replaced.
+    """
+
+    replacement: "RequirementsGoDependency | None" = betterproto2.field(2, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    The replacement can either be another remote module (specifying name
+    and version) or a path to a local module. Exactly one of replacement
+    or local_path will be set.
+    """
+
+    local_path: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+    """
+    The path to a local directory containing the replacement module.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Requirements.Go.Replace", RequirementsGoReplace)
 
 
 @dataclass(eq=False, repr=False)
@@ -1570,8 +2025,6 @@ class RequirementsMaven(betterproto2.Message):
     """
     The list of profiles.
     """
-
-    registry: "str" = betterproto2.field(7, betterproto2.TYPE_STRING)
 
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.Maven", RequirementsMaven)
@@ -1616,6 +2069,26 @@ class RequirementsMavenDependency(betterproto2.Message):
     The dependencies to be excluded, in the form of a list of package
     names.
     Exclusions may contain wildcards in both groupID and artifactID.
+    """
+
+    resolved_version: "str" = betterproto2.field(8, betterproto2.TYPE_STRING)
+    """
+    The resolved instances of the above version/name fields. I.e. If the
+    version field contained a Maven property, then the resolved version
+    will have the actual property's value interpolated in.
+    """
+
+    resolved_name: "str" = betterproto2.field(9, betterproto2.TYPE_STRING)
+
+    origin: "str" = betterproto2.field(10, betterproto2.TYPE_STRING)
+    """
+    The origin of the dependency. Can be any of the following values:
+    "" - declared in the current package's merged, effective POM. I.e. the
+         POM formed from merging all the ancestor POMs.
+    "parent" - this dependency represents the parent package's POM.
+    "management" - declared in a local or inherited `<dependencyManagement>`
+    section. "import" - declared in another BOM POM in the
+    `<dependencyManagement>` section.
     """
 
 
@@ -1811,6 +2284,13 @@ class RequirementsMavenRepository(betterproto2.Message):
     Whether the repository is enabled for snapshot downloads.
     """
 
+    resolved_url: "str" = betterproto2.field(6, betterproto2.TYPE_STRING)
+    """
+    The resolved instance of URL. I.e. If the URL contained a Maven
+    property, then the resolved URL will have the actual property's value
+    interpolated in.
+    """
+
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.Maven.Repository", RequirementsMavenRepository)
 
@@ -1828,6 +2308,16 @@ class RequirementsNpm(betterproto2.Message):
     Contents of any additional package.json files found inside the
     "node_modules" folder of the version's tarball, including nested
     "node_modules".
+    """
+
+    os: "list[str]" = betterproto2.field(3, betterproto2.TYPE_STRING, repeated=True)
+    """
+    The operating systems that this package version can run on.
+    """
+
+    cpu: "list[str]" = betterproto2.field(4, betterproto2.TYPE_STRING, repeated=True)
+    """
+    The CPU architectures that this package version can run on.
     """
 
 
@@ -1904,6 +2394,14 @@ class RequirementsNpmDependencies(betterproto2.Message):
     dependencies from the "dependencies" field.
     """
 
+    peer_dependency_metadata: "list[RequirementsNpmDependenciesPeerDependencyMetadata]" = betterproto2.field(
+        6, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+    """
+    The "peerDependencyMetadata" field of a package.json. A list of peer
+    dependency names that may be marked optional.
+    """
+
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.NPM.Dependencies", RequirementsNpmDependencies)
 
@@ -1927,6 +2425,27 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class RequirementsNpmDependenciesPeerDependencyMetadata(betterproto2.Message):
+    name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    The name of the package from the peerDependencies field.
+    """
+
+    optional: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    Whether the connection is marked optional inside
+    peerDependenciesMeta.
+    """
+
+
+default_message_pool.register_message(
+    "deps_dev.v3alpha",
+    "Requirements.NPM.Dependencies.PeerDependencyMetadata",
+    RequirementsNpmDependenciesPeerDependencyMetadata,
+)
+
+
+@dataclass(eq=False, repr=False)
 class RequirementsNuGet(betterproto2.Message):
     dependency_groups: "list[RequirementsNuGetDependencyGroup]" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, repeated=True
@@ -1934,6 +2453,18 @@ class RequirementsNuGet(betterproto2.Message):
     """
     The requirements grouped by target framework.
     """
+
+    target_frameworks: "list[str]" = betterproto2.field(2, betterproto2.TYPE_STRING, repeated=True)
+
+    development_dependency: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+
+    framework_assemblies: "list[RequirementsNuGetFrameworkAssembly]" = betterproto2.field(
+        4, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+
+    framework_references: "list[RequirementsNuGetFrameworkReference]" = betterproto2.field(
+        5, betterproto2.TYPE_MESSAGE, repeated=True
+    )
 
 
 default_message_pool.register_message("deps_dev.v3alpha", "Requirements.NuGet", RequirementsNuGet)
@@ -1971,9 +2502,37 @@ class RequirementsNuGetDependencyGroupDependency(betterproto2.Message):
     The requirement on the package.
     """
 
+    include: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+
+    exclude: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
+
 
 default_message_pool.register_message(
     "deps_dev.v3alpha", "Requirements.NuGet.DependencyGroup.Dependency", RequirementsNuGetDependencyGroupDependency
+)
+
+
+@dataclass(eq=False, repr=False)
+class RequirementsNuGetFrameworkAssembly(betterproto2.Message):
+    assembly_name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    target_framework: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message(
+    "deps_dev.v3alpha", "Requirements.NuGet.FrameworkAssembly", RequirementsNuGetFrameworkAssembly
+)
+
+
+@dataclass(eq=False, repr=False)
+class RequirementsNuGetFrameworkReference(betterproto2.Message):
+    name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    target_framework: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message(
+    "deps_dev.v3alpha", "Requirements.NuGet.FrameworkReference", RequirementsNuGetFrameworkReference
 )
 
 
@@ -2222,6 +2781,11 @@ class Version(betterproto2.Message):
     If true, this version has been marked as deprecated.
     """
 
+    deprecated_reason: "str" = betterproto2.field(17, betterproto2.TYPE_STRING)
+    """
+    The reason why this version is deprecated.
+    """
+
     licenses: "list[str]" = betterproto2.field(3, betterproto2.TYPE_STRING, repeated=True)
     """
     The licenses governing the use of this package version.
@@ -2302,8 +2866,44 @@ class Version(betterproto2.Message):
     Some upstream identifiers used to refer to this package version.
     """
 
+    cooldown: "VersionCooldown | None" = betterproto2.field(15, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    May be nil.
+    """
+
+    project_status: "VersionProjectStatus | None" = betterproto2.field(16, betterproto2.TYPE_MESSAGE, optional=True)
+    """
+    Whether a project is actively maintained, deprecated, etc. This field is
+    not set for any package version outside of the PyPI system. See
+    https://packaging.python.org/en/latest/specifications/project-status-markers/#project-status-markers
+    for more information.
+    """
+
 
 default_message_pool.register_message("deps_dev.v3alpha", "Version", Version)
+
+
+@dataclass(eq=False, repr=False)
+class VersionCooldown(betterproto2.Message):
+    """
+    A package cooldown is a security practice that mitigates supply chain
+    attacks by delaying the installation of newly published package versions.
+    This waiting period provides a critical time window for security
+    researchers and automated tools to identify and flag potential malware or
+    malicious code before the version is widely adopted.
+    """
+
+    end: "datetime.datetime | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, unwrap=lambda: __google__protobuf__.Timestamp, optional=True
+    )
+
+    description: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    Optional.
+    """
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Version.Cooldown", VersionCooldown)
 
 
 @dataclass(eq=False, repr=False)
@@ -2351,6 +2951,16 @@ class VersionProject(betterproto2.Message):
 
 
 default_message_pool.register_message("deps_dev.v3alpha", "Version.Project", VersionProject)
+
+
+@dataclass(eq=False, repr=False)
+class VersionProjectStatus(betterproto2.Message):
+    status: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    reason: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message("deps_dev.v3alpha", "Version.ProjectStatus", VersionProjectStatus)
 
 
 @dataclass(eq=False, repr=False)
@@ -2492,6 +3102,50 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
             metadata=metadata,
         )
 
+    async def get_findings(
+        self,
+        message: "GetFindingsRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "Findings":
+        """
+        GetFindings evaluates a specified package or version and returns
+        findings which are relevant to safe dependency management.
+        """
+
+        return await self._unary_unary(
+            "/deps_dev.v3alpha.Insights/GetFindings",
+            message,
+            Findings,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def get_findings_batch(
+        self,
+        message: "GetFindingsBatchRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "FindingsBatch":
+        """
+        GetFindingsBatch performs GetFindings requests for a batch of
+        packages/versions. Large result sets may be paginated.
+        """
+
+        return await self._unary_unary(
+            "/deps_dev.v3alpha.Insights/GetFindingsBatch",
+            message,
+            FindingsBatch,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
     async def get_requirements(
         self,
         message: "GetRequirementsRequest",
@@ -2503,7 +3157,7 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
         """
         GetRequirements returns the requirements for a given version in a
         system-specific format. Requirements are currently available for
-        Go, Maven, npm, NuGet, RubyGems, PyPI, and Cargo.
+        Cargo, Go, Maven, npm, NuGet, PyPI, and RubyGems.
 
         Requirements are the dependency constraints specified by the version.
         """
@@ -2724,7 +3378,7 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
         request, it returns the artifacts that matched the hash.
 
         Querying by content hash is currently supported for npm, Cargo, Maven,
-        NuGet, PyPI and RubyGems. It is typical for hash queries to return many
+        NuGet, PyPI, and RubyGems. It is typical for hash queries to return many
         results; hashes are matched against multiple release artifacts (such as
         JAR files) that comprise package versions, and any given artifact may
         appear in several package versions.
@@ -2750,7 +3404,8 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
         """
         PurlLookup searches for a package or package version specified via
         [purl](https://github.com/package-url/purl-spec),
-        and returns the corresponding result from GetPackage or GetVersion as appropriate.
+        and returns the corresponding result from GetPackage or GetVersion as
+        appropriate.
 
         For a package lookup, the purl should be in the form
           `pkg:type/namespace/name`   for a namespaced package name, or
@@ -2770,7 +3425,8 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
 
         Special characters in purls must be percent-encoded. This is described in
         detail by the
-        [purl spec](https://github.com/package-url/purl-spec/blob/master/PURL-SPECIFICATION.rst).
+        [purl
+        spec](https://github.com/package-url/purl-spec/blob/master/PURL-SPECIFICATION.rst).
         """
 
         return await self._unary_unary(
@@ -2830,8 +3486,8 @@ class InsightsStub(betterproto2_grpclib.ServiceStub):
         An image repository is identifier (eg. 'tensorflow') that refers to
         a collection of images.
 
-        An OCI Chain ID is a hashed encoding of an ordered sequence of OCI
-        layers. For further details see the [OCI Chain ID
+        An OCI Chain ID is a hashed encoding of an ordered sequence of OCI layers.
+        For further details see the [OCI Chain ID
         spec](https://github.com/opencontainers/image-spec/blob/main/config.md#layer-chainid).
         If an image contains empty layers, it is available from this endpoint
         under two different chain IDs - one computed by including empty layers in
