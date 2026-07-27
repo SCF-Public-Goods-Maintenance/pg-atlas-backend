@@ -1,0 +1,46 @@
+# Manually curated overrides for project fields. Can also be used to insert new projects.
+#
+# Used by sync_opengrants to enrich projects where org.stellar.communityfund.code is missing,
+# or when an outdated repo url is present and needs to be overridden with a new repo,
+# or with a full owner repo list.
+#
+# Schema: ../schema-override-project.yml
+#
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+# --- SDF official and prolific SDF members as projects ---
+
+daoip-5:scf:project:stellar_sdf:
+  display_name: "Stellar (SDF)"
+  project_type: "public-good"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellar"
+  metadata:
+    description: "SDF-maintained building blocks of the Stellar ecosystem."
+    open_source: true
+    website: "https://developers.stellar.org/"
+    x_profile: "https://x.com/stellarorg"
+
+daoip-5:scf:project:kalepail:
+  display_name: "kalepail"
+  project_type: "public-good"
+  activity_status: "in-dev"
+  git_owner_url: "https://github.com/kalepail"
+  metadata:
+    description: "Smart contracts before there were smart contracts. Passkey wallets that don't ask permission to be useful. Vegetables that stress-test a chain. Games that prove they're fair."
+    open_source: true
+    website: "https://folio.kalepail.com/"
+    x_profile: "https://x.com/kalepail"
+
+daoip-5:scf:project:elliotfriend:
+  display_name: "ElliotFriend"
+  project_type: "public-good"
+  activity_status: "in-dev"
+  git_owner_url: "https://github.com/ElliotFriend"
+  metadata:
+    description: "I'm Elliot. I'm your friend."
+    open_source: true
+    website: "https://elliot.voris.me/"
+    x_profile: "https://x.com/elliotfriend"
