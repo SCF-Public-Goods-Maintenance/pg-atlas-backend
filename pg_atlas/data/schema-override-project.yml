@@ -1,0 +1,58 @@
+# YAML Schema for project overrides
+#
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+type: object
+
+# Enforces that root-level keys match the DAOIP-URI structure
+propertyNames:
+  pattern: "^daoip-5:scf:project:[a-z0-9_-]+$"
+
+# Defines project item override fields
+additionalProperties:
+  type: object
+  required:
+    - display_name
+    - project_type
+    - activity_status
+    - git_owner_url
+  properties:
+    display_name:
+      type: string
+    project_type:
+      type: string
+    activity_status:
+      type: string
+    category:
+      type: string
+    git_owner_url:
+      type: string
+      format: uri
+    git_repo_urls:
+      type: array
+      items:
+        type: string
+        format: uri
+
+    metadata:
+      type: object
+      required:
+        - description
+        - open_source
+      properties:
+        description:
+          type: string
+        open_source:
+          type: boolean
+        website:
+          type: string
+          format: uri
+        x_profile:
+          type: string
+          format: uri
+
+      additionalProperties: false
+
+  additionalProperties: false
