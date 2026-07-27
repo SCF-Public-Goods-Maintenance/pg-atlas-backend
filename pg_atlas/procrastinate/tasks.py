@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -84,8 +84,7 @@ DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "R
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Path to the manually-curated project → git URL mapping.
-_MAPPING_PATH = Path(__file__).parent.parent / "data" / "project-git-mapping.yml"
+_PROJECT_OVERRIDE_DIR = Path(__file__).parent.parent / "data" / "projects"
 
 _MAX_RELEASE_ENTRIES = 555
 
@@ -200,7 +199,7 @@ async def sync_opengrants(
     defers one ``process_project`` task per project.
     """
     logger.info("sync_opengrants: starting")
-    git_mapping = _load_git_mapping()
+    project_overrides = _load_project_overrides()
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         projects: list[ScfProject] = await fetch_scf_projects(client)
@@ -212,7 +211,7 @@ async def sync_opengrants(
         requested_ids = set(selected_canonical_ids)
         projects = [project for project in projects if project.canonical_id in requested_ids]
 
-        available_ids = {project.canonical_id for project in projects}
+        available_ids = {project.canonical_id for project in projects} | project_overrides.keys()
         missing_ids = requested_ids.difference(available_ids)
         if missing_ids:
             missing_ids_text = ", ".join(sorted(missing_ids))
@@ -223,10 +222,9 @@ async def sync_opengrants(
     project_batch_data: list[dict[str, Any]] = []
     for proj in projects:
         # Enrich from manual mapping when an override is present.
-        if proj.canonical_id in git_mapping:
-            mapping = git_mapping[proj.canonical_id]
-            proj.git_owner_url = mapping.get("git_owner_url")
-            proj.git_repo_url = mapping.get("git_repo_url")
+        if proj.canonical_id in project_overrides:
+            override = project_overrides.pop(proj.canonical_id)
+            proj = _patched_project(proj, override)
 
         project_batch_data.append(
             {
@@ -234,6 +232,17 @@ async def sync_opengrants(
                 "extended_universe": extended_universe,
             }
         )
+
+    # Add jobs for any overrides that are not in the OpenGrants list
+    for canonical_id, fields in project_overrides.items():
+        metadata = fields.pop("metadata", {})
+        project_data = {
+            "canonical_id": canonical_id,
+            "git_repo_url": None,
+            **fields,
+            "project_metadata": metadata,
+        }
+        project_batch_data.append(project_data)
 
     await process_project.batch_defer_async(*project_batch_data)
     logger.info(f"sync_opengrants: deferred {len(project_batch_data)} process_project tasks")
@@ -788,19 +797,40 @@ def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[
 # ---------------------------------------------------------------------------
 
 
-def _load_git_mapping() -> dict[str, dict[str, str]]:
+def _load_project_overrides() -> dict[str, dict[str, Any]]:
     """
-    Load the project → git URL mapping YAML file.
+    Load all YAML files containing project overrides.
 
     Returns a dict mapping ``projectId`` → ``{git_owner_url, git_repo_url}``.
+    Raises KeyError if a project key is encountered in multiple files.
     """
-    if not _MAPPING_PATH.exists():
+    if not _PROJECT_OVERRIDE_DIR.exists():
         return {}
 
-    with _MAPPING_PATH.open() as f:
-        data: dict[str, dict[str, str]] = yaml.safe_load(f) or {}
+    overrides: dict[str, dict[str, Any]] = {}
+    override_sources: dict[str, str] = {}
+    for yml_file in _PROJECT_OVERRIDE_DIR.glob("*.yml"):
+        with yml_file.open() as f:
+            data: dict[str, dict[str, Any]] = yaml.safe_load(f) or {}
 
-    return data
+        for key in data:
+            if key in overrides:
+                raise KeyError((override_sources[key], yml_file.name, key))
+
+            override_sources[key] = yml_file.name
+
+        overrides |= data
+
+    return overrides
+
+
+def _patched_project(project: ScfProject, patch: dict[str, Any]) -> ScfProject:
+    metadata: dict[str, Any] | None = patch.pop("metadata", None)
+    updated_project = replace(project, **patch)
+    if metadata:
+        updated_project.project_metadata |= metadata
+
+    return updated_project
 
 
 # ---------------------------------------------------------------------------
