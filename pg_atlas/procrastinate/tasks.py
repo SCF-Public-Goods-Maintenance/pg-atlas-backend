@@ -58,7 +58,7 @@ from pg_atlas.procrastinate.github import (
     GitHubRepoMetadata,
     PackageReference,
     detect_packages_from_repo,
-    get_single_repo,
+    fetch_repo_list,
     latest_version_from_repo,
     list_org_repos,
 )
@@ -241,7 +241,7 @@ async def sync_opengrants(
         metadata = fields.pop("metadata", {})
         project_data = {
             "canonical_id": canonical_id,
-            "git_repo_url": None,
+            "git_repo_urls": list[str](),
             **fields,
             "project_metadata": metadata,
         }
@@ -262,7 +262,7 @@ async def process_project(
     display_name: str,
     activity_status: str,
     git_owner_url: str | None,
-    git_repo_url: str | None,
+    git_repo_urls: list[str],
     project_metadata: dict[str, Any] | None,
     category: str | None = None,
     extended_universe: bool = False,
@@ -309,12 +309,12 @@ async def process_project(
 
     repos_to_crawl: list[GitHubRepoMetadata] = []
     if owner:
-        if extended_universe or not git_repo_url:
+        if extended_universe or not git_repo_urls:
             repos_to_crawl = list_org_repos(owner)
         else:
-            repo_name = git_repo_url.rstrip("/").rsplit("/", 1)[-1]
-            repos_to_crawl = get_single_repo(owner, repo_name)
-            logger.info(f"Restricting {git_owner_url} crawl to {repo_name} only.")
+            repos_to_crawl = fetch_repo_list(git_repo_urls)
+            repo_names = [repo.full_name for repo in repos_to_crawl]
+            logger.info(f"Restricting {canonical_id} crawl to {repo_names}.")
 
     # ----- deps.dev GetProjectBatch -----
     # Build project IDs of the form "github.com/owner/repo".

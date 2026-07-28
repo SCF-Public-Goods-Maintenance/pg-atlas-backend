@@ -60,7 +60,7 @@ class ScfProject:
     Intermediate representation of an SCF project extracted from OpenGrants.
 
     Fields correspond 1-to-1 with the columns needed for a ``Project`` upsert.
-    ``git_repo_url`` is not stored on ``Project`` but is passed to the
+    ``git_repo_urls`` is not stored on ``Project`` but is passed to the
     downstream ``process_project`` task so it can target deps.dev lookups.
     """
 
@@ -68,7 +68,7 @@ class ScfProject:
     display_name: str
     activity_status: ActivityStatus
     git_owner_url: str | None
-    git_repo_url: str | None
+    git_repo_urls: list[str] = field(default_factory=list[str])
     category: str | None = None
     project_metadata: dict[str, Any] = field(default_factory=lambda: {})
 
@@ -510,7 +510,7 @@ def _map_application(
     activity_status = _activity_status_from_tranche(app)
 
     git_owner_url: str | None = None
-    git_repo_url: str | None = None
+    git_repo_urls: list[str] = []
 
     raw_code_url = _get_ext(app, "org.stellar.communityfund.code")
 
@@ -523,7 +523,7 @@ def _map_application(
             )
         else:
             git_owner_url = org_url
-            git_repo_url = repo_url
+            git_repo_urls = [repo_url] if repo_url else []
 
     project_metadata = _build_project_metadata(project=None, latest_app=app, scf_submissions=scf_submissions)
 
@@ -532,7 +532,7 @@ def _map_application(
         display_name=display_name,
         activity_status=activity_status,
         git_owner_url=git_owner_url,
-        git_repo_url=git_repo_url,
+        git_repo_urls=git_repo_urls,
         project_metadata=project_metadata,
     )
 
@@ -567,7 +567,7 @@ def _merge_project_and_applications(
 
     # --- GitHub URL: latest application first, then project socials ---
     git_owner_url: str | None = None
-    git_repo_url: str | None = None
+    git_repo_urls: list[str] = []
 
     if latest_app is not None:
         raw_code_url = _get_ext(latest_app, "org.stellar.communityfund.code")
@@ -579,11 +579,12 @@ def _merge_project_and_applications(
                 logger.warning(f"Invalid GitHub URL in application code for project {canonical_id}: {raw_code_url!r}")
             else:
                 git_owner_url = org_url
-                git_repo_url = repo_url
+                git_repo_urls = [repo_url] if repo_url else []
 
     if git_owner_url is None:
         socials = project.get("socials", [])
-        git_owner_url, git_repo_url = _extract_github_from_socials(socials)
+        git_owner_url, repo_url = _extract_github_from_socials(socials)
+        git_repo_urls = [repo_url] if repo_url else []
 
     # --- Metadata ---
     project_metadata = _build_project_metadata(
@@ -597,7 +598,7 @@ def _merge_project_and_applications(
         display_name=display_name,
         activity_status=activity_status,
         git_owner_url=git_owner_url,
-        git_repo_url=git_repo_url,
+        git_repo_urls=git_repo_urls,
         category=category,
         project_metadata=project_metadata,
     )

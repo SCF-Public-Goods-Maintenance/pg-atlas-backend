@@ -259,36 +259,40 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return []
 
 
-def get_single_repo(owner: str, repo_name: str) -> list[GitHubRepoMetadata]:
+def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
     """
-    Return metadata for a single public repo owned by *owner*.
+    Return metadata for a list of public repos.
+
+    Logs GitHub API errors and returns the available results.
     """
     gh = get_github_client()
+    metadata: list[GitHubRepoMetadata] = []
 
-    try:
-        repo = gh.get_repo(f"{owner}/{repo_name}")
-        return [
-            GitHubRepoMetadata(
-                name=repo.name,
-                full_name=repo.full_name,
-                description=repo.description or "",
-                default_branch=repo.default_branch,
-                stars=repo.stargazers_count,
-                forks=repo.forks_count,
-                pushed_at=repo.pushed_at,
-                language=repo.language or "",
-                topics=repo.topics,
+    for repo_url in git_repo_urls:
+        owner, repo_name = repo_url.rstrip("/").rsplit("/", 2)[-2:]
+        try:
+            repo = gh.get_repo(f"{owner}/{repo_name}")
+            metadata.append(
+                GitHubRepoMetadata(
+                    name=repo.name,
+                    full_name=repo.full_name,
+                    description=repo.description or "",
+                    default_branch=repo.default_branch,
+                    stars=repo.stargazers_count,
+                    forks=repo.forks_count,
+                    pushed_at=repo.pushed_at,
+                    language=repo.language or "",
+                    topics=repo.topics,
+                )
             )
-        ]
+        except GithubException as exc:
+            if exc.status in (404, 409):
+                msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
+                logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} - {msg}")
+            else:
+                logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
 
-    except GithubException as exc:
-        if exc.status in (404, 409):
-            msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
-            logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} - {msg}")
-        else:
-            logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
-
-        return []
+    return metadata
 
 
 def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:
