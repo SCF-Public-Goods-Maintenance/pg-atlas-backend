@@ -66,7 +66,7 @@ def test_purl_type_for_system() -> None:
     assert _purl_type_for_system("unknown") is None
 
 
-def test_load_git_mapping() -> None:
+def test_load_project_overrides() -> None:
     mapping = _load_project_overrides()
     assert "daoip-5:scf:project:stellar_sdf" in mapping
     assert "daoip-5:scf:project:kalepail" in mapping

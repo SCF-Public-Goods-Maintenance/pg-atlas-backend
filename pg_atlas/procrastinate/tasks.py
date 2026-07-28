@@ -195,7 +195,7 @@ async def sync_opengrants(
     Root bootstrap task: fetch all SCF projects and fan out.
 
     Fetches every SCF round from OpenGrants, deduplicates by
-    ``projectId``, enriches with the manual git-mapping file, and
+    ``projectId``, patches project data with their overrides, and
     defers one ``process_project`` task per project.
     """
     logger.info("sync_opengrants: starting")
@@ -210,12 +210,15 @@ async def sync_opengrants(
     if selected_canonical_ids:
         requested_ids = set(selected_canonical_ids)
         projects = [project for project in projects if project.canonical_id in requested_ids]
+        project_overrides = {key: val for key, val in project_overrides.items() if key in requested_ids}
 
         available_ids = {project.canonical_id for project in projects} | project_overrides.keys()
         missing_ids = requested_ids.difference(available_ids)
         if missing_ids:
             missing_ids_text = ", ".join(sorted(missing_ids))
-            raise ValueError(f"sync_opengrants: canonical_id not found in OpenGrants results: {missing_ids_text}")
+            raise ValueError(
+                f"sync_opengrants: canonical_id not found in OpenGrants results or in project overrides: {missing_ids_text}"
+            )
 
     logger.info(f"sync_opengrants: {len(projects)} projects from OpenGrants")
 
@@ -801,8 +804,9 @@ def _load_project_overrides() -> dict[str, dict[str, Any]]:
     """
     Load all YAML files containing project overrides.
 
-    Returns a dict mapping ``projectId`` → ``{git_owner_url, git_repo_url}``.
-    Raises KeyError if a project key is encountered in multiple files.
+    Returns a dict mapping ``canonical_id`` → override field dict (e.g. display_name,
+    activity_status, git_owner_url, git_repo_url, metadata).
+    Raises ValueError if a project key is encountered in multiple files.
     """
     if not _PROJECT_OVERRIDE_DIR.exists():
         return {}
@@ -815,7 +819,7 @@ def _load_project_overrides() -> dict[str, dict[str, Any]]:
 
         for key in data:
             if key in overrides:
-                raise KeyError((override_sources[key], yml_file.name, key))
+                raise ValueError(f"Duplicate project override key {key!r} in {override_sources[key]!r} and {yml_file.name!r}")
 
             override_sources[key] = yml_file.name
 

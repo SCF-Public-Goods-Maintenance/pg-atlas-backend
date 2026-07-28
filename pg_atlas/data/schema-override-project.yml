@@ -8,7 +8,7 @@ type: object
 
 # Enforces that root-level keys match the DAOIP-URI structure
 propertyNames:
-  pattern: "^daoip-5:scf:project:[a-z0-9_-]+$"
+  pattern: "^daoip-5:scf:project:[a-z0-9_.-]+$"
 
 # Defines project item override fields
 additionalProperties:
