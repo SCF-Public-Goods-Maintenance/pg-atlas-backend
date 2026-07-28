@@ -1,0 +1,101 @@
+# Automatically drafted overrides for project fields. Always reviewed and corrected by the human reviewer.
+#
+# This patch file is meant to be updated quarterly, during the PG Award's discussion period.
+# It exclusively contains patches and new entries based on PG Award proposals.
+# The overrides allow PG Atlas to provide the most recent data before it is captured by other sources.
+#
+# Schema: ../schema-override-project.yml
+#
+#
+# SPDX-FileCopyrightText: 2026 PG Atlas contributors
+# SPDX-License-Identifier: MPL-2.0
+
+daoip-5:scf:project:.net_stellar_sdk:
+  display_name: ".NET Stellar SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Beans-BV"
+
+daoip-5:scf:project:flutter_stellar_sdk:
+  display_name: "Stellar Flutter SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Soneso"
+
+daoip-5:scf:project:java_stellar_sdk:
+  display_name: "Java Stellar SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/lightsail-network"
+
+daoip-5:scf:project:obsrvr_radar:
+  display_name: "OBSRVR Radar"
+  activity_status: "live"
+  git_owner_url: "https://github.com/withObsrvr"
+
+daoip-5:scf:project:opengrants:
+  display_name: "OpenGrants"
+  activity_status: "live"
+  git_owner_url: "https://github.com/metagov"
+
+daoip-5:scf:project:python_stellar_sdk:
+  display_name: "Python Stellar SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/StellarCN"
+
+daoip-5:scf:project:refractorspace:
+  display_name: "RefractorSpace"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellar-expert"
+
+daoip-5:scf:project:scaffold_stellar:
+  display_name: "Stellar Scaffold"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellar-scaffold"
+
+daoip-5:scf:project:scout:
+  display_name: "Scout"
+  activity_status: "live"
+  git_owner_url: "https://github.com/CoinFabrik"
+
+daoip-5:scf:project:solidity_contracts_on_soroban:
+  display_name: "Hyperledger Solang"
+  activity_status: "live"
+  git_owner_url: "https://github.com/hyperledger-solang"
+
+daoip-5:scf:project:soroban_security_portal:
+  display_name: "Soroban Security Portal"
+  activity_status: "live"
+  git_owner_url: "https://github.com/inferara"
+
+daoip-5:scf:project:soropg:
+  display_name: "SoroPG"
+  activity_status: "live"
+  git_owner_url: "https://github.com/jamesbachini"
+
+daoip-5:scf:project:stellar_hardware_wallet_support:
+  display_name: "Stellar Hardware Wallet Support"
+  activity_status: "live"
+  git_owner_url: "https://github.com/lightsail-network"
+
+daoip-5:scf:project:stellar_ios_mac_sdk:
+  display_name: "Stellar iOS SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Soneso"
+
+daoip-5:scf:project:stellar_php_sdk:
+  display_name: "Stellar PHP SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Soneso"
+
+daoip-5:scf:project:stellar_registry:
+  display_name: "Stellar Registry"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellar-registry"
+
+daoip-5:scf:project:stellarchain.io:
+  display_name: "Stellarchain"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellarchain"
+
+daoip-5:scf:project:stellar_light:
+  display_name: "Stellar Light"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Stellar-Light"
