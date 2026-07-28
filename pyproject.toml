@@ -29,6 +29,7 @@ dependencies = [
     "pyrate-limiter>=4.1.0",
     "pypistats>=1.13.0",
     "packaging>=26.0",
+    "mistletoe>=1.6.0",
 ]
 
 [dependency-groups]
