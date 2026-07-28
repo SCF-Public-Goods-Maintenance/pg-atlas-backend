@@ -29,7 +29,7 @@ try:
     from pg_atlas.procrastinate.tasks import (
         GitHubRepoMetadata,
         PackageReference,
-        _load_git_mapping,
+        _load_project_overrides,
         _purl_type_for_system,
         crawl_github_repo,
         crawl_package_deps,
@@ -66,10 +66,10 @@ def test_purl_type_for_system() -> None:
     assert _purl_type_for_system("unknown") is None
 
 
-def test_load_git_mapping() -> None:
-    mapping = _load_git_mapping()
-    assert "daoip-5:scf:project:python_stellar_sdk" in mapping
-    assert "daoip-5:scf:project:stellarchain.io" in mapping
+def test_load_project_overrides() -> None:
+    mapping = _load_project_overrides()
+    assert "daoip-5:scf:project:stellar_sdf" in mapping
+    assert "daoip-5:scf:project:kalepail" in mapping
 
 
 async def test_defer_with_lock_handles_already_enqueued(mocker: Any) -> None:
@@ -83,7 +83,7 @@ async def test_defer_with_lock_handles_already_enqueued(mocker: Any) -> None:
     assert ok is False
 
 
-async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> None:
+async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -> None:
     projects = [
         ScfProject(
             canonical_id="proj:no-code",
@@ -105,12 +105,22 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
     mocker.patch(
-        "pg_atlas.procrastinate.tasks._load_git_mapping",
+        "pg_atlas.procrastinate.tasks._load_project_overrides",
         return_value={
+            "proj:to-be-inserted": {
+                "display_name": "To be inserted",
+                "activity_status": "non-responsive",
+                "git_owner_url": "https://github.com/sloth",
+            },
             "proj:no-code": {
+                "category": "Visibility",
                 "git_owner_url": "https://github.com/enriched",
                 "git_repo_url": "https://github.com/enriched/repo",
-            }
+            },
+            "proj:with-code": {
+                "activity_status": "live",
+                "metadata": {"description": "Contracts launched on mainnet!"},
+            },
         },
     )
     defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
@@ -119,11 +129,18 @@ async def test_sync_opengrants_defers_each_project_with_mapping(mocker: Any) -> 
 
     defer_mock.assert_awaited_once()
     defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
-    assert len(defer_data) == 2
+    assert len(defer_data) == 3
     assert defer_data[0]["git_owner_url"] == "https://github.com/enriched"
-    assert defer_data[0]["category"] == "Developer Tooling"
+    assert defer_data[0]["category"] == "Visibility"
+    assert defer_data[1]["activity_status"] == ActivityStatus.live
     assert defer_data[1]["git_repo_url"] == "https://github.com/a/b"
     assert defer_data[1]["category"] == "Smart Contracts"
+    assert defer_data[1]["project_metadata"]["description"] == "Contracts launched on mainnet!"
+    assert defer_data[2]["canonical_id"] == "proj:to-be-inserted"
+    assert defer_data[2]["display_name"] == "To be inserted"
+    assert defer_data[2]["activity_status"] == "non-responsive"
+    assert defer_data[2]["git_owner_url"] == "https://github.com/sloth"
+    assert defer_data[2]["git_repo_url"] is None
 
 
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
@@ -147,7 +164,7 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
     ]
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
-    mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
+    mocker.patch("pg_atlas.procrastinate.tasks._load_project_overrides", return_value={})
     defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants(canonical_ids=["daoip-5:scf:project:python_stellar_sdk"])
@@ -169,9 +186,10 @@ async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> 
             category="Developer Tooling",
         )
     ]
+    overrides = {"daoip-5:scf:project:need_to_insert": dict[str, str]()}
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
-    mocker.patch("pg_atlas.procrastinate.tasks._load_git_mapping", return_value={})
+    mocker.patch("pg_atlas.procrastinate.tasks._load_project_overrides", return_value=overrides)
     defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
 
     with pytest.raises(ValueError, match="not found") as exc_info:
@@ -180,11 +198,14 @@ async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> 
                 "daoip-5:scf:project:python_stellar_sdk",
                 "daoip-5:scf:project:missing_one",
                 "daoip-5:scf:project:missing_two",
+                "daoip-5:scf:project:need_to_insert",
             ]
         )
 
     assert "daoip-5:scf:project:missing_one" in str(exc_info.value)
     assert "daoip-5:scf:project:missing_two" in str(exc_info.value)
+    assert "daoip-5:scf:project:python_stellar_sdk" not in str(exc_info.value)
+    assert "daoip-5:scf:project:need_to_insert" not in str(exc_info.value)
     defer_mock.assert_not_awaited()
 
 
@@ -684,8 +705,10 @@ class TestDeferredPayloadJsonSerializable:
 
         depsdev_info = SimpleNamespace(packages=[pkg], stars_count=1000, forks_count=50)
         payload = build_repo_defer_data(
-            repo_info, project_id=7, projects_info={"github.com/stellarcn/py-stellar-base": depsdev_info}
-        )  # type: ignore[arg-type]
+            repo_info,
+            project_id=7,
+            projects_info={"github.com/stellarcn/py-stellar-base": depsdev_info},  # pyright: ignore[reportArgumentType]
+        )
 
         data = self._assert_json_round_trips(payload)
         assert data["owner"] == "StellarCN"
