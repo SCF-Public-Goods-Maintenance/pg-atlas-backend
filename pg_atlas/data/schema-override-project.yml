@@ -37,7 +37,6 @@ additionalProperties:
       type: object
       required:
         - description
-        - open_source
       properties:
         description:
           type: string
@@ -49,6 +48,8 @@ additionalProperties:
         x_profile:
           type: string
           format: uri
+        first_released:
+          type: string
 
       additionalProperties: false
 
