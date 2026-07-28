@@ -25,10 +25,8 @@ commit is created.
 
 ## Known Issues and PR Context
 
-As mandatory preparation for any task, use your GitHub tools to list all open _and_ closed issues
-for the current repo. Read the open and closed issues in full with all their comments when they are
-relevant for the current task. Memorize the entire issue list so you can read full issues during
-task implementation, as they become relevant.
+As mandatory preparation for any task, use your GitHub tools to list all open issues for the current
+repo. Read the open issues in full with all their comments when they are relevant for the current task.
 
 Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if
 the feature branch is associated with a PR: read the full PR including its comments to understand
@@ -42,9 +40,8 @@ comments.
 
 ## Deliverable Naming
 
-Work is organised into deliverables labelled A1, A2, A3 … (from the proposal in
-`SCF-Public-Goods-Maintenance/scf-public-goods-maintenance.github.io`). Current scope is defined by
-whichever is being built; stubs for later deliverables are marked `# TODO A<n>:` in code.
+Previous work was organised into deliverables labelled A1, A2, A3 … (from the proposal in
+`SCF-Public-Goods-Maintenance/scf-public-goods-maintenance.github.io`).
 
 ## Tooling
 
@@ -114,8 +111,6 @@ These rules MUST be enforced manually. No ruff rules are available to enforce th
 ## Current Deployment State
 
 This is a compact list. Keep it compact.
-When you start work on a new deliverable, read `.github/agent-handoff/implementation-notes.md`.
-When you have validated that a deliverable has been completed, update `implementation-notes.md`.
 
 - **A1 complete**: CI green, DO App Platform live at
   `https://api.pgatlas.xyz` (`basic-xxs`, region `ams3`).
