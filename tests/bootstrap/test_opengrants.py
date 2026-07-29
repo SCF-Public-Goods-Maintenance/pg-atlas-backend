@@ -271,7 +271,7 @@ def test_merge_project_and_applications() -> None:
     assert result.display_name == "Test Project"
     assert result.activity_status == ActivityStatus.live
     assert result.git_owner_url == "https://github.com/test-org"
-    assert result.git_repo_urls == "https://github.com/test-org/test-repo"
+    assert result.git_repo_urls == ["https://github.com/test-org/test-repo"]
     assert result.category == "Developer Tooling"
     assert result.project_metadata["description"] == "A test project description"
 
@@ -290,7 +290,7 @@ def test_merge_project_no_app_uses_socials_for_github() -> None:
     result = _merge_project_and_applications(project, None, [])
 
     assert result.git_owner_url == "https://github.com/stellar"
-    assert result.git_repo_urls == "https://github.com/stellar/go"
+    assert result.git_repo_urls == ["https://github.com/stellar/go"]
     assert result.activity_status == ActivityStatus.in_dev
 
 
