@@ -14,88 +14,255 @@ daoip-5:scf:project:.net_stellar_sdk:
   display_name: ".NET Stellar SDK"
   activity_status: "live"
   git_owner_url: "https://github.com/Beans-BV"
+  git_repo_urls:
+    - "https://github.com/Beans-BV/dotnet-stellar-sdk"
+  category: "SDKs"
+  metadata:
+    description: ".NET Stellar SDK that supports API backends with Horizon and Soroban."
+    website: "https://beans-bv.github.io/dotnet-stellar-sdk/"
+    first_released: "April 2018"
 
 daoip-5:scf:project:flutter_stellar_sdk:
   display_name: "Stellar Flutter SDK"
   activity_status: "live"
   git_owner_url: "https://github.com/Soneso"
+  git_repo_urls:
+    - "https://github.com/Soneso/stellar_flutter_sdk"
+  category: "SDKs"
+  metadata:
+    description: "The Stellar SDK for Flutter, providing transaction building, Horizon and Soroban RPC access, high-level
+      Soroban smart contract support, and implements 18 Stellar Ecosystem Proposals (SEPs) across iOS, Android, and web."
+    website: "https://github.com/Soneso/stellar_flutter_sdk"
+    first_released: "June 2020"
 
 daoip-5:scf:project:java_stellar_sdk:
   display_name: "Java Stellar SDK"
   activity_status: "live"
   git_owner_url: "https://github.com/lightsail-network"
+  git_repo_urls:
+    - "https://github.com/lightsail-network/java-stellar-sdk"
+  category: "SDKs"
+  metadata:
+    description: "The Java Stellar SDK provides APIs to build transactions, query Horizon, and interact with Soroban RPC,
+      with Android support and implementations of several Stellar Ecosystem Proposals."
+    website: "https://github.com/lightsail-network/java-stellar-sdk"
+    first_released: "November 2015"
+
+daoip-5:scf:project:kmp_stellar_sdk:
+  display_name: "KMP Stellar SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Soneso"
+  git_repo_urls:
+    - "https://github.com/Soneso/kmp-stellar-sdk"
+  category: "SDKs"
+  metadata:
+    description: "Write your Stellar integration once in Kotlin and run it across Mobile, Web, Desktop, and Server: transactions,
+      Stellar RPC and Horizon, smart contracts, OpenZeppelin smart accounts, and 17 SEPs."
+    website: "https://developers.stellar.org/docs/tools/sdks/client-sdks#kotlin-multiplatform-sdk"
+    first_released: "October 2025"
 
 daoip-5:scf:project:obsrvr_radar:
   display_name: "OBSRVR Radar"
   activity_status: "live"
   git_owner_url: "https://github.com/withObsrvr"
+  git_repo_urls:
+    - "https://github.com/withObsrvr/stellarbeat"
+  category: "Infrastructure Monitoring"
+  metadata:
+    description: "A Stellar network explorer that turns validator, quorum, organization, and history archive data into plain-language
+      network health insights."
+    website: "https://radar.withobsrvr.com"
+    first_released: "June 2025"
 
 daoip-5:scf:project:opengrants:
   display_name: "OpenGrants"
   activity_status: "live"
   git_owner_url: "https://github.com/metagov"
+  git_repo_urls:
+    - "https://github.com/metagov/opengrants-platform"
+    - "https://github.com/metagov/Grants-Gateway-API"
+  category: "Other"
+  metadata:
+    description: "OpenGrants is open data infrastructure for Web3 grants that maintains the largest cross-ecosystem funding
+      data set, including all completed SCF rounds."
+    website: "https://opengrants.daostar.org/"
+    first_released: "September 2025"
 
 daoip-5:scf:project:python_stellar_sdk:
   display_name: "Python Stellar SDK"
   activity_status: "live"
   git_owner_url: "https://github.com/StellarCN"
+  git_repo_urls:
+    - "https://github.com/StellarCN/py-stellar-base"
+  category: "SDKs"
+  metadata:
+    description: "The Python Stellar SDK provides APIs to build transactions, query Horizon, and interact with Soroban RPC,
+      with implementations of several Stellar Ecosystem Proposals."
+    website: "https://stellar-sdk.readthedocs.io"
+    first_released: "October 2016"
 
 daoip-5:scf:project:refractorspace:
   display_name: "RefractorSpace"
   activity_status: "live"
   git_owner_url: "https://github.com/stellar-expert"
+  git_repo_urls:
+    - "https://github.com/stellar-expert/refractor"
+  category: "Governance Tools"
+  metadata:
+    description: "Pending transactions storage and multisig aggregator for Stellar Network."
+    website: "https://refractor.space"
+    first_released: "March 2021"
 
 daoip-5:scf:project:scaffold_stellar:
   display_name: "Stellar Scaffold"
   activity_status: "live"
   git_owner_url: "https://github.com/stellar-scaffold"
+  git_repo_urls:
+    - "https://github.com/stellar-scaffold/cli"
+  category: "Developer Experience"
+  metadata:
+    description: "Go from idea to app faster with a custom, pluggable CLI; a multi-framework template system; and a customizable,
+      modern frontend."
+    website: "https://scaffoldstellar.org/"
+    first_released: "May 2025"
 
 daoip-5:scf:project:scout:
   display_name: "Scout"
   activity_status: "live"
   git_owner_url: "https://github.com/CoinFabrik"
+  git_repo_urls:
+    - "https://github.com/CoinFabrik/scout-audit"
+  category: "Security & Auditing Tools"
+  metadata:
+    description: "Scout is an extensible open source vulnerability analyzer built for Soroban."
+    website: "https://www.coinfabrik.com/products/scout/"
+    first_released: "30 June 2023"
 
 daoip-5:scf:project:solidity_contracts_on_soroban:
   display_name: "Hyperledger Solang"
   activity_status: "live"
   git_owner_url: "https://github.com/hyperledger-solang"
+  git_repo_urls:
+    - "https://github.com/hyperledger-solang/solang"
+  category: "Developer Experience"
+  metadata:
+    description: "A Solidity compiler for Stellar"
+    website: "https://solang.io/"
+    first_released: "November 2025"
 
 daoip-5:scf:project:soroban_security_portal:
   display_name: "Soroban Security Portal"
   activity_status: "live"
   git_owner_url: "https://github.com/inferara"
+  git_repo_urls:
+    - "https://github.com/inferara/soroban-security-portal"
+  category: "Developer Experience"
+  metadata:
+    description: "A Soroban specific knowledge base which lets users access audits, individual vulnerabilities and code in
+      an organized fashion."
+    website: "https://sorobansecurity.com/"
+    first_released: "July 2025 (website) September 2025 (all milestones)"
 
 daoip-5:scf:project:soropg:
   display_name: "SoroPG"
   activity_status: "live"
   git_owner_url: "https://github.com/jamesbachini"
+  git_repo_urls:
+    - "https://github.com/jamesbachini/Soroban-Playground"
+  category: "Developer Experience"
+  metadata:
+    description: "SoroPG is an open-source, browser-based Soroban IDE that lets developers write, test, run security checks,
+      deploy, and interact with Stellar smart contracts with zero local setup."
+    website: "https://soropg.com"
+    first_released: "May 2025"
 
 daoip-5:scf:project:stellar_hardware_wallet_support:
   display_name: "Stellar Hardware Wallet Support"
   activity_status: "live"
   git_owner_url: "https://github.com/lightsail-network"
+  git_repo_urls:
+    - "https://github.com/LedgerHQ/app-stellar"
+    - "https://github.com/ledgerhq/ledger-live"
+    - "https://github.com/trezor/trezor-firmware"
+    - "https://github.com/trezor/trezor-suite"
+    - "https://github.com/lightsail-network/strledger"
+  category: "Wallet Support"
+  metadata:
+    description: "Hardware wallet integration for Stellar, enabling secure transaction signing on Ledger and Trezor devices."
+    website: "https://lightsail.network"
+    first_released: "July 2021"
 
 daoip-5:scf:project:stellar_ios_mac_sdk:
   display_name: "Stellar iOS SDK"
   activity_status: "live"
   git_owner_url: "https://github.com/Soneso"
-
-daoip-5:scf:project:stellar_php_sdk:
-  display_name: "Stellar PHP SDK"
-  activity_status: "live"
-  git_owner_url: "https://github.com/Soneso"
-
-daoip-5:scf:project:stellar_registry:
-  display_name: "Stellar Registry"
-  activity_status: "live"
-  git_owner_url: "https://github.com/stellar-registry"
-
-daoip-5:scf:project:stellarchain.io:
-  display_name: "Stellarchain"
-  activity_status: "live"
-  git_owner_url: "https://github.com/stellarchain"
+  git_repo_urls:
+    - "https://github.com/Soneso/stellar-ios-mac-sdk"
+  category: "SDKs"
+  metadata:
+    description: "The Stellar SDK for iOS and macOS, providing transaction building, Horizon and Soroban RPC access, high-level
+      Soroban smart contract support, and implements 18 Stellar Ecosystem Proposals (SEPs)."
+    website: "https://github.com/Soneso/stellar-ios-mac-sdk"
+    first_released: "March 2018"
 
 daoip-5:scf:project:stellar_light:
   display_name: "Stellar Light"
   activity_status: "live"
   git_owner_url: "https://github.com/Stellar-Light"
+  git_repo_urls:
+    - "https://github.com/Stellar-Light/stellarlight"
+    - "https://github.com/Stellar-Light/scout-mcp"
+    - "https://github.com/Stellar-Light/stellar-scout"
+  category: "Ecosystem Visibility"
+  metadata:
+    description: "stellar light is the ecosystem data layer for stellar — a single, machine-readable source of truth for projects,
+      code, funding, stablecoins, dev activity, partners, and builders, queryable by humans, tools, and ai agents."
+    website: "https://stellarlight.xyz"
+    first_released: "Jan 2026"
+
+daoip-5:scf:project:stellar_php_sdk:
+  display_name: "Stellar PHP SDK"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Soneso"
+  git_repo_urls:
+    - "https://github.com/Soneso/stellar-php-sdk"
+  category: "SDKs"
+  metadata:
+    description: "The Stellar SDK for PHP, providing transaction building, Horizon and Soroban RPC access, high-level Soroban
+      smart contract support, and implements 19 Stellar Ecosystem Proposals (SEPs)."
+    website: "https://github.com/Soneso/stellar-php-sdk"
+    first_released: "May 2022"
+
+daoip-5:scf:project:stellar_registry:
+  display_name: "Stellar Registry"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellar-registry"
+  category: "Developer Experience"
+  metadata:
+    description: "Stellar Registry is an on-chain smart contract registry for Soroban that lets developers publish, version,
+      discover, and deploy Wasm binaries and contract instances, making contracts reusable across the ecosystem like packages."
+    website: "https://rgstry.xyz"
+    first_released: "March 2026"
+
+daoip-5:scf:project:stellarchain.io:
+  display_name: "Stellarchain"
+  activity_status: "live"
+  git_owner_url: "https://github.com/stellarchain"
+  git_repo_urls:
+    - "https://github.com/stellarchain/v4"
+  category: "Infrastructure Monitoring"
+  metadata:
+    description: "Explore the Stellar blockchain - transactions, accounts, contracts, ledgers, assets, markets, and operations."
+    website: "https://stellarchain.io"
+    first_released: "March 2024"
+
+daoip-5:scf:project:tansu_-_soroban_versioning:
+  display_name: "Tansu"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Consulting-Manao"
+  git_repo_urls:
+    - "https://github.com/Consulting-Manao/tansu"
+  metadata:
+    description: "Tansu provides cryptographic proof of code integrity and transparent governance for open-source projects."
+    website: "https://tansu.dev"
+    first_released: "October 2025"
