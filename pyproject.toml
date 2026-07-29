@@ -29,7 +29,6 @@ dependencies = [
     "pyrate-limiter>=4.1.0",
     "pypistats>=1.13.0",
     "packaging>=26.0",
-    "mistletoe>=1.6.0",
 ]
 
 [dependency-groups]
@@ -45,6 +44,8 @@ dev = [
     "types-networkx>=3.6.1.20260402",
     "types-aiobotocore-custom",
     "basedpyright>=1.39.0",
+    "mistletoe>=1.6.0",
+    "ruamel-yaml>=0.19.1",
 ]
 proto-build = [
     "betterproto2-compiler>=0.9.0",
