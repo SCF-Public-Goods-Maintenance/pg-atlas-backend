@@ -90,7 +90,7 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
             display_name="No Code",
             activity_status=ActivityStatus.live,
             git_owner_url=None,
-            git_repo_url=None,
+            git_repo_urls=[],
             category="Developer Tooling",
         ),
         ScfProject(
@@ -98,7 +98,7 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
             display_name="With Code",
             activity_status=ActivityStatus.in_dev,
             git_owner_url="https://github.com/a",
-            git_repo_url="https://github.com/a/b",
+            git_repo_urls=["https://github.com/a/b"],
             category="Smart Contracts",
         ),
     ]
@@ -115,7 +115,10 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
             "proj:no-code": {
                 "category": "Visibility",
                 "git_owner_url": "https://github.com/enriched",
-                "git_repo_url": "https://github.com/enriched/repo",
+                "git_repo_urls": [
+                    "https://github.com/enriched/repo",
+                    "https://github.com/upstream/opera",
+                ],
             },
             "proj:with-code": {
                 "activity_status": "live",
@@ -131,16 +134,17 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
     defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
     assert len(defer_data) == 3
     assert defer_data[0]["git_owner_url"] == "https://github.com/enriched"
+    assert defer_data[0]["git_repo_urls"] == ["https://github.com/enriched/repo", "https://github.com/upstream/opera"]
     assert defer_data[0]["category"] == "Visibility"
     assert defer_data[1]["activity_status"] == ActivityStatus.live
-    assert defer_data[1]["git_repo_url"] == "https://github.com/a/b"
+    assert defer_data[1]["git_repo_urls"] == ["https://github.com/a/b"]
     assert defer_data[1]["category"] == "Smart Contracts"
     assert defer_data[1]["project_metadata"]["description"] == "Contracts launched on mainnet!"
     assert defer_data[2]["canonical_id"] == "proj:to-be-inserted"
     assert defer_data[2]["display_name"] == "To be inserted"
     assert defer_data[2]["activity_status"] == "non-responsive"
     assert defer_data[2]["git_owner_url"] == "https://github.com/sloth"
-    assert defer_data[2]["git_repo_url"] is None
+    assert defer_data[2]["git_repo_urls"] == []
 
 
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
@@ -150,7 +154,7 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
             display_name="Python SDK",
             activity_status=ActivityStatus.live,
             git_owner_url="https://github.com/stellar",
-            git_repo_url="https://github.com/stellar/python-stellar-sdk",
+            git_repo_urls=["https://github.com/stellar/python-stellar-sdk"],
             category="Developer Tooling",
         ),
         ScfProject(
@@ -158,7 +162,7 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
             display_name="StellarChain",
             activity_status=ActivityStatus.live,
             git_owner_url="https://github.com/stellarchain",
-            git_repo_url="https://github.com/stellarchain/web",
+            git_repo_urls=["https://github.com/stellarchain/web"],
             category="Developer Tooling",
         ),
     ]
@@ -182,7 +186,7 @@ async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> 
             display_name="Python SDK",
             activity_status=ActivityStatus.live,
             git_owner_url="https://github.com/stellar",
-            git_repo_url="https://github.com/stellar/python-stellar-sdk",
+            git_repo_urls=["https://github.com/stellar/python-stellar-sdk"],
             category="Developer Tooling",
         )
     ]
@@ -259,7 +263,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         display_name="Project 1",
         activity_status="live",
         git_owner_url="https://github.com/org",
-        git_repo_url=None,
+        git_repo_urls=[],
         project_metadata={"k": "v"},
         category="Developer Tooling",
     )
@@ -439,7 +443,7 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
         display_name="Stellar Academy",
         activity_status="live",
         git_owner_url="https://github.com/stellar-academy",
-        git_repo_url=None,
+        git_repo_urls=[],
         project_metadata={"k": "v"},
         category="Education & Community",
     )
@@ -640,7 +644,7 @@ class TestDeferredPayloadJsonSerializable:
             display_name="Test Project",
             activity_status=ActivityStatus.live,
             git_owner_url="https://github.com/test-org",
-            git_repo_url="https://github.com/test-org/test-repo",
+            git_repo_urls=["https://github.com/test-org/test-repo"],
             category="Infrastructure",
             project_metadata={"round": 25, "tags": ["defi"]},
         )
@@ -666,7 +670,7 @@ class TestDeferredPayloadJsonSerializable:
                 display_name=f"Project {status.value}",
                 activity_status=status,
                 git_owner_url=None,
-                git_repo_url=None,
+                git_repo_urls=[],
             )
             payload = {**asdict(proj), "extended_universe": False}
             data = self._assert_json_round_trips(payload)
