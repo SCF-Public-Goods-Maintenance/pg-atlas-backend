@@ -14,7 +14,7 @@ repos:
       - id: ruff-format
 
   - repo: https://github.com/aolieman/yaml-schema
-    rev: 88f5a9029a84de59df507ed9032b6085e3b888c4
+    rev: 29c5dbcc376159f8d2950ef030794e6477d2d5cb
     hooks:
       - id: ys
         name: Validate Project Data
