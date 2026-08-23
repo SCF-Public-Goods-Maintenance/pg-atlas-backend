@@ -816,6 +816,9 @@ def _load_project_overrides() -> dict[str, dict[str, Any]]:
     for yml_file in _PROJECT_OVERRIDE_DIR.glob("*.yml"):
         with yml_file.open() as f:
             data: dict[str, dict[str, Any]] = yaml.safe_load(f) or {}
+            if data:
+                schema_val = data.pop("$schema")
+                logger.info(f"loading overrides from {yml_file.name} with schema {schema_val}")
 
         for key in data:
             if key in overrides:

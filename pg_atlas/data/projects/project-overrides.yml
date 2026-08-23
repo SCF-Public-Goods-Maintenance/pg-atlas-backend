@@ -4,11 +4,11 @@
 # or when an outdated repo url is present and needs to be overridden with a new repo,
 # or with a full owner repo list.
 #
-# Schema: ../schema-override-project.yml
-#
 #
 # SPDX-FileCopyrightText: 2026 PG Atlas contributors
 # SPDX-License-Identifier: MPL-2.0
+
+$schema: ../schema-override-project.yml
 
 # --- SDF official and prolific SDF members as projects ---
 

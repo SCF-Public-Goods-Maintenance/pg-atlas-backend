@@ -4,11 +4,11 @@
 # It exclusively contains patches and new entries based on PG Award proposals.
 # The overrides allow PG Atlas to provide the most recent data before it is captured by other sources.
 #
-# Schema: ../schema-override-project.yml
-#
 #
 # SPDX-FileCopyrightText: 2026 PG Atlas contributors
 # SPDX-License-Identifier: MPL-2.0
+
+$schema: ../schema-override-project.yml
 
 daoip-5:scf:project:.net_stellar_sdk:
   display_name: ".NET Stellar SDK"

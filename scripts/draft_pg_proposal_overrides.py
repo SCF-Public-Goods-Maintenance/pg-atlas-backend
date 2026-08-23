@@ -304,10 +304,14 @@ def _load_canonical_overrides() -> tuple[CommentedMap, dict[str, dict[str, Any]]
     parsed_opt = _as_string_key_dict(loaded)
     if parsed_opt is None and loaded is not None:
         raise ValueError(f"Canonical override file must parse to a mapping: {_CANONICAL_PATH}")
+
     parsed = parsed_opt or {}
 
     normalized: dict[str, dict[str, Any]] = {}
     for key, value in parsed.items():
+        if key == "$schema":
+            continue
+
         value_dict = _as_string_key_dict(value)
         if value_dict is None:
             raise ValueError(f"Override value for {key!r} must be a mapping")
@@ -862,12 +866,12 @@ def _render_sorted_yaml(overrides: dict[str, dict[str, Any]], template_map: Comm
     sorted_keys = sorted(overrides)
     ordered_map = CommentedMap()
     cast(Any, ordered_map).ca.comment = cast(Any, template_map).ca.comment
+    ordered_map["$schema"] = template_map["$schema"]
 
-    for index, key in enumerate(sorted_keys):
+    for key in sorted_keys:
         ordered_entry = _order_entry_keys(overrides[key])
         ordered_map[key] = _to_quoted_yaml_value(ordered_entry)
-        if index > 0:
-            cast(Any, ordered_map).yaml_set_comment_before_after_key(key, before="\n")
+        cast(Any, ordered_map).yaml_set_comment_before_after_key(key, before="\n")
 
     buffer = StringIO()
     _yaml_dump(ordered_map, buffer)
