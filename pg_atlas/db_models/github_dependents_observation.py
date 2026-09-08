@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,20 +53,20 @@ class GithubDependentsCrawlRun(PgBase):
         Enum(GithubDependentsRunStatus, name="github_dependents_run_status", values_callable=enum_values),
         default=GithubDependentsRunStatus.running,
     )
-    listing_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    counts_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    listing_complete: Mapped[bool] = mapped_column(default=False)
+    counts_complete: Mapped[bool] = mapped_column(default=False)
     listing_incomplete_reason: Mapped[str | None] = mapped_column(String(64), default=None)
     counts_incomplete_reason: Mapped[str | None] = mapped_column(String(64), default=None)
 
     #: GitHub header totals as reported (may count entries that are not
     #: publicly enumerable); ``public_repos_observed`` is the unique public
     #: entries this run actually parsed.
-    repos_total_reported: Mapped[int | None] = mapped_column(Integer, default=None)
-    packages_total_reported: Mapped[int | None] = mapped_column(Integer, default=None)
-    public_repos_observed: Mapped[int] = mapped_column(Integer, default=0)
-    packages_scanned: Mapped[int | None] = mapped_column(Integer, default=None)
-    pages_fetched: Mapped[int] = mapped_column(Integer, default=0)
-    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    repos_total_reported: Mapped[int | None] = mapped_column(default=None)
+    packages_total_reported: Mapped[int | None] = mapped_column(default=None)
+    public_repos_observed: Mapped[int] = mapped_column(default=0)
+    packages_scanned: Mapped[int | None] = mapped_column(default=None)
+    pages_fetched: Mapped[int] = mapped_column(default=0)
+    request_count: Mapped[int] = mapped_column(default=0)
 
     parser_version: Mapped[str | None] = mapped_column(String(32), default=None)
     app_version: Mapped[str | None] = mapped_column(String(64), default=None)
