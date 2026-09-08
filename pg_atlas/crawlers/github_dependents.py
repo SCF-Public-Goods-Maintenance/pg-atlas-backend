@@ -194,15 +194,15 @@ class _SnapshotBuilder:
     """Mutable, function-local accumulator that produces the frozen snapshot."""
 
     source: str
-    dependents: dict[str, ObservedDependent] = field(default_factory=dict)
-    listing_reasons: list[str] = field(default_factory=list)
-    counts_reasons: list[str] = field(default_factory=list)
+    dependents: dict[str, ObservedDependent] = field(default_factory=dict[str, ObservedDependent])
+    listing_reasons: list[str] = field(default_factory=list[str])
+    counts_reasons: list[str] = field(default_factory=list[str])
     repos_total: int | None = None
     packages_total: int | None = None
     packages_scanned: int | None = None
     pages_fetched: int = 0
     request_count: int = 0
-    page_digests: list[tuple[str, str]] = field(default_factory=list)
+    page_digests: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
 
     def count_request(self) -> None:
         """Called once per HTTP attempt, including retries inside the shared layer."""
@@ -270,8 +270,7 @@ _COUNT_REPOSITORIES_RE = re.compile(
     re.DOTALL,
 )
 _COUNT_PACKAGES_RE = re.compile(
-    r'href="[^"]*network/dependents\?[^"]*dependent_type=PACKAGE[^"]*"[^>]*>'
-    r"(?:(?!</a>).)*?(\d[\d,]*)\s+Packages?",
+    r'href="[^"]*network/dependents\?[^"]*dependent_type=PACKAGE[^"]*"[^>]*>' r"(?:(?!</a>).)*?(\d[\d,]*)\s+Packages?",
     re.DOTALL,
 )
 _ENTRY_SPLIT_RE = re.compile(r'data-test-id="dg-repo-pkg-dependent"')
