@@ -13,8 +13,8 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/aolieman/yaml-schema
-    rev: 10b907aad601327efcba9bdccda224880b06504a
+  - repo: https://github.com/yaml-schema/yaml-schema
+    rev: 30646e2e97edc82a54b085a4e567a99487bd8abb
     hooks:
       - id: ys
         name: Validate Project Data
