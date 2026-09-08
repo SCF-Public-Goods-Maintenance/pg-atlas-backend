@@ -524,8 +524,8 @@ async def crawl_github_repo(
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
 
-    # ----- Defer GitHub dependents crawl (fail-closed; the source Repo now exists) -----
-    if github_dependents_scheduling_allowed(owner, repo):
+    # ----- Defer GitHub dependents crawl if this repo is allowlisted -----
+    if defer_github_dependents := github_dependents_scheduling_allowed(owner, repo):
         await defer_with_lock(
             crawl_github_dependents,
             queueing_lock=f"github-dependents:{owner}/{repo}",
@@ -533,11 +533,15 @@ async def crawl_github_repo(
             repo=repo,
         )
 
-    logger.info(
+    summary_line = (
         f"crawl_github_repo: {owner}/{repo} - {len(package_refs)} packages, "
         f"deferred {len(depsdev_packages)} crawl_package_deps tasks, "
         f"deferred {deferred_registry_tasks} crawl_package_registry tasks"
     )
+    if defer_github_dependents:
+        summary_line += ", deferred crawl_github_dependents task"
+
+    logger.info(summary_line)
 
 
 # ---------------------------------------------------------------------------
