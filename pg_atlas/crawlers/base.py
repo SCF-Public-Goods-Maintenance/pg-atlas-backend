@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +58,9 @@ class CrawledDependent:
 
     canonical_id: str
     display_name: str
+    #: Repository URL when the source exposes one (GitHub dependents). Registry
+    #: crawlers leave it unset.
+    repo_url: str | None = None
 
 
 @dataclass
@@ -147,16 +151,19 @@ class RegistryCrawler(ABC):
         """Fetch reverse dependencies from the registry API."""
         ...
 
-    async def _request_with_retry(self, url: str) -> httpx.Response:
+    async def _request_with_retry(self, url: str, on_attempt: Callable[[], None] | None = None) -> httpx.Response:
         """
         Make an HTTP GET request with retry logic for 429 and 5xx responses.
 
         Raises ``httpx.HTTPStatusError`` for 404 (no retry).
-        Returns the response for 200.
+        Returns the response for 200. ``on_attempt`` is invoked once per HTTP
+        attempt, including retries, so callers can count real request volume.
         """
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
             try:
+                if on_attempt is not None:
+                    on_attempt()
                 resp = await self.client.get(url)
             except httpx.TimeoutException as exc:
                 last_exc = exc
@@ -323,7 +330,7 @@ class RegistryCrawler(ABC):
                 canonical_id=dependent.canonical_id,
                 display_name=dependent.display_name,
                 latest_version="",
-                repo_url=None,
+                repo_url=dependent.repo_url,
             )
             result.vertices_upserted += 1
 

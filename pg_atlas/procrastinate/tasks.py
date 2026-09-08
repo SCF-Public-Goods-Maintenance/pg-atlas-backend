@@ -11,7 +11,8 @@ Task hierarchy (queue names in brackets)::
       └─ process_project  [opengrants]
            └─ crawl_github_repo  [opengrants]
                  ├─ crawl_package_deps  [package-deps]
-                 └─ crawl_package_registry  [registry-crawl]
+                 ├─ crawl_package_registry  [registry-crawl]
+                 └─ crawl_github_dependents  [registry-crawl]
 
 The bootstrap workers run ``package-deps`` and ``registry-crawl`` after
 ``opengrants`` has drained so that all ``Repo`` vertices and ``Project``
@@ -37,6 +38,7 @@ from sqlalchemy import select
 from pg_atlas.config import settings
 from pg_atlas.crawlers.base import USER_AGENT, AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
+from pg_atlas.crawlers.github_dependents import github_dependents_scheduling_allowed
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 from pg_atlas.db_models.repo_vertex import RepoVertex
@@ -522,11 +524,24 @@ async def crawl_github_repo(
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
 
-    logger.info(
+    # ----- Defer GitHub dependents crawl if this repo is allowlisted -----
+    if defer_github_dependents := github_dependents_scheduling_allowed(owner, repo):
+        await defer_with_lock(
+            crawl_github_dependents,
+            queueing_lock=f"github-dependents:{owner}/{repo}",
+            owner=owner,
+            repo=repo,
+        )
+
+    summary_line = (
         f"crawl_github_repo: {owner}/{repo} - {len(package_refs)} packages, "
         f"deferred {len(depsdev_packages)} crawl_package_deps tasks, "
         f"deferred {deferred_registry_tasks} crawl_package_registry tasks"
     )
+    if defer_github_dependents:
+        summary_line += ", deferred crawl_github_dependents task"
+
+    logger.info(summary_line)
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +599,57 @@ async def crawl_package_registry(
     )
     if result.packages_processed == 0:
         raise AllPackagesFailed(package_names)
+
+
+# ---------------------------------------------------------------------------
+# Task: crawl_github_dependents
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="registry-crawl")
+async def crawl_github_dependents(
+    owner: str,
+    repo: str,
+) -> None:
+    """
+    Crawl the GitHub dependents page for one tracked repository.
+
+    Scrapes ``github.com/{owner}/{repo}/network/dependents`` and persists the
+    result as one ``GithubDependentsCrawlRun`` row plus
+    ``GithubDependentObservation`` rows. Collection/audit only: no
+    ``DependsOn`` edges, no ``RepoVertex`` creation, no metric change. Runs on
+    the ``registry-crawl`` queue alongside the package-registry crawls.
+
+    Raises ``AllPackagesFailed`` when the repository is not processed, so a
+    systemic layout change fails the task visibly.
+    """
+
+    package_name = f"{owner}/{repo}"
+
+    session_factory = get_session_factory()
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
+        crawler = build_registry_crawler(
+            "GITHUB",
+            client=client,
+            session_factory=session_factory,
+            rate_limit=settings.CRAWLER_RATE_LIMIT,
+            max_retries=settings.CRAWLER_MAX_RETRIES,
+        )
+
+        if crawler is None:
+            logger.warning("crawl_github_dependents: no crawler available for GITHUB")
+
+            return
+
+        result = await crawler.crawl_and_persist(package_names=[package_name])
+
+    logger.info(f"crawl_github_dependents: {package_name} processed={result.packages_processed} errors={len(result.errors)}")
+    if result.packages_processed == 0:
+        raise AllPackagesFailed([package_name])
 
 
 # ---------------------------------------------------------------------------

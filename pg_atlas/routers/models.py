@@ -314,3 +314,55 @@ class GitLogArtifactDetailResponse(GitLogArtifactSummary):
     """Full gitlog artifact audit record including raw artifact content."""
 
     raw_artifact: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# GitHub dependents observations (collection/audit data, not graph edges)
+# ---------------------------------------------------------------------------
+
+
+class GithubDependentObservationItem(BaseModel):
+    """One active GitHub dependent observation for a source repo."""
+
+    dependent_canonical_id: str
+    dependent_repo_url: str
+    observed_owner: str
+    observed_repo_name: str
+    #: Set when the dependent is itself a tracked repo; null otherwise.
+    resolved_repo_canonical_id: str | None = None
+    #: GitHub package ids through which this dependent was observed.
+    package_ids: list[str] | None = None
+    first_seen_at: dt.datetime
+    last_seen_at: dt.datetime
+
+
+class GithubDependentsSummary(BaseModel):
+    """
+    Freshness and completeness summary for a source repo's observations.
+
+    ``observations_as_of`` is the finish time of the latest applied
+    listing-complete run; ``reported_counts_as_of`` is the finish time of the
+    latest applied counts-complete run. The two can point to different runs,
+    so the reported totals always carry their own timestamp. Reported header
+    totals may exceed the enumerable public entries and, for multi-package
+    repositories, are per-package sums that can double count a dependent
+    using several packages.
+    """
+
+    latest_attempt_at: dt.datetime | None = None
+    latest_attempt_status: str | None = None
+    latest_attempt_listing_incomplete_reason: str | None = None
+    latest_attempt_counts_incomplete_reason: str | None = None
+    observations_as_of: dt.datetime | None = None
+    reported_counts_as_of: dt.datetime | None = None
+    repos_total_reported: int | None = None
+    packages_total_reported: int | None = None
+    packages_scanned: int | None = None
+    active_observations: int = 0
+
+
+class GithubDependentsResponse(BaseModel):
+    """Summary plus paginated active observations for one source repo."""
+
+    summary: GithubDependentsSummary
+    observations: PaginatedResponse[GithubDependentObservationItem]

@@ -176,6 +176,25 @@ class SubmissionStatus(str, enum.Enum):
     failed = "failed"
 
 
+class GithubDependentsRunStatus(str, enum.Enum):
+    """
+    Lifecycle state of one GitHub dependents crawl attempt.
+
+    ``running`` is the durable pre-HTTP state; an attempt that never reaches a
+    terminal state is an observable abandoned run. ``complete`` requires both
+    listing and count completeness. ``partial`` applied usable data with at
+    least one completeness dimension false. ``failed`` and ``superseded`` runs
+    never mutate observations; ``superseded`` marks a snapshot that finished
+    after a newer run had already applied for the same source.
+    """
+
+    running = "running"
+    complete = "complete"
+    partial = "partial"
+    failed = "failed"
+    superseded = "superseded"
+
+
 # ---------------------------------------------------------------------------
 # Declarative base
 # ---------------------------------------------------------------------------

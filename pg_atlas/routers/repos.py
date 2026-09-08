@@ -19,16 +19,23 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
 
-from pg_atlas.db_models.base import RepoVertexType
+from pg_atlas.db_models.base import GithubDependentsRunStatus, RepoVertexType
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.github_dependents_observation import (
+    GithubDependentObservation,
+    GithubDependentsCrawlRun,
+)
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
 from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
 from pg_atlas.routers.models import (
     ContributorSummary,
     DepCounts,
+    GithubDependentObservationItem,
+    GithubDependentsResponse,
+    GithubDependentsSummary,
     PaginatedResponse,
     ProjectSummary,
     RepoContributorSummary,
@@ -242,6 +249,111 @@ async def get_repo_has_dependents(
     repo = await _get_repo_or_404(db, canonical_id)
 
     return await _dep_edges(db, repo.id, direction="incoming")
+
+
+@router.get(
+    "/repos/{canonical_id:path}/github-dependents",
+    response_model=GithubDependentsResponse,
+    summary="Public GitHub dependents observed for a repo",
+    tags=[Source.pg_atlas],
+)
+async def get_repo_github_dependents(
+    canonical_id: str,
+    db: DbSession,
+    pagination: Annotated[PaginationParams, Depends()],
+) -> GithubDependentsResponse:
+    """
+    Active GitHub dependents observations plus freshness/completeness summary.
+
+    Collection/audit data scraped from the public GitHub dependents page.
+    Deliberately separate from the dependency-graph ``has-dependents``
+    endpoint: observations are not ``DependsOn`` relationships and feed no
+    metric. Retired observations are not exposed here.
+    """
+    repo = await _get_repo_or_404(db, canonical_id)
+
+    applied = (GithubDependentsRunStatus.complete, GithubDependentsRunStatus.partial)
+    latest_attempt = await db.scalar(
+        select(GithubDependentsCrawlRun)
+        .where(GithubDependentsCrawlRun.source_repo_id == repo.id)
+        .order_by(GithubDependentsCrawlRun.id.desc())
+        .limit(1)
+    )
+    listing_run = await db.scalar(
+        select(GithubDependentsCrawlRun)
+        .where(
+            GithubDependentsCrawlRun.source_repo_id == repo.id,
+            GithubDependentsCrawlRun.status.in_(applied),
+            GithubDependentsCrawlRun.listing_complete.is_(True),
+        )
+        .order_by(GithubDependentsCrawlRun.id.desc())
+        .limit(1)
+    )
+    counts_run = await db.scalar(
+        select(GithubDependentsCrawlRun)
+        .where(
+            GithubDependentsCrawlRun.source_repo_id == repo.id,
+            GithubDependentsCrawlRun.status.in_(applied),
+            GithubDependentsCrawlRun.counts_complete.is_(True),
+        )
+        .order_by(GithubDependentsCrawlRun.id.desc())
+        .limit(1)
+    )
+
+    active = select(GithubDependentObservation).where(
+        GithubDependentObservation.source_repo_id == repo.id,
+        GithubDependentObservation.retired_at.is_(None),
+    )
+    total = (await db.execute(select(func.count()).select_from(active.subquery()))).scalar_one()
+
+    # canonical_id lives on the JTI base table; Repo ids are repo_vertices ids.
+    resolved_repo = RepoVertex.__table__.alias("resolved_repo")
+    rows = (
+        await db.execute(
+            active.add_columns(resolved_repo.c.canonical_id)
+            .outerjoin(resolved_repo, resolved_repo.c.id == GithubDependentObservation.resolved_repo_id)
+            .order_by(GithubDependentObservation.dependent_key)
+            .limit(pagination.limit)
+            .offset(pagination.offset)
+        )
+    ).all()
+
+    items = [
+        GithubDependentObservationItem(
+            dependent_canonical_id=obs.dependent_canonical_id,
+            dependent_repo_url=obs.dependent_repo_url,
+            observed_owner=obs.observed_owner,
+            observed_repo_name=obs.observed_repo_name,
+            resolved_repo_canonical_id=resolved_canonical_id,
+            package_ids=obs.package_ids,
+            first_seen_at=obs.first_seen_at,
+            last_seen_at=obs.last_seen_at,
+        )
+        for obs, resolved_canonical_id in rows
+    ]
+
+    summary = GithubDependentsSummary(
+        latest_attempt_at=latest_attempt.started_at if latest_attempt else None,
+        latest_attempt_status=latest_attempt.status.value if latest_attempt else None,
+        latest_attempt_listing_incomplete_reason=(latest_attempt.listing_incomplete_reason if latest_attempt else None),
+        latest_attempt_counts_incomplete_reason=(latest_attempt.counts_incomplete_reason if latest_attempt else None),
+        observations_as_of=listing_run.finished_at if listing_run else None,
+        reported_counts_as_of=counts_run.finished_at if counts_run else None,
+        repos_total_reported=counts_run.repos_total_reported if counts_run else None,
+        packages_total_reported=counts_run.packages_total_reported if counts_run else None,
+        packages_scanned=counts_run.packages_scanned if counts_run else None,
+        active_observations=total,
+    )
+
+    return GithubDependentsResponse(
+        summary=summary,
+        observations=PaginatedResponse[GithubDependentObservationItem](
+            items=items,
+            total=total,
+            limit=pagination.limit,
+            offset=pagination.offset,
+        ),
+    )
 
 
 @router.get(

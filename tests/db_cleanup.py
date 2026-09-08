@@ -119,6 +119,8 @@ async def cleanup_created_rows(
 SBOM_DB_TABLE_SPECS: list[TableSpec] = [
     TableSpec("depends_on", ("in_vertex_id", "out_vertex_id")),
     TableSpec("sbom_submissions", ("id",)),
+    TableSpec("github_dependent_observations", ("id",)),
+    TableSpec("github_dependents_crawl_runs", ("id",)),
     TableSpec("external_repos", ("id",)),
     TableSpec("repos", ("id",)),
     TableSpec("repo_vertices", ("id",)),
@@ -126,6 +128,8 @@ SBOM_DB_TABLE_SPECS: list[TableSpec] = [
 
 
 GITLOG_DB_TABLE_SPECS: list[TableSpec] = [
+    TableSpec("github_dependent_observations", ("id",)),
+    TableSpec("github_dependents_crawl_runs", ("id",)),
     TableSpec("contributed_to", ("contributor_id", "repo_id")),
     TableSpec("gitlog_artifacts", ("id",)),
     TableSpec("contributors", ("id",)),
@@ -136,6 +140,8 @@ GITLOG_DB_TABLE_SPECS: list[TableSpec] = [
 
 
 DB_MODELS_TABLE_SPECS: list[TableSpec] = [
+    TableSpec("github_dependent_observations", ("id",)),
+    TableSpec("github_dependents_crawl_runs", ("id",)),
     TableSpec("depends_on", ("in_vertex_id", "out_vertex_id")),
     TableSpec("gitlog_artifacts", ("id",)),
     TableSpec("sbom_submissions", ("id",)),

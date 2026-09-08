@@ -11,6 +11,21 @@ jobs:
     name: Lint & Test
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: pg_atlas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d pg_atlas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v6
 
@@ -34,10 +49,19 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy pg_atlas/
 
+      - name: Run migrations
+        run: uv run alembic upgrade heads
+        env:
+          PG_ATLAS_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/pg_atlas_test
+
+      # Both database variables are set, so the DB integration tests run here
+      # rather than skip; an unreachable database fails the job loudly.
       - name: Test (pytest)
         run: uv run pytest
         env:
           PG_ATLAS_API_URL: "https://test.pg-atlas.example"
+          PG_ATLAS_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/pg_atlas_test
+          PG_ATLAS_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/pg_atlas_test
 
   sbom:
     name: Submit SBOM

@@ -13,6 +13,7 @@ import pytest
 
 from pg_atlas.crawlers.cargo import CargoCrawler
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
+from pg_atlas.crawlers.github_dependents import GitHubDependentsCrawler
 from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.pypi import PyPICrawler
 
@@ -28,6 +29,9 @@ from pg_atlas.crawlers.pypi import PyPICrawler
         ("cratesio", "CARGO"),
         ("pypi", "PYPI"),
         ("pip", "PYPI"),
+        ("github", "GITHUB"),
+        ("gh", "GITHUB"),
+        ("GitHub", "GITHUB"),
     ],
 )
 def test_normalize_registry_system_supports_new_aliases(alias: str, canonical: str) -> None:
@@ -42,6 +46,7 @@ def test_normalize_registry_system_supports_new_aliases(alias: str, canonical: s
         ("NPM", NpmCrawler),
         ("CARGO", CargoCrawler),
         ("PYPI", PyPICrawler),
+        ("GITHUB", GitHubDependentsCrawler),
     ],
 )
 def test_build_registry_crawler_supports_new_systems(system: str, crawler_type: type[object]) -> None:

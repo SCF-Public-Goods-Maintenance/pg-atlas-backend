@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from pg_atlas.db_models.base import HexBinary, PgBase, SubmissionStatus, enum_values, intpk
@@ -37,7 +37,7 @@ class GitLogArtifact(PgBase):
     id: Mapped[intpk] = mapped_column(init=False)
     repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"))
     since_months: Mapped[int]
-    seed_run_ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    seed_run_ordinal: Mapped[int] = mapped_column(default=0)
 
     artifact_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     gitlog_content_hash: Mapped[str | None] = mapped_column(HexBinary(length=32), default=None)

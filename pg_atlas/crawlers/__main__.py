@@ -5,6 +5,7 @@ Usage::
 
     uv run python -m pg_atlas.crawlers pubdev stellar_flutter_sdk
     uv run python -m pg_atlas.crawlers packagist soneso/stellar-php-sdk
+    uv run python -m pg_atlas.crawlers github Soneso/stellar_flutter_sdk
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -46,9 +47,11 @@ async def main() -> None:
             "cratesio",
             "pypi",
             "pip",
+            "github",
+            "gh",
         ],
     )
-    parser.add_argument("packages", nargs="+", help="Package names to crawl")
+    parser.add_argument("packages", nargs="+", help="Package names to crawl (owner/repo for the github registry)")
     args = parser.parse_args()
 
     logging.basicConfig(level=settings.LOG_LEVEL)

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.crawlers.base import RegistryCrawler
 from pg_atlas.crawlers.cargo import CargoCrawler
+from pg_atlas.crawlers.github_dependents import GitHubDependentsCrawler
 from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
@@ -43,6 +44,8 @@ def normalize_registry_system(system: str) -> str | None:
             return "CARGO"
         case "PYPI" | "PIP":
             return "PYPI"
+        case "GITHUB" | "GH":
+            return "GITHUB"
         case _:
             return None
 
@@ -95,6 +98,13 @@ def build_registry_crawler(
             )
         case "PYPI":
             return PyPICrawler(
+                client=client,
+                session_factory=session_factory,
+                rate_limit=rate_limit,
+                max_retries=max_retries,
+            )
+        case "GITHUB":
+            return GitHubDependentsCrawler(
                 client=client,
                 session_factory=session_factory,
                 rate_limit=rate_limit,

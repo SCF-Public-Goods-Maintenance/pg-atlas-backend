@@ -129,7 +129,10 @@ These conventions emerged during A5 implementation and apply to all future task/
 ### Vertex model invariants
 
 - **Repo.canonical_id** = always `pkg:github/owner/repo`; ExternalRepo.canonical_id = always
-  `pkg:{ecosystem}/name`.
+  `pkg:{ecosystem}/name`. The GitHub dependents crawler (`crawlers/github_dependents.py`) does not
+  touch this model: it stores what it sees in `github_dependents_crawl_runs` /
+  `github_dependent_observations` (typed GitHub canonical ids, optional resolved link to a tracked
+  Repo) and creates no vertices and no DependsOn edges.
 - Crawlers create ExternalRepo when no Project association is known; Repo only through project link.
 - `is_project_repo()` was removed — deps.dev requirements use ecosystem PURLs, never `pkg:github/`.
   Use `find_repo_by_release_purl()` to check if a package PURL maps to an existing Repo.

@@ -10,7 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from pathlib import Path
 
-from pydantic import HttpUrl, field_validator, model_validator
+from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     CRAWLER_RATE_LIMIT: float = 1.0
     CRAWLER_MAX_RETRIES: int = 3
     CRAWLER_TIMEOUT: float = 30.0
+
+    # --- GitHub dependents crawler ---
+    # Scheduling fails closed: ENABLED=false schedules nothing; ENABLED=true
+    # schedules only repositories on the allowlist (comma-separated owner/repo,
+    # case-insensitive); the explicit value "*" schedules all eligible repos.
+    # Changing either setting does not cancel already-queued jobs. Explicit
+    # CLI runs bypass both. Caps bound the scrape per repository: pages per
+    # listing, dependents overall, and packages walked for multi-package
+    # repositories.
+    GITHUB_DEPENDENTS_ENABLED: bool = False
+    GITHUB_DEPENDENTS_ALLOWLIST: str = ""
+    GITHUB_DEPENDENTS_PAGES_CAP: int = Field(default=20, gt=0)
+    GITHUB_DEPENDENTS_ENTRY_CAP: int = Field(default=500, gt=0)
+    GITHUB_DEPENDENTS_PACKAGES_CAP: int = Field(default=25, gt=0)
 
     # --- Git log parser settings ---
     GITLOG_SINCE_MONTHS: int = 24

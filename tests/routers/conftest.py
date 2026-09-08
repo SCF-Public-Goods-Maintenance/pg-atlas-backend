@@ -56,6 +56,8 @@ _DB_AVAILABLE = bool(get_test_database_url())
 API_TABLE_SPECS: list[TableSpec] = [
     TableSpec("contributed_to", ("contributor_id", "repo_id")),
     TableSpec("depends_on", ("in_vertex_id", "out_vertex_id")),
+    TableSpec("github_dependent_observations", ("id",)),
+    TableSpec("github_dependents_crawl_runs", ("id",)),
     TableSpec("gitlog_artifacts", ("id",)),
     TableSpec("contributors", ("id",)),
     TableSpec("external_repos", ("id",)),
@@ -154,7 +156,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
             category="defi",
             criticality_score=40,
             pony_factor=1,
-            adoption_score=15.0,
+            adoption_score=Decimal("15.00"),
         )
 
         seed_session.add_all([project_a, project_b])

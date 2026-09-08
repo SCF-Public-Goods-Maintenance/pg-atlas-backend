@@ -18,6 +18,10 @@ from pg_atlas.db_models.base import PgBase
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.github_dependents_observation import (
+    GithubDependentObservation,
+    GithubDependentsCrawlRun,
+)
 from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
@@ -33,5 +37,7 @@ __all__ = [
     "DependsOn",
     "ContributedTo",
     "GitLogArtifact",
+    "GithubDependentsCrawlRun",
+    "GithubDependentObservation",
     "SbomSubmission",
 ]

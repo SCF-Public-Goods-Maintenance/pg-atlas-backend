@@ -13,6 +13,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -23,6 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.crawlers.base import USER_AGENT
 from pg_atlas.crawlers.cargo import CargoCrawler
+from pg_atlas.crawlers.github_dependents import (
+    GitHubDependentsCrawler,
+    _dependents_url,
+    find_next_cursor,
+    parse_dependent_counts,
+    parse_dependent_entries,
+    parse_package_selector,
+)
 from pg_atlas.crawlers.npm import NpmCrawler
 from pg_atlas.crawlers.packagist import PackagistCrawler
 from pg_atlas.crawlers.pubdev import PubDevCrawler
@@ -167,3 +176,83 @@ async def test_pypi_live_fetch(live_client: httpx.AsyncClient) -> None:
     assert pkg.display_name == "requests"
     assert pkg.latest_version
     assert isinstance(pkg.dependencies, list)
+
+
+# ---------------------------------------------------------------------------
+# GitHub dependents live tests
+# ---------------------------------------------------------------------------
+
+
+async def test_github_dependents_live_markers(live_client: httpx.AsyncClient) -> None:
+    """
+    Fetch one real dependents page and assert every marker class still matches.
+
+    This is the early-warning system for GitHub dependents layout drift: counts
+    header, dependent entry link, and the pagination cursor.
+    """
+
+    url = "https://github.com/Soneso/stellar_flutter_sdk/network/dependents?dependent_type=REPOSITORY"
+    resp = await live_client.get(url)
+    assert resp.status_code == 200
+    html = resp.text
+
+    repos_total, packages_total = parse_dependent_counts(html)
+    assert repos_total is not None
+    assert packages_total is not None
+
+    entries = parse_dependent_entries(html)
+    assert entries
+    first = entries[0]
+    assert first.owner
+    assert first.repo
+
+    # Assumes the listing spans more than one page (dozens of dependents);
+    # a single-page listing would fail here and needs a bigger probe repo.
+    assert find_next_cursor(html)
+
+
+async def test_github_dependents_live_fetch_package(live_client: httpx.AsyncClient) -> None:
+    """fetch_package returns a repo-shaped package with integer header totals."""
+
+    crawler = GitHubDependentsCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
+    pkg = await crawler.fetch_package("Soneso/stellar_flutter_sdk")
+
+    assert pkg.canonical_id == "pkg:github/Soneso/stellar_flutter_sdk"
+    assert pkg.repo_url == "https://github.com/Soneso/stellar_flutter_sdk"
+    assert pkg.dependencies == []
+    assert isinstance(pkg.metadata["repos_total_reported"], int)
+    assert isinstance(pkg.metadata["public_repos_observed"], int)
+
+
+async def test_github_dependents_live_multi_package_selector(live_client: httpx.AsyncClient) -> None:
+    """
+    A multi-package repository renders a package selector, and a populated
+    package-scoped page parses fully: counts with package_id-carrying header
+    links, entry rows, and the pagination cursor.
+    """
+
+    resp = await live_client.get(_dependents_url("stellar", "js-stellar-sdk", "REPOSITORY"))
+    assert resp.status_code == 200
+    package_ids = parse_package_selector(resp.text)
+    assert len(package_ids) > 1
+
+    # Probe until a package with listed dependents is found — the default menu
+    # entry is frequently a fork's ghost package with zero rows.
+    populated_page: str | None = None
+    populated_total = 0
+    for package_id in package_ids[:6]:
+        await asyncio.sleep(1)
+        scoped = await live_client.get(_dependents_url("stellar", "js-stellar-sdk", "REPOSITORY", package_id=package_id))
+        assert scoped.status_code == 200
+        repos_total, packages_total = parse_dependent_counts(scoped.text)
+        assert repos_total is not None
+        assert packages_total is not None
+        if parse_dependent_entries(scoped.text):
+            populated_page = scoped.text
+            populated_total = repos_total
+            break
+
+    assert populated_page is not None, "no populated package among the first probed ids"
+    # A listing far larger than one page must expose a Next cursor.
+    if populated_total > 30:
+        assert find_next_cursor(populated_page)
