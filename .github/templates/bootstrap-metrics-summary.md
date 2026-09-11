@@ -12,6 +12,12 @@
 | ---------: | -----------------------: | ------------: | --------------: | -----------: |
 | {adoption_repos_seen} | {adoption_repo_composites_computed} | {adoption_projects_seen} | {adoption_projects_scored} | {adoption_duration_seconds} |
 
+## Maintenance Materialization
+
+| Gate skipped | Repos eligible | Profiles written | Stale profiles cleared | Duration (s) |
+| :----------- | -------------: | ---------------: | ---------------------: | -----------: |
+| {maintenance_gate_skipped} | {maintenance_repos_eligible} | {maintenance_profiles_written} | {maintenance_stale_profiles_cleared} | {maintenance_duration_seconds} |
+
 - **Trigger**: {trigger}
 - **Run**: [{run_id}]({server_url}/{repository}/actions/runs/{run_id})
 - **Finished**: {finished}

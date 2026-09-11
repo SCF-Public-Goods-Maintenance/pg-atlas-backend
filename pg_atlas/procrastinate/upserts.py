@@ -23,7 +23,7 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import and_, case, delete, or_, select, update
+from sqlalchemy import DateTime, and_, case, delete, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -235,6 +235,93 @@ async def upsert_repo(
         logger.info(f"Upserted Repo {canonical_id} (id={repo_id})")
 
         return repo_id
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Repo pushed_at (shared by the bootstrap crawl and the maintenance collector)
+# ---------------------------------------------------------------------------
+
+
+async def record_pushed_at(
+    session: AsyncSession,
+    repo_id: int,
+    pushed_at: dt.datetime | None,
+    observed_at: dt.datetime | None,
+) -> bool:
+    """
+    Record one observation of a repo's GitHub ``pushed_at`` inside the caller's transaction.
+
+    ``Repo.pushed_at`` only moves forward, and ``Repo.pushed_at_observed_at``
+    is the time the stored value was observed. One conditional ``UPDATE``
+    compares on the database side, so concurrent writers (bootstrap crawl,
+    maintenance collector) cannot regress the column between a read and a
+    write:
+
+    - stored ``pushed_at`` is NULL or earlier than the incoming value: both
+      columns take the incoming observation;
+    - stored ``pushed_at`` equals the incoming value and the incoming
+      observation is later (or none is stored): the observation time advances
+      to the incoming one;
+    - otherwise nothing changes.
+
+    An incoming ``pushed_at`` or ``observed_at`` that is ``None`` or naive
+    writes nothing and logs a warning: an observation without an absolute
+    time cannot be ordered. Returns whether the row changed.
+    """
+
+    if pushed_at is None or observed_at is None or pushed_at.utcoffset() is None or observed_at.utcoffset() is None:
+        logger.warning(
+            f"record_pushed_at: repo_id={repo_id} not written, pushed_at and observed_at must both be "
+            f"timezone-aware: pushed_at={pushed_at!r} observed_at={observed_at!r}"
+        )
+
+        return False
+
+    incoming_pushed_at = literal(pushed_at, type_=DateTime(timezone=True))
+    incoming_observed_at = literal(observed_at, type_=DateTime(timezone=True))
+    advances = or_(Repo.pushed_at.is_(None), Repo.pushed_at < incoming_pushed_at)
+    confirms_later = and_(
+        Repo.pushed_at == incoming_pushed_at,
+        or_(Repo.pushed_at_observed_at.is_(None), Repo.pushed_at_observed_at < incoming_observed_at),
+    )
+
+    result = await session.execute(
+        update(Repo)
+        .where(Repo.id == repo_id)
+        .where(or_(advances, confirms_later))
+        .values(
+            pushed_at=case((advances, incoming_pushed_at), else_=Repo.pushed_at),
+            pushed_at_observed_at=incoming_observed_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    rowcount_obj = getattr(result, "rowcount", 0)
+
+    return isinstance(rowcount_obj, int) and rowcount_obj > 0
+
+
+async def persist_pushed_at(repo_id: int, pushed_at: dt.datetime | None, observed_at: dt.datetime | None) -> bool:
+    """
+    Run ``record_pushed_at`` in its own session and commit.
+
+    For callers without a session of their own (``crawl_github_repo``).
+    Returns whether the row changed.
+    """
+    session = await _session()
+
+    try:
+        changed = await record_pushed_at(session, repo_id, pushed_at, observed_at)
+        await session.commit()
+
+        return changed
 
     except Exception:
         await session.rollback()
@@ -486,7 +573,7 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
     Uses PostgreSQL JSONB containment (``@>``) which is GIN-indexable with
     ``jsonb_path_ops``.
     """
-    from sqlalchemy import cast, literal
+    from sqlalchemy import cast
     from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 
     session = await _session()

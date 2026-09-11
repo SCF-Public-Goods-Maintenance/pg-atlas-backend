@@ -12,7 +12,8 @@ Task hierarchy (queue names in brackets)::
            └─ crawl_github_repo  [opengrants]
                  ├─ crawl_package_deps  [package-deps]
                  ├─ crawl_package_registry  [registry-crawl]
-                 └─ crawl_github_dependents  [registry-crawl]
+                 ├─ crawl_github_dependents  [registry-crawl]
+                 └─ collect_maintenance_signals  [opengrants]
 
 The bootstrap workers run ``package-deps`` and ``registry-crawl`` after
 ``opengrants`` has drained so that all ``Repo`` vertices and ``Project``
@@ -64,11 +65,16 @@ from pg_atlas.procrastinate.github import (
     latest_version_from_repo,
     list_org_repos,
 )
+from pg_atlas.procrastinate.github_maintenance import (
+    maintenance_metric_allowed,
+    run_maintenance_collection,
+)
 from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
     associate_repo_with_project,
     find_repo_by_release_purl,
+    persist_pushed_at,
     upsert_depends_on,
     upsert_external_repo,
     upsert_project,
@@ -375,6 +381,7 @@ async def crawl_github_repo(
     adoption_stars: int,
     adoption_forks: int,
     pushed_at_isodt: str | None = None,
+    observed_at_isodt: str | None = None,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -386,6 +393,10 @@ async def crawl_github_repo(
     4. Defer ``crawl_package_deps`` for deps.dev-supported packages.
     5. Group registry-crawl packages by registry system and defer one
         ``crawl_package_registry`` task per supported system.
+
+    ``pushed_at_isodt`` feeds both ``latest_commit_date`` and, together with
+    ``observed_at_isodt`` (when the GitHub listing was fetched), the
+    monotonic ``Repo.pushed_at`` writer ``persist_pushed_at``.
 
     Registry-supported ecosystems are crawled directly for adoption signals,
     even when they also flow through deps.dev for release and dependency data.
@@ -443,7 +454,7 @@ async def crawl_github_repo(
         try:
             parsed_commit_date = dt.datetime.fromisoformat(pushed_at_isodt)
         except ValueError:
-            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt:r}")
+            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt!r}")
 
     repo_vertex_id = await upsert_repo(
         canonical_id=repo_canonical_id,
@@ -456,6 +467,17 @@ async def crawl_github_repo(
         adoption_forks=adoption_forks,
         releases=releases if releases else None,
     )
+
+    # ----- Record the push observation (monotonic, with its observation time) -----
+    parsed_observed_at: dt.datetime | None = None
+    if observed_at_isodt is not None:
+        try:
+            parsed_observed_at = dt.datetime.fromisoformat(observed_at_isodt)
+        except ValueError:
+            logger.warning(f"crawl_github_repo: unparseable observed_at={observed_at_isodt!r}")
+
+    if parsed_commit_date is not None and parsed_observed_at is not None:
+        await persist_pushed_at(repo_vertex_id, parsed_commit_date, parsed_observed_at)
 
     # ----- For each package: absorb ExternalRepo if one exists -----
     # must happen for all packages regardless of system
@@ -533,6 +555,15 @@ async def crawl_github_repo(
             repo=repo,
         )
 
+    # ----- Defer maintenance-signal collection if this repo is allowlisted -----
+    if defer_maintenance := maintenance_metric_allowed(owner, repo):
+        await defer_with_lock(
+            collect_maintenance_signals,
+            queueing_lock=f"maintenance:{owner}/{repo}",
+            owner=owner,
+            repo=repo,
+        )
+
     summary_line = (
         f"crawl_github_repo: {owner}/{repo} - {len(package_refs)} packages, "
         f"deferred {len(depsdev_packages)} crawl_package_deps tasks, "
@@ -540,6 +571,8 @@ async def crawl_github_repo(
     )
     if defer_github_dependents:
         summary_line += ", deferred crawl_github_dependents task"
+    if defer_maintenance:
+        summary_line += ", deferred collect_maintenance_signals task"
 
     logger.info(summary_line)
 
@@ -650,6 +683,40 @@ async def crawl_github_dependents(
     logger.info(f"crawl_github_dependents: {package_name} processed={result.packages_processed} errors={len(result.errors)}")
     if result.packages_processed == 0:
         raise AllPackagesFailed([package_name])
+
+
+# ---------------------------------------------------------------------------
+# Task: collect_maintenance_signals
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="opengrants")
+async def collect_maintenance_signals(
+    owner: str,
+    repo: str,
+) -> None:
+    """
+    Collect GitHub maintenance signals for one tracked repository.
+
+    Persists issue/PR responsiveness cohorts, backlog snapshots, tracker
+    applicability, and the release-date fallback under
+    ``Repo.repo_metadata["maintenance_signals"]``, plus the ``Repo.pushed_at``
+    column. Ranking happens later in ``materialize_maintenance``. Runs on the
+    ``opengrants`` queue because it needs the authenticated ``GITHUB_TOKEN``
+    that queue's worker carries.
+
+    Re-checks the fail-closed gate at execution time, so disabling the flag
+    or shrinking the allowlist stops already-queued work.
+    """
+
+    if not maintenance_metric_allowed(owner, repo):
+        logger.info(f"collect_maintenance_signals: gate disallows {owner}/{repo} at execution time, skipping")
+
+        return
+
+    # The per-repo summary line (requests, signal states) is logged by
+    # run_maintenance_collection, shared with the CLI path.
+    await run_maintenance_collection(owner, repo)
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +993,10 @@ def build_repo_defer_data(
     if repo_info.pushed_at:
         pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
 
+    observed_at_utc: dt.datetime | None = None
+    if repo_info.observed_at:
+        observed_at_utc = repo_info.observed_at.astimezone(dt.UTC)
+
     if depsdev_info:
         packages = depsdev_info.packages
         adoption_stars = max(adoption_stars, depsdev_info.stars_count)
@@ -941,6 +1012,7 @@ def build_repo_defer_data(
         project_id=project_id,
         packages=[asdict(pkg) for pkg in packages],
         pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
+        observed_at_isodt=observed_at_utc.isoformat() if observed_at_utc is not None else None,
         adoption_stars=adoption_stars,
         adoption_forks=adoption_forks,
     )
