@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from freezegun import freeze_time
 
 from pg_atlas.gitlog.parser import (
     CommitRecord,
@@ -186,6 +187,16 @@ async def test_unparseable_timestamp_skipped(mock_git_subprocess: Callable[..., 
     raw = "Alice\x00alice@ex.com\x00not-a-date\x00abcd1234\n"
     mock_git_subprocess(stdout=raw.encode(), returncode=0)
     records = await parse_git_log(tmp_path, since_months=24)
+    assert len(records) == 0
+
+
+async def test_future_timestamp_skipped(mock_git_subprocess: Callable[..., AsyncMock], tmp_path: Path) -> None:
+    """Commits with future timestamps are skipped gracefully."""
+    raw = "Doc Brown\x00doc@ex.com\x002028-01-01T00:00:00+00:00\x00abcd1234\n"
+    mock_git_subprocess(stdout=raw.encode(), returncode=0)
+    with freeze_time("2026-09-11"):
+        records = await parse_git_log(tmp_path, since_months=24)
+
     assert len(records) == 0
 
 

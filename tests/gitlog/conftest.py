@@ -172,7 +172,7 @@ def mock_git_subprocess(monkeypatch: pytest.MonkeyPatch) -> Callable[..., AsyncM
         if side_effect is not None:
             call_index = 0
 
-            async def _create(*args, **kwargs):
+            async def _create(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> MagicMock:
                 nonlocal call_index
                 idx = min(call_index, len(side_effect) - 1)
                 out, rc = side_effect[idx]

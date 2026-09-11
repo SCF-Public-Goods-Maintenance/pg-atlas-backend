@@ -262,6 +262,8 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
 
 def _parse_log_output(raw: str) -> list[CommitRecord]:
     """Parse null-delimited git log output into CommitRecord objects."""
+    tomorrow = dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
+
     records: list[CommitRecord] = []
     for line in raw.strip().splitlines():
         parts = line.split("\x00")
@@ -280,6 +282,11 @@ def _parse_log_output(raw: str) -> list[CommitRecord]:
             ts = dt.datetime.fromisoformat(iso_ts).astimezone(dt.UTC)
         except ValueError:
             logger.warning(f"Skipping commit {commit_hash} with unparseable timestamp: {iso_ts!r}")
+            continue
+
+        # skip commits that are timestamped after tomorrow
+        if ts > tomorrow:
+            logger.warning(f"Skipping commit {commit_hash} with future timestamp: {iso_ts!r}")
             continue
 
         records.append(CommitRecord(author_name=name, author_email=email, timestamp=ts, commit_hash=commit_hash))
