@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.7.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.6.0...v0.7.0) (2026-09-11)
+
+
+### Features
+
+* **bootstrap:** new option to process only selected projects ([ddd92bf](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/ddd92bf25919dc833479bdf552f06b6069d2129a))
+* **crawlers:** add GitHub dependents observation crawler ([#76](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/76)) ([e09be51](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/e09be51869082850d39e5f9bb44cc47eb6bd4d42))
+* **crawlers:** add NPM, Cargo, and PyPI registry crawlers ([#66](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/66)) ([5b83c06](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/5b83c06e61aef4428ba4185d8ad93bf9e4e79c4f))
+* **data:** allow Public Goods proposals to patch bootstrapped project info ([#73](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/73)) ([3067fb0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/3067fb08c04d36ff95342f5988ae3ca319350ef6))
+* let project overrides insert or patch ([#72](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/72)) ([61df102](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/61df102e9615a8e3c7e756f72dc607700b4ad003))
+* **script:** generate a row of shields.io metric badges for projects ([#75](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/75)) ([a93e380](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/a93e3804a9aa26a878931876f5e3083e902c8382))
+
+
+### Bug Fixes
+
+* **bootstrap:** pass required vars for github dependents to the crawl job ([#77](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/77)) ([935de42](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/935de4256a531fe276c893060eb00660b21ab25a))
+* **DB:** make all DB model enums JSON serializable ([d527338](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/d5273387a76155433f8c445036bebbe98c5c8485))
+* **gitlog:** skip commits that have timestamps in the future ([#78](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/78)) ([aca7508](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/aca7508a1a9d57314528d16edc95085e3d14f5cc))
+
+
+### Dependencies
+
+* upgrade all to apply mitigations ([1aab947](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/1aab947feeccc353e1aa8735079fa3f8f0c16e49))
+* upgrade all; generate deps.dev client stubs ([256e8f6](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/256e8f638c371ea9f3ce30e4c56e29ae54b2a879))
+
+
+### Documentation
+
+* add deepwiki and github badges to readme ([1e47af3](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/1e47af368f9d03eb60743aafc8eb66ee384f240c))
+
 ## [0.6.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.5.0...v0.6.0) (2026-04-21)
 
 
