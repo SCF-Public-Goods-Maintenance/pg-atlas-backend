@@ -68,10 +68,11 @@ from dataclasses import dataclass
 
 import betterproto2
 import dateutil.parser
+from typing_extensions import Self
 
 from ...message_pool import default_message_pool
 
-_COMPILER_VERSION = "0.9.0"
+_COMPILER_VERSION = "0.10.1"
 betterproto2.check_compiler_version(_COMPILER_VERSION)
 
 
@@ -110,6 +111,13 @@ class Edition(betterproto2.Enum):
 
     _2024 = 1001
 
+    _2026 = 1002
+
+    UNSTABLE = 9999
+    """
+    A placeholder edition for developing and testing unscheduled features.
+    """
+
     _1_TEST_ONLY = 1
     """
     Placeholder editions for testing feature resolution.  These should not be
@@ -140,6 +148,8 @@ class Edition(betterproto2.Enum):
             999: "EDITION_PROTO3",
             1000: "EDITION_2023",
             1001: "EDITION_2024",
+            1002: "EDITION_2026",
+            9999: "EDITION_UNSTABLE",
             1: "EDITION_1_TEST_ONLY",
             2: "EDITION_2_TEST_ONLY",
             99997: "EDITION_99997_TEST_ONLY",
@@ -157,6 +167,8 @@ class Edition(betterproto2.Enum):
             "EDITION_PROTO3": 999,
             "EDITION_2023": 1000,
             "EDITION_2024": 1001,
+            "EDITION_2026": 1002,
+            "EDITION_UNSTABLE": 9999,
             "EDITION_1_TEST_ONLY": 1,
             "EDITION_2_TEST_ONLY": 2,
             "EDITION_99997_TEST_ONLY": 99997,
@@ -185,6 +197,8 @@ class FeatureSetEnforceNamingStyle(betterproto2.Enum):
     STYLE2024 = 1
 
     STYLE_LEGACY = 2
+
+    STYLE2026 = 3
 
 
 class FeatureSetEnumType(betterproto2.Enum):
@@ -1169,6 +1183,7 @@ class FieldOptions(betterproto2.Message):
 
     weak: "bool" = betterproto2.field(10, betterproto2.TYPE_BOOL)
     """
+    DEPRECATED. DO NOT USE!
     For Google-internal migration only. Do not use.
     """
 
@@ -1200,6 +1215,11 @@ class FieldOptions(betterproto2.Message):
     """
     The parser stores options it doesn't recognize here. See above.
     """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.is_set("weak"):
+            warnings.warn("FieldOptions.weak is deprecated", DeprecationWarning)
 
 
 default_message_pool.register_message("google.protobuf", "FieldOptions", FieldOptions)
@@ -1248,6 +1268,12 @@ class FieldOptionsFeatureSupport(betterproto2.Message):
     The edition this feature is no longer available in.  In editions after
     this one, the last default assigned will be used, and proto files will
     not be able to override it.
+    """
+
+    removal_error: "str" = betterproto2.field(5, betterproto2.TYPE_STRING)
+    """
+    The removal error text if this feature is used after the edition it was
+    removed in.
     """
 
 
@@ -2079,8 +2105,8 @@ class Timestamp(betterproto2.Message):
     {hour}, {min}, and {sec} are zero-padded to two digits each. The fractional
     seconds, which can go up to 9 digits (i.e. up to 1 nanosecond resolution),
     are optional. The "Z" suffix indicates the timezone ("UTC"); the timezone
-    is required. A proto3 JSON serializer should always use UTC (as indicated by
-    "Z") when printing the Timestamp type and a proto3 JSON parser should be
+    is required. A ProtoJSON serializer should always use UTC (as indicated by
+    "Z") when printing the Timestamp type and a ProtoJSON parser should be
     able to accept both UTC and other timezones (as indicated by an offset).
 
     For example, "2017-01-15T01:30:15.01Z" encodes 15.01 seconds past
@@ -2100,21 +2126,22 @@ class Timestamp(betterproto2.Message):
 
     seconds: "int" = betterproto2.field(1, betterproto2.TYPE_INT64)
     """
-    Represents seconds of UTC time since Unix epoch
-    1970-01-01T00:00:00Z. Must be from 0001-01-01T00:00:00Z to
-    9999-12-31T23:59:59Z inclusive.
+    Represents seconds of UTC time since Unix epoch 1970-01-01T00:00:00Z. Must
+    be between -62135596800 and 253402300799 inclusive (which corresponds to
+    0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z).
     """
 
     nanos: "int" = betterproto2.field(2, betterproto2.TYPE_INT32)
     """
-    Non-negative fractions of a second at nanosecond resolution. Negative
-    second values with fractions must still have non-negative nanos values
-    that count forward in time. Must be from 0 to 999,999,999
+    Non-negative fractions of a second at nanosecond resolution. This field is
+    the nanosecond portion of the duration, not an alternative to seconds.
+    Negative second values with fractions must still have non-negative nanos
+    values that count forward in time. Must be between 0 and 999,999,999
     inclusive.
     """
 
     @classmethod
-    def from_datetime(cls, dt: datetime.datetime) -> "Timestamp":
+    def from_datetime(cls, dt: datetime.datetime) -> Self:
         if not dt.tzinfo:
             raise ValueError("datetime must be timezone aware")
 
@@ -2159,11 +2186,11 @@ class Timestamp(betterproto2.Message):
         return f"{result}.{nanos:09d}"
 
     @classmethod
-    def from_dict(cls, value, *, ignore_unknown_fields: bool = False):
+    def from_dict(cls, value, *, ignore_unknown_fields: bool = False) -> Self:
         if isinstance(value, str):
             dt = dateutil.parser.isoparse(value)
             dt = dt.astimezone(datetime.timezone.utc)
-            return Timestamp.from_datetime(dt)
+            return cls.from_datetime(dt)
 
         return super().from_dict(value, ignore_unknown_fields=ignore_unknown_fields)
 

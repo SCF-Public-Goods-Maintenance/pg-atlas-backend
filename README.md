@@ -116,10 +116,10 @@ starts reporting errors while working on your PR, it's time to run:
 
 ```sh
 # generate aiobotocore services
-uvx --with 'aiobotocore==3.3.0' mypy-boto3-builder ./vendored --download-static-stubs --product aiobotocore-custom --output-type wheel --services s3
+uvx --with 'aiobotocore==3.9.1' mypy-boto3-builder ./vendored --download-static-stubs --product aiobotocore-custom --output-type wheel --services s3
 
 # install with uv
-uv add --dev vendored/types_aiobotocore_custom-3.3.0-py3-none-any.whl
+uv add --dev vendored/types_aiobotocore_custom-3.9.1-py3-none-any.whl
 ```
 
 ## Environment Variables

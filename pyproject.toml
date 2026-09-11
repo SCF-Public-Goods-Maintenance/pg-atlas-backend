@@ -62,7 +62,7 @@ conflicts = [
 ]
 
 [tool.uv.sources]
-types-aiobotocore-custom = { path = "vendored/types_aiobotocore_custom-3.3.0-py3-none-any.whl" }
+types-aiobotocore-custom = { path = "vendored/types_aiobotocore_custom-3.9.1-py3-none-any.whl" }
 
 [project.scripts]
 pg-atlas = "pg_atlas.__main__:main"

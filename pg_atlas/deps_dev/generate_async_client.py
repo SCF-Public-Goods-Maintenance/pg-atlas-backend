@@ -3,7 +3,7 @@ Generate async gRPC client stubs from the deps.dev proto definition.
 
 Requires the ``proto-build`` dependency group::
 
-    uv sync --group proto-build
+    uv sync --group proto-build --no-group dev
     uv run python pg_atlas/deps_dev/generate_async_client.py
 
 The generated code is written to ``pg_atlas/deps_dev/lib/`` and MUST be
