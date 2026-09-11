@@ -114,7 +114,7 @@ use relative notation (`-1`):
 
 ```sh
 uv run alembic downgrade <revision>
-uv run alembic downgrade -1
+uv run alembic downgrade atlas@-1
 ```
 
 Downgrades are rarely used in production, but they are helpful during
