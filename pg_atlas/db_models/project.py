@@ -40,6 +40,12 @@ class Project(PgBase):
     Vertex properties follow the PG Atlas property-graph data model. Metric columns
     (``pony_factor``, ``criticality_score``, ``adoption_score``) are materialized by
     the background computation pipeline and start as NULL.
+
+    Lock ordering invariant: any transaction that bulk-updates more than one
+    ``Project`` row MUST process those rows sorted ascending by ``id``. Two
+    overlapping transactions that both follow this order can only ever
+    contend for the same row in the same sequence, never in reverse — which
+    is what prevents an AB-BA deadlock between them.
     """
 
     __tablename__ = "projects"

@@ -9,6 +9,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import os
 
@@ -29,6 +30,7 @@ from pg_atlas.gitlog.persist import (
     upsert_contributed_to,
     upsert_contributor,
 )
+from tests.concurrency_helpers import fail_on_deadlock, set_short_deadlock_timeout
 from tests.gitlog.conftest import create_test_repo
 
 pytestmark = pytest.mark.skipif(
@@ -411,6 +413,96 @@ async def test_persist_result_counts(db_session_factory: async_sessionmaker[Asyn
     assert persist2.edges_updated == 1
     assert persist2.contributors_created == 0
     assert persist2.edges_created == 0
+
+
+# ---------------------------------------------------------------------------
+# persist_repo_result — deadlock reproduction (see PR#81)
+# ---------------------------------------------------------------------------
+
+
+async def test_persist_repo_result_does_not_deadlock_on_concurrent_reverse_contributor_order(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    clean_gitlog_tables: None,
+) -> None:
+    """
+    Two repos share two contributors. ``persist_repo_result`` sorts
+    contributors by ``email_hash`` before upserting them, so two concurrent
+    calls that receive the same two contributors in opposite input order
+    (repo1: [alice, bob], repo2: [bob, alice]) still acquire their row locks
+    in the same global order. One call briefly waits on the other's row lock,
+    but neither can produce an AB-BA deadlock.
+
+    ``asyncio.wait_for`` bounds the concurrent run so a regression that
+    reintroduces inconsistent lock ordering fails loudly instead of hanging
+    the test suite.
+    """
+    async with db_session_factory() as session:
+        repo1 = await create_test_repo(
+            session,
+            canonical_id="pkg:github/test/deadlock-repo1",
+            repo_url="https://github.com/test-org/deadlock-repo1",
+        )
+        repo2 = await create_test_repo(
+            session,
+            canonical_id="pkg:github/test/deadlock-repo2",
+            repo_url="https://github.com/test-org/deadlock-repo2",
+        )
+        alice_hash = hash_email("alice-deadlock@example.com")
+        bob_hash = hash_email("bob-deadlock@example.com")
+        session.add_all(
+            [
+                Contributor(email_hash=alice_hash, name="Alice"),
+                Contributor(email_hash=bob_hash, name="Bob"),
+            ]
+        )
+        await session.commit()
+        repo1_id, repo2_id = repo1.id, repo2.id
+
+    alice_stats = ContributorStats(
+        email_hash=alice_hash,
+        display_name="Alice Updated",
+        number_of_commits=1,
+        first_commit_date=dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+        last_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
+    )
+    bob_stats = ContributorStats(
+        email_hash=bob_hash,
+        display_name="Bob Updated",
+        number_of_commits=1,
+        first_commit_date=dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+        last_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
+    )
+
+    async def _run(repo_id: int, contributors: list[ContributorStats]) -> object:
+        async with db_session_factory() as session:
+            await set_short_deadlock_timeout(session)
+            repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
+            result = RepoParseResult(
+                repo_url="https://github.com/test-org/deadlock-repo",
+                contributors=contributors,
+                latest_commit_date=dt.datetime(2025, 6, 1, tzinfo=dt.UTC),
+                total_commits=2,
+                bot_commit_count=0,
+                bot_contributor_count=0,
+            )
+            try:
+                persisted = await persist_repo_result(session, repo, result)
+                await session.commit()
+                return persisted
+            except BaseException:
+                await session.rollback()
+                raise
+
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(
+            _run(repo1_id, [alice_stats, bob_stats]),
+            _run(repo2_id, [bob_stats, alice_stats]),
+            return_exceptions=True,
+        ),
+        timeout=10,
+    )
+
+    fail_on_deadlock(outcomes)
 
 
 async def test_record_gitlog_attempt_success(

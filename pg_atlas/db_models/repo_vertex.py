@@ -85,6 +85,12 @@ class Repo(RepoVertex):
 
     Metric columns (``pony_factor``, ``criticality_score``, adoption signals) are
     materialized by the background computation pipeline.
+
+    Lock ordering invariant: any transaction that bulk-updates more than one
+    ``Repo`` row MUST process those rows sorted ascending by ``id``. Two
+    overlapping transactions that both follow this order can only ever
+    contend for the same row in the same sequence, never in reverse — which
+    is what prevents an AB-BA deadlock between them.
     """
 
     __tablename__ = "repos"
@@ -181,6 +187,10 @@ class ExternalRepo(RepoVertex):
     Tracked for blast-radius analysis only; no project-level data is maintained.
     Created by SBOM ingestion (when a dependency cannot be mapped to a known ``Repo``)
     and registry crawls.
+
+    Lock ordering invariant: any transaction that bulk-updates more than one
+    ``ExternalRepo`` row MUST process those rows sorted ascending by ``id``,
+    for the same AB-BA deadlock-avoidance reason as ``Repo``.
     """
 
     __tablename__ = "external_repos"

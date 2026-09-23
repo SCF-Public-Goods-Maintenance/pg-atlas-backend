@@ -8,9 +8,8 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -21,6 +20,7 @@ from pg_atlas.db_models import ContributedTo, Contributor, GitLogArtifact, Proje
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus, Visibility
 from pg_atlas.gitlog.parser import hash_email
 from pg_atlas.metrics.materialize_pony import PonyFactorMaterializationStats, materialize_pony_factor_scores
+from tests.concurrency_helpers import assert_ascending_id_order, spy_bulk_update_id_order
 from tests.metrics.conftest import _make_flush_guard
 
 
@@ -425,3 +425,30 @@ async def test_materialize_pony_factor_scores_does_not_use_uow(
 
     flush_mock.assert_not_called()
     assert_no_uow(rollback_db_session)
+
+
+# ---------------------------------------------------------------------------
+# materialize_pony_factor_scores — bulk-update lock ordering invariant
+# ---------------------------------------------------------------------------
+
+
+async def test_materialize_pony_factor_scores_updates_rows_in_ascending_id_order(
+    rollback_db_session: AsyncSession,
+) -> None:
+    """
+    Two concurrent transactions can only deadlock if they acquire the same
+    rows' locks in a different order. Spy on the bound parameters of every
+    bulk ``UPDATE`` this materializer issues and assert each table's id
+    sequence is non-decreasing — the invariant that rules out an AB-BA
+    deadlock between two overlapping runs of this function, or against any
+    other writer that also updates Repo/Project rows in ascending id order.
+    """
+
+    await _seed_pony_component(rollback_db_session)
+    observed = spy_bulk_update_id_order(rollback_db_session, Repo, Project)
+
+    await materialize_pony_factor_scores(rollback_db_session)
+
+    assert observed["repos"], "expected at least one Repo bulk UPDATE to be observed"
+    assert observed["projects"], "expected at least one Project bulk UPDATE to be observed"
+    assert_ascending_id_order(observed)

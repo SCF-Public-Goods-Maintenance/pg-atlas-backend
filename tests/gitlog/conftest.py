@@ -14,13 +14,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.repo_vertex import Repo
 from pg_atlas.gitlog.parser import CommitRecord, ContributorStats, hash_email
-from tests.conftest import get_test_database_url
 from tests.db_cleanup import GITLOG_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
 # ---------------------------------------------------------------------------
@@ -202,22 +200,6 @@ def mock_git_subprocess(monkeypatch: pytest.MonkeyPatch) -> Callable[..., AsyncM
 # ---------------------------------------------------------------------------
 # Database fixtures (shared by test_persist.py and test_db_integration.py)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def db_engine() -> AsyncGenerator[Any, None]:
-    database_url = get_test_database_url()
-    if not database_url:
-        pytest.skip("PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set")
-
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture
-async def db_session_factory(db_engine: Any) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
 
 
 @pytest.fixture(autouse=True)
