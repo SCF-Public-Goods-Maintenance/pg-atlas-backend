@@ -7,10 +7,9 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -20,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models import Project, Repo
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, Visibility
 from pg_atlas.metrics.materialize_adoption import AdoptionMaterializationStats, materialize_adoption_scores
+from tests.concurrency_helpers import assert_ascending_id_order, spy_bulk_update_id_order
 from tests.metrics.conftest import _make_flush_guard
 
 
@@ -325,3 +325,54 @@ async def test_materialize_adoption_scores_does_not_use_uow(
 
     flush_mock.assert_not_called()
     assert_no_uow(rollback_db_session)
+
+
+# ---------------------------------------------------------------------------
+# materialize_adoption_scores — bulk-update lock ordering invariant
+# ---------------------------------------------------------------------------
+
+
+async def test_materialize_adoption_scores_updates_rows_in_ascending_id_order(
+    rollback_db_session: AsyncSession,
+) -> None:
+    """
+    Two concurrent transactions can only deadlock if they acquire the same
+    rows' locks in a different order. Spy on the bound parameters of every
+    bulk ``UPDATE`` this materializer issues and assert each table's id
+    sequence is non-decreasing — the invariant that rules out an AB-BA
+    deadlock between two overlapping runs of this function, or against any
+    other writer that also updates Repo/Project rows in ascending id order.
+
+    Out of scope: the stale-score ``WHERE ... NOT IN`` UPDATE on ``Project``,
+    which has no per-row bound parameters to inspect — its internal row order
+    is decided by Postgres and isn't testable this way.
+    """
+
+    suffix = uuid4().hex[:8]
+    project = Project(
+        canonical_id=f"daoip-5:stellar:project:adoption-order-{suffix}",
+        display_name=f"Adoption Order {suffix}",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    rollback_db_session.add(project)
+    await rollback_db_session.flush()
+
+    repo = Repo(
+        canonical_id=f"pkg:github/test/adoption-order-{suffix}",
+        display_name=f"adoption-order-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+        adoption_downloads=999,  # sentinel: guaranteed to differ from the freshly computed value
+    )
+    rollback_db_session.add(repo)
+    await rollback_db_session.flush()
+
+    observed = spy_bulk_update_id_order(rollback_db_session, Repo, Project)
+
+    await materialize_adoption_scores(rollback_db_session)
+
+    assert observed["repos"], "expected at least one Repo bulk UPDATE to be observed"
+    assert observed["projects"], "expected at least one Project bulk UPDATE to be observed"
+    assert_ascending_id_order(observed)

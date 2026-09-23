@@ -30,6 +30,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from operator import itemgetter
 from pathlib import Path
 
 from sqlalchemy import func, select, update
@@ -102,7 +103,7 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
         if current_score != active_scores.get(cid, 0)
     ]
     if repo_updates:
-        await session.execute(update(Repo), repo_updates)
+        await session.execute(update(Repo), sorted(repo_updates, key=itemgetter("id")))
 
     # --- bulk update ExternalRepo criticality scores (skip rows where score is unchanged) ---
     ext_updates = [
@@ -111,7 +112,7 @@ async def materialize_criticality_scores(session: AsyncSession) -> CriticalityMa
         if current_score != active_scores.get(cid, 0)
     ]
     if ext_updates:
-        await session.execute(update(ExternalRepo), ext_updates)
+        await session.execute(update(ExternalRepo), sorted(ext_updates, key=itemgetter("id")))
 
     # --- set-based Project aggregation (sum of child Repo scores) ---
     project_score_subquery = (

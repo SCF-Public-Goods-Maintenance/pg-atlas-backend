@@ -30,6 +30,15 @@ class Contributor(PgBase):
     stripped). It serves as the de-duplication key across repos without storing PII.
     The ``name`` field stores the most-recently-seen commit author name and may change
     across refreshes.
+
+    Lock ordering invariant: any transaction that updates more than one
+    ``Contributor`` row (e.g. ``persist_repo_result``) MUST process those rows
+    sorted ascending by ``email_hash``. Two overlapping transactions that both
+    follow this order can only ever contend for the same row in the same
+    sequence, never in reverse — which is what prevents an AB-BA deadlock
+    between them. Sorting by a different key (including the surrogate ``id``)
+    breaks this guarantee for any writer that shares contributors with one
+    that sorts by ``email_hash``.
     """
 
     __tablename__ = "contributors"

@@ -11,9 +11,8 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Callable
 from uuid import uuid4
 
 import pytest
@@ -22,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.db_models import DependsOn, ExternalRepo, Project, Repo
 from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, Visibility
 from pg_atlas.metrics.materialize_criticality import CriticalityMaterializationStats, materialize_criticality_scores
+from tests.concurrency_helpers import assert_ascending_id_order, spy_bulk_update_id_order
 from tests.metrics.conftest import _make_flush_guard
 
 
@@ -346,3 +346,34 @@ async def test_materialize_criticality_scores_does_not_use_uow(
 
     flush_mock.assert_not_called()
     assert_no_uow(rollback_db_session)
+
+
+async def test_materialize_criticality_scores_updates_rows_in_ascending_id_order(
+    rollback_db_session: AsyncSession,
+) -> None:
+    """
+    Two concurrent transactions can only deadlock if they acquire the same
+    rows' locks in a different order. Spy on the bound parameters of every
+    bulk ``UPDATE`` this materializer issues and assert each table's id
+    sequence is non-decreasing — the invariant that rules out an AB-BA
+    deadlock between two overlapping runs of this function, or against any
+    other writer that also updates Repo/ExternalRepo rows in ascending id
+    order.
+
+    Out of scope: the ``Project`` update, a single correlated-subquery
+    UPDATE with no per-row bound parameters to inspect — its internal row
+    order is decided by Postgres and isn't testable this way.
+
+    FIXME: this test can incidentally pass, when the query planner's row
+    order happens to be id-ascending. I've tried ways to enforce a different
+    physical order, but they were all too slow to use in a test case.
+    """
+
+    await _seed_disconnected_component(rollback_db_session)
+    observed = spy_bulk_update_id_order(rollback_db_session, Repo, ExternalRepo)
+
+    await materialize_criticality_scores(rollback_db_session)
+
+    assert observed["repos"], "expected at least one Repo bulk UPDATE to be observed"
+    assert observed["external_repos"], "expected at least one ExternalRepo bulk UPDATE to be observed"
+    assert_ascending_id_order(observed)

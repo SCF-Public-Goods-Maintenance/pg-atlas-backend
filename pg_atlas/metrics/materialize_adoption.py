@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -138,7 +139,7 @@ async def materialize_adoption_scores(session: AsyncSession) -> AdoptionMaterial
     # --- bulk-update scored projects ---
     if project_scores:
         project_updates = [{"id": pid, "adoption_score": score} for pid, score in project_scores.items()]
-        await session.execute(update(Project), project_updates)
+        await session.execute(update(Project), sorted(project_updates, key=itemgetter("id")))
 
     # --- null-out stale unscored projects ---
     scored_ids = set(project_scores.keys())

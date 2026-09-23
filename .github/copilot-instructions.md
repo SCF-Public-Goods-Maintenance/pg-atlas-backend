@@ -16,6 +16,10 @@ is not obvious where to document your work, create a new .md file.
 Whenever possible, write test cases to validate your work. Do not hesitate to write unit tests. If
 you need to write a larger integration test or GitHub workflow, ask for user input first.
 
+If the user asks for "red tests", they are doing TDD: write tests that currently **fail** against the
+existing code, proving the bug/gap. Never write a test that asserts the buggy behavior as the
+expected outcome — that leaves you with a failing test suite once the underlying issue is fixed.
+
 ## Git & Version Control
 
 Never run `git add`, `git stage`, `git commit`, `git push`, or any equivalent (including GitHub MCP

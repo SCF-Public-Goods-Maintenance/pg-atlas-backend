@@ -112,6 +112,10 @@ async def upsert_contributed_to(
     return True
 
 
+def email_hash_key(contributor_stats: ContributorStats) -> str:
+    return contributor_stats.email_hash
+
+
 async def persist_repo_result(
     session: AsyncSession,
     repo: Repo,
@@ -128,7 +132,7 @@ async def persist_repo_result(
     repo = await session.merge(repo)
     persist = PersistResult()
 
-    for stats in result.contributors:
+    for stats in sorted(result.contributors, key=email_hash_key):
         contributor, contributor_created = await upsert_contributor(session, stats.email_hash, stats.display_name)
         if contributor_created:
             persist.contributors_created += 1
