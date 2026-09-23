@@ -343,31 +343,65 @@ async def test_materialize_adoption_scores_updates_rows_in_ascending_id_order(
     deadlock between two overlapping runs of this function, or against any
     other writer that also updates Repo/Project rows in ascending id order.
 
+    Project A is created first (lower id) but given the later-inserted (higher
+    id) repo; Project B is created second (higher id) but given the
+    earlier-inserted (lower id) repo. ``project_updates`` is built by
+    iterating repos in ascending repo-id order and inserting each repo's
+    project into a dict on first sight — so this layout deterministically
+    reproduces a project id sequence out of order, independent of whatever
+    else is in the database (a single project/repo pair would trivially pass
+    on an otherwise-empty CI database).
+
     Out of scope: the stale-score ``WHERE ... NOT IN`` UPDATE on ``Project``,
     which has no per-row bound parameters to inspect — its internal row order
     is decided by Postgres and isn't testable this way.
     """
 
     suffix = uuid4().hex[:8]
-    project = Project(
-        canonical_id=f"daoip-5:stellar:project:adoption-order-{suffix}",
-        display_name=f"Adoption Order {suffix}",
+    project_a = Project(
+        canonical_id=f"daoip-5:stellar:project:adoption-order-a-{suffix}",
+        display_name=f"Adoption Order A {suffix}",
         project_type=ProjectType.scf_project,
         activity_status=ActivityStatus.live,
     )
-    rollback_db_session.add(project)
+    rollback_db_session.add(project_a)
     await rollback_db_session.flush()
 
-    repo = Repo(
-        canonical_id=f"pkg:github/test/adoption-order-{suffix}",
-        display_name=f"adoption-order-{suffix}",
+    project_b = Project(
+        canonical_id=f"daoip-5:stellar:project:adoption-order-b-{suffix}",
+        display_name=f"Adoption Order B {suffix}",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    rollback_db_session.add(project_b)
+    await rollback_db_session.flush()
+    assert project_a.id < project_b.id
+
+    # repo_for_b gets the lower repo id but belongs to the higher-id project.
+    repo_for_b = Repo(
+        canonical_id=f"pkg:github/test/adoption-order-b-{suffix}",
+        display_name=f"adoption-order-b-{suffix}",
         visibility=Visibility.public,
         latest_version="1.0.0",
-        project_id=project.id,
+        project_id=project_b.id,
+        adoption_stars=5,  # a real signal, so the repo gets a composite regardless of background data
+    )
+    rollback_db_session.add(repo_for_b)
+    await rollback_db_session.flush()
+
+    # repo_for_a gets the higher repo id but belongs to the lower-id project.
+    repo_for_a = Repo(
+        canonical_id=f"pkg:github/test/adoption-order-a-{suffix}",
+        display_name=f"adoption-order-a-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project_a.id,
+        adoption_stars=7,
         adoption_downloads=999,  # sentinel: guaranteed to differ from the freshly computed value
     )
-    rollback_db_session.add(repo)
+    rollback_db_session.add(repo_for_a)
     await rollback_db_session.flush()
+    assert repo_for_b.id < repo_for_a.id
 
     observed = spy_bulk_update_id_order(rollback_db_session, Repo, Project)
 
