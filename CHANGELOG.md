@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.7.0...v0.7.1) (2026-09-23)
+
+
+### Performance Improvements
+
+* **db:** reduce deadlocks during update transactions ([#81](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/81)) ([75eb73d](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/75eb73d1f47d30b2fa630e0ed2855eb1838f8423))
+
 ## [0.7.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.6.0...v0.7.0) (2026-09-11)
 
 
