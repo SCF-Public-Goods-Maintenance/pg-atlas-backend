@@ -416,7 +416,7 @@ async def test_persist_result_counts(db_session_factory: async_sessionmaker[Asyn
 
 
 # ---------------------------------------------------------------------------
-# persist_repo_result — deadlock reproduction (see perf/reduce-db-deadlocks-during-updates)
+# persist_repo_result — deadlock reproduction (see PR#81)
 # ---------------------------------------------------------------------------
 
 
