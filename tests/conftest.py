@@ -13,11 +13,14 @@ from __future__ import annotations
 # so that Settings() can be instantiated without a .env file in CI.
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 os.environ.setdefault("PG_ATLAS_API_URL", "https://test.pg-atlas.example")
 # Ensure IPFS gateway reads are disabled in all tests unless a test explicitly
@@ -124,7 +127,21 @@ async def authenticated_client(
 
 
 @pytest.fixture
-async def db_session() -> AsyncGenerator[Any, None]:
+async def db_engine() -> AsyncGenerator[AsyncEngine]:
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    database_url = get_test_database_url()
+    if not database_url:
+        pytest.skip("PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration test")
+
+    engine: AsyncEngine = create_async_engine(database_url, poolclass=NullPool)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
     """
     Real ``AsyncSession`` against the configured PostgreSQL database.
 
@@ -138,19 +155,25 @@ async def db_session() -> AsyncGenerator[Any, None]:
     to reuse connections from a previous loop and raise
     ``RuntimeError: Future attached to a different loop``.
     """
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-    from sqlalchemy.pool import NullPool
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    database_url = get_test_database_url()
-    if not database_url:
-        pytest.skip("PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration test")
+    async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        db_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with async_session() as session:
+        yield session
 
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    try:
-        async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )
-        async with async_session() as session:
-            yield session
-    finally:
-        await engine.dispose()
+
+@pytest.fixture
+async def db_session_factory(db_engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession]]:
+    """
+    Real, committing ``async_sessionmaker`` against the configured database.
+
+    Unlike ``db_session``, this yields a *factory* rather than a single
+    session, so tests can open several independent connections — required for
+    concurrency/deadlock tests where two overlapping transactions must run on
+    separate sessions. Skipped automatically when no test database is configured.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    yield async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)

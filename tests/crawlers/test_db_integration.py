@@ -29,8 +29,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.crawlers.base import (
     CrawledDependency,
@@ -59,24 +58,6 @@ pytestmark = pytest.mark.skipif(
     not get_test_database_url(),
     reason="PG_ATLAS_DATABASE_URL / PG_ATLAS_TEST_DATABASE_URL not set; skipping database integration tests",
 )
-
-
-@pytest.fixture
-async def db_engine() -> AsyncGenerator[Any, None]:
-    """Create a fresh async engine with NullPool for test isolation."""
-
-    database_url = get_test_database_url()
-    assert database_url is not None
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture
-async def db_session_factory(db_engine: Any) -> async_sessionmaker[AsyncSession]:
-    """Session factory for crawler tests."""
-
-    return async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
 
 
 @pytest.fixture(autouse=True)
