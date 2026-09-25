@@ -366,8 +366,11 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
     1. Looks up the ``ExternalRepo`` by *external_canonical_id*.
     2. Deletes self-loop edges that would result from the merge.
-    3. Deletes conflicting edges where the target pair already exists
-       (composite PK ``(in_vertex_id, out_vertex_id)`` enforces uniqueness).
+    3. When the conflicting ``ExternalRepo`` edge is verified-sbom and the
+       target edge is not, upgrades the target edge to verified-sbom with the
+       ``ExternalRepo`` edge's version range; a verified target edge keeps its
+       values. Then deletes the conflicting ``ExternalRepo`` edges (composite
+       PK ``(in_vertex_id, out_vertex_id)`` enforces uniqueness).
     4. Re-points all remaining ``depends_on`` edges from the old vertex to
        *target_vertex_id*.
     5. Deletes the ``ExternalRepo`` child row and ``RepoVertex`` base row.
@@ -378,9 +381,10 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
     All operations happen within a single transaction via SQLAlchemy Core.
     """
     session = await _session()
-    dep = DependsOn.__table__
-    ext_table = ExternalRepo.__table__
-    base_table = RepoVertex.__table__
+    dep = DependsOn.metadata.tables[DependsOn.__tablename__]
+    external_dep = dep.alias("external_dep")
+    ext_table = ExternalRepo.metadata.tables[ExternalRepo.__tablename__]
+    base_table = RepoVertex.metadata.tables[RepoVertex.__tablename__]
 
     try:
         # 1. Look up ExternalRepo.
@@ -405,57 +409,75 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
         # 2. Delete self-loops that would result from the merge.
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == target_vertex_id,
                 dep.c.out_vertex_id == ext_id,
             )
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == ext_id,
                 dep.c.out_vertex_id == target_vertex_id,
             )
         )
 
-        # 3. Delete conflicting edges (out_vertex_id direction):
+        # 3. Preserve verified evidence, then delete conflicts (out_vertex_id direction):
         #    edges where something depends on ext_id, but already depends on target.
+        await session.execute(
+            update(dep)
+            .where(
+                dep.c.out_vertex_id == target_vertex_id,
+                dep.c.confidence != EdgeConfidence.verified_sbom,
+                external_dep.c.out_vertex_id == ext_id,
+                external_dep.c.in_vertex_id == dep.c.in_vertex_id,
+                external_dep.c.confidence == EdgeConfidence.verified_sbom,
+            )
+            .values(confidence=EdgeConfidence.verified_sbom, version_range=external_dep.c.version_range)
+        )
         conflict_out = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
             dep.c.out_vertex_id == ext_id,
             dep.c.in_vertex_id.in_(select(dep.c.in_vertex_id).where(dep.c.out_vertex_id == target_vertex_id)),
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.out_vertex_id == ext_id,
                 dep.c.in_vertex_id.in_(select(conflict_out.subquery().c.in_vertex_id)),
             )
         )
 
         # 4a. Re-point remaining out_vertex_id edges.
-        await session.execute(
-            dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
-        )
+        await session.execute(dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id))
 
-        # 3b. Delete conflicting edges (in_vertex_id direction):
+        # 3b. Preserve verified evidence, then delete conflicts (in_vertex_id direction):
         #     edges where ext_id depends on something, but target already depends on it.
+        await session.execute(
+            update(dep)
+            .where(
+                dep.c.in_vertex_id == target_vertex_id,
+                dep.c.confidence != EdgeConfidence.verified_sbom,
+                external_dep.c.in_vertex_id == ext_id,
+                external_dep.c.out_vertex_id == dep.c.out_vertex_id,
+                external_dep.c.confidence == EdgeConfidence.verified_sbom,
+            )
+            .values(confidence=EdgeConfidence.verified_sbom, version_range=external_dep.c.version_range)
+        )
         conflict_in = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
             dep.c.in_vertex_id == ext_id,
             dep.c.out_vertex_id.in_(select(dep.c.out_vertex_id).where(dep.c.in_vertex_id == target_vertex_id)),
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == ext_id,
                 dep.c.out_vertex_id.in_(select(conflict_in.subquery().c.out_vertex_id)),
             )
         )
 
         # 4b. Re-point remaining in_vertex_id edges.
-        await session.execute(
-            dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
-        )
+        await session.execute(dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id))
 
         # 5. Delete ExternalRepo child row, then RepoVertex base row.
-        await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))  # type: ignore[arg-type]
-        await session.execute(delete(base_table).where(base_table.c.id == ext_id))  # type: ignore[arg-type]
+        await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))
+        await session.execute(delete(base_table).where(base_table.c.id == ext_id))
 
         await session.commit()
 

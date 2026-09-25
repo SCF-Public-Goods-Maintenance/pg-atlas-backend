@@ -403,6 +403,7 @@ async def crawl_github_repo(
 
     # ----- Build releases from deps.dev-supported package info -----
     releases: list[Release] = []
+    depsdev_purls: dict[tuple[str, str], str] = {}
     async with depsdev_session() as stub:
         for pkg in depsdev_packages:
             system = pkg.system
@@ -410,6 +411,9 @@ async def crawl_github_repo(
 
             try:
                 pkg_info = await get_package(system, name, stub=stub)
+                if pkg_info.purl:
+                    depsdev_purls[(system, name)] = strip_purl_version(pkg_info.purl)
+
                 for v in pkg_info.versions:
                     releases.append(
                         Release(
@@ -459,11 +463,14 @@ async def crawl_github_repo(
 
     # ----- For each package: absorb ExternalRepo if one exists -----
     # must happen for all packages regardless of system
+    absorb_ids: list[str] = []
+    seen_ids: set[str] = set()
     for pkg in package_refs:
         system = pkg.system
         name = pkg.name
 
-        # Build the canonical_id this package would have as a vertex.
+        # Name-based ids match crawl_package_deps vertices; deps.dev purls
+        # match SBOM-ingested vertices. Absorb both ids.
         # Package references from repository detection may not carry a purl.
         # FIXME: ensure and enforce that the purl is present on every PackageReference
         purl_type = _purl_type_for_system(system)
@@ -472,8 +479,18 @@ async def crawl_github_repo(
         else:
             pkg_canonical_id = name.lower()
 
-        # If an ExternalRepo exists for this package, absorb it into the
-        # Repo vertex — re-pointing all DependsOn edges to preserve SBOM
+        if pkg_canonical_id not in seen_ids:
+            seen_ids.add(pkg_canonical_id)
+            absorb_ids.append(pkg_canonical_id)
+
+        depsdev_purl = depsdev_purls.get((system, name))
+        if depsdev_purl and depsdev_purl not in seen_ids:
+            seen_ids.add(depsdev_purl)
+            absorb_ids.append(depsdev_purl)
+
+    for pkg_canonical_id in absorb_ids:
+        # If an ExternalRepo exists for this id, absorb it into the
+        # Repo vertex, re-pointing all DependsOn edges to preserve SBOM
         # and crawler edges.
         absorbed = await absorb_external_repo(pkg_canonical_id, repo_vertex_id)
 
