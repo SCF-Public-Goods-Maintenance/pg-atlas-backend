@@ -118,6 +118,14 @@ class Repo(RepoVertex):
     # --- project membership (optional: we may ingest SBOMs before the project exists) ---
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), default=None)
     latest_commit_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    #: GitHub ``pushed_at`` exactly as fetched. Kept separate from
+    #: ``latest_commit_date``, which is a most-recent-wins merge of push time
+    #: and parsed commit dates and therefore unusable as a pure push signal.
+    pushed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    #: The time the stored ``pushed_at`` was observed; freshness of the push
+    #: signal is judged against it. Written together with ``pushed_at`` by
+    #: ``pg_atlas.procrastinate.upserts.record_pushed_at``.
+    pushed_at_observed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     repo_url: Mapped[str | None] = mapped_column(String(512), default=None, unique=True)
 
     # --- materialised metrics ---

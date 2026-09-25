@@ -1,5 +1,6 @@
 """
-DB integration tests for upserts.absorb_external_repo and find_repo_by_release_purl.
+DB integration tests for upserts.absorb_external_repo, find_repo_by_release_purl,
+and the monotonic ``pushed_at`` writer.
 
 Require a live PostgreSQL instance configured via ``PG_ATLAS_DATABASE_URL``.
 Automatically skipped when the variable is absent.
@@ -10,8 +11,10 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -397,3 +400,226 @@ async def test_upsert_depends_on_preserves_verified_confidence(
     assert changed is True
     assert edge.version_range == "^2.0"
     assert edge.confidence == EdgeConfidence.verified_sbom
+
+
+# ---------------------------------------------------------------------------
+# record_pushed_at / persist_pushed_at
+# ---------------------------------------------------------------------------
+
+
+_T0 = dt.datetime(2026, 9, 1, 12, 0, tzinfo=dt.UTC)
+
+
+async def _seed_pushed_repo(
+    session: AsyncSession,
+    marker: str,
+    *,
+    pushed_at: dt.datetime | None,
+    observed_at: dt.datetime | None,
+) -> int:
+    suffix = uuid4().hex[:8]
+    repo = Repo(
+        canonical_id=f"pkg:github/test-org/pushed-at-{marker}-{suffix}",
+        display_name=f"pushed-at-{marker}-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        pushed_at=pushed_at,
+        pushed_at_observed_at=observed_at,
+    )
+    session.add(repo)
+    await session.commit()
+
+    return repo.id
+
+
+async def _stored_push(session: AsyncSession, repo_id: int) -> tuple[dt.datetime | None, dt.datetime | None]:
+    session.expire_all()
+    row = (await session.execute(select(Repo.pushed_at, Repo.pushed_at_observed_at).where(Repo.id == repo_id))).one()
+
+    return row[0], row[1]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_later_push_moves_both_columns(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """A later push time replaces the stored one together with its observation time."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    repo_id = await _seed_pushed_repo(session, "later", pushed_at=_T0, observed_at=_T0 + dt.timedelta(hours=5))
+
+    changed = await record_pushed_at(session, repo_id, _T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=1, hours=1))
+    await session.commit()
+
+    assert changed is True
+    assert await _stored_push(session, repo_id) == (_T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=1, hours=1))
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_fills_an_empty_row(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    repo_id = await _seed_pushed_repo(session, "empty", pushed_at=None, observed_at=None)
+
+    changed = await record_pushed_at(session, repo_id, _T0, _T0 + dt.timedelta(minutes=5))
+    await session.commit()
+
+    assert changed is True
+    assert await _stored_push(session, repo_id) == (_T0, _T0 + dt.timedelta(minutes=5))
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_equal_push_keeps_the_latest_observation(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Re-observing the same push only ever moves the observation time forward."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    stored_observed = _T0 + dt.timedelta(hours=5)
+    repo_id = await _seed_pushed_repo(session, "equal", pushed_at=_T0, observed_at=stored_observed)
+
+    # An earlier observation of the same push (e.g. a cached listing) changes nothing.
+    changed_earlier = await record_pushed_at(session, repo_id, _T0, _T0 + dt.timedelta(hours=1))
+    await session.commit()
+
+    assert changed_earlier is False
+    assert await _stored_push(session, repo_id) == (_T0, stored_observed)
+
+    # A later observation of the same push advances the observation time.
+    changed_later = await record_pushed_at(session, repo_id, _T0, _T0 + dt.timedelta(days=2))
+    await session.commit()
+
+    assert changed_later is True
+    assert await _stored_push(session, repo_id) == (_T0, _T0 + dt.timedelta(days=2))
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_equal_push_fills_a_missing_observation(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """An equal push fills a missing observation time."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    repo_id = await _seed_pushed_repo(session, "equal-null", pushed_at=_T0, observed_at=None)
+
+    changed = await record_pushed_at(session, repo_id, _T0, _T0 + dt.timedelta(hours=2))
+    await session.commit()
+
+    assert changed is True
+    assert await _stored_push(session, repo_id) == (_T0, _T0 + dt.timedelta(hours=2))
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_earlier_push_changes_nothing(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """``pushed_at`` never moves backwards, whatever the incoming observation time."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    stored_observed = _T0 + dt.timedelta(hours=5)
+    repo_id = await _seed_pushed_repo(session, "earlier", pushed_at=_T0, observed_at=stored_observed)
+
+    changed = await record_pushed_at(session, repo_id, _T0 - dt.timedelta(days=3), _T0 + dt.timedelta(days=10))
+    await session.commit()
+
+    assert changed is False
+    assert await _stored_push(session, repo_id) == (_T0, stored_observed)
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+@pytest.mark.parametrize(
+    ("pushed_at", "observed_at"),
+    [
+        (None, _T0),
+        (_T0 + dt.timedelta(days=1), None),
+        (dt.datetime(2026, 9, 2, 12, 0), _T0 + dt.timedelta(days=1)),
+        (_T0 + dt.timedelta(days=1), dt.datetime(2026, 9, 2, 12, 0)),
+    ],
+    ids=["pushed-none", "observed-none", "pushed-naive", "observed-naive"],
+)
+async def test_record_pushed_at_rejects_missing_or_naive_values(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+    pushed_at: dt.datetime | None,
+    observed_at: dt.datetime | None,
+) -> None:
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    stored_observed = _T0 + dt.timedelta(hours=5)
+    repo_id = await _seed_pushed_repo(session, "reject", pushed_at=_T0, observed_at=stored_observed)
+
+    with caplog.at_level("WARNING", logger="pg_atlas.procrastinate.upserts"):
+        changed = await record_pushed_at(session, repo_id, pushed_at, observed_at)
+    await session.commit()
+
+    assert changed is False
+    assert "record_pushed_at" in caplog.text
+    assert await _stored_push(session, repo_id) == (_T0, stored_observed)
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_persist_pushed_at_commits_in_its_own_session(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    from pg_atlas.procrastinate.upserts import persist_pushed_at
+
+    factory, session = upsert_test_env
+    repo_id = await _seed_pushed_repo(session, "wrapper", pushed_at=_T0, observed_at=_T0)
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        changed = await persist_pushed_at(repo_id, _T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=1, minutes=1))
+
+    assert changed is True
+    assert await _stored_push(session, repo_id) == (_T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=1, minutes=1))
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_identical_observation_leaves_the_row_untouched(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Replaying the stored push and observation pair changes nothing, not even ``updated_at``."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    stored_observed = _T0 + dt.timedelta(hours=5)
+    repo_id = await _seed_pushed_repo(session, "identical", pushed_at=_T0, observed_at=stored_observed)
+    updated_before = (await session.execute(select(Repo.updated_at).where(Repo.id == repo_id))).scalar_one()
+
+    changed = await record_pushed_at(session, repo_id, _T0, stored_observed)
+    await session.commit()
+
+    assert changed is False
+    assert await _stored_push(session, repo_id) == (_T0, stored_observed)
+    updated_after = (await session.execute(select(Repo.updated_at).where(Repo.id == repo_id))).scalar_one()
+    assert updated_after == updated_before
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_record_pushed_at_later_push_keeps_its_own_older_observation_time(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """A later push takes the observation time it was seen at, even one before the stored observation."""
+
+    from pg_atlas.procrastinate.upserts import record_pushed_at
+
+    _, session = upsert_test_env
+    repo_id = await _seed_pushed_repo(session, "pairing", pushed_at=_T0, observed_at=_T0 + dt.timedelta(days=3))
+
+    changed = await record_pushed_at(session, repo_id, _T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=2))
+    await session.commit()
+
+    assert changed is True
+    assert await _stored_push(session, repo_id) == (_T0 + dt.timedelta(days=1), _T0 + dt.timedelta(days=2))

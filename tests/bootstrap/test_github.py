@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 from types import SimpleNamespace
 from typing import Any
 
@@ -119,3 +120,77 @@ def test_system_from_manifest_path() -> None:
     assert gh._system_from_manifest_path("a/b/package.json") == "NPM"
     assert gh._system_from_manifest_path("a/b/pubspec.yaml") == "DART"
     assert gh._system_from_manifest_path("a/b/unknown.txt") is None
+
+
+def _fake_github_repo(full_name: str) -> SimpleNamespace:
+    owner, name = full_name.split("/")
+    del owner
+
+    return SimpleNamespace(
+        name=name,
+        full_name=full_name,
+        description=None,
+        default_branch="main",
+        stargazers_count=3,
+        forks_count=1,
+        pushed_at=dt.datetime(2026, 9, 20, 8, 0, tzinfo=dt.UTC),
+        language=None,
+        topics=[],
+    )
+
+
+def test_list_org_repos_stamps_observation_time_before_the_call_and_keeps_it_when_cached(monkeypatch: Any) -> None:
+    """Every listed repo carries the time taken just before the listing call; cache hits keep it."""
+
+    calls: list[dt.datetime] = []
+
+    class _FakeUser:
+        def get_repos(self, type: str) -> list[SimpleNamespace]:
+            del type
+            calls.append(dt.datetime.now(dt.UTC))
+
+            return [_fake_github_repo("test-org/a"), _fake_github_repo("test-org/b")]
+
+    class _FakeClient:
+        def get_user(self, owner: str) -> _FakeUser:
+            del owner
+
+            return _FakeUser()
+
+    monkeypatch.setattr(gh, "get_github_client", lambda: _FakeClient())
+    monkeypatch.setattr(gh, "_gh_org_repos_cache", {})
+
+    before = dt.datetime.now(dt.UTC)
+    repos = gh.list_org_repos("test-org")
+
+    assert len(calls) == 1
+    assert [repo.observed_at for repo in repos] == [repos[0].observed_at] * 2
+    observed_at = repos[0].observed_at
+    assert observed_at is not None
+    assert observed_at.utcoffset() == dt.timedelta(0)
+    assert before <= observed_at <= calls[0]
+
+    cached = gh.list_org_repos("test-org")
+
+    assert len(calls) == 1
+    assert [repo.observed_at for repo in cached] == [observed_at] * 2
+
+
+def test_fetch_repo_list_stamps_each_repo_with_its_own_call_time(monkeypatch: Any) -> None:
+    calls: dict[str, dt.datetime] = {}
+
+    class _FakeClient:
+        def get_repo(self, full_name: str) -> SimpleNamespace:
+            calls[full_name] = dt.datetime.now(dt.UTC)
+
+            return _fake_github_repo(full_name)
+
+    monkeypatch.setattr(gh, "get_github_client", lambda: _FakeClient())
+
+    before = dt.datetime.now(dt.UTC)
+    repos = gh.fetch_repo_list(["https://github.com/test-org/a", "https://github.com/test-org/b/"])
+
+    assert [repo.full_name for repo in repos] == ["test-org/a", "test-org/b"]
+    first, second = repos[0].observed_at, repos[1].observed_at
+    assert first is not None and second is not None
+    assert before <= first <= calls["test-org/a"] <= second <= calls["test-org/b"]

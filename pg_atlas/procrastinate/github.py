@@ -165,6 +165,10 @@ class GitHubRepoMetadata:
     pushed_at: dt.datetime | None
     language: str
     topics: list[str]
+    #: UTC time captured immediately before the GitHub call that returned this
+    #: metadata; the observation time of ``pushed_at``. Cached listings keep
+    #: the time of the call that filled the cache.
+    observed_at: dt.datetime | None = None
 
 
 @dataclass
@@ -225,6 +229,7 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return _gh_org_repos_cache[owner]
 
     gh = get_github_client()
+    observed_at = dt.datetime.now(dt.UTC)
 
     try:
         repos: list[GitHubRepoMetadata] = []
@@ -240,6 +245,7 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
                     pushed_at=repo.pushed_at,
                     language=repo.language or "",
                     topics=repo.topics,
+                    observed_at=observed_at,
                 )
             )
 
@@ -270,6 +276,7 @@ def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
 
     for repo_url in git_repo_urls:
         owner, repo_name = repo_url.rstrip("/").rsplit("/", 2)[-2:]
+        observed_at = dt.datetime.now(dt.UTC)
         try:
             repo = gh.get_repo(f"{owner}/{repo_name}")
             metadata.append(
@@ -283,6 +290,7 @@ def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
                     pushed_at=repo.pushed_at,
                     language=repo.language or "",
                     topics=repo.topics,
+                    observed_at=observed_at,
                 )
             )
         except GithubException as exc:
