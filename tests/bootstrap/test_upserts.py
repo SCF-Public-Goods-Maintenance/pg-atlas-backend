@@ -202,6 +202,116 @@ async def test_absorb_external_repo_deduplicates_conflicts(
     assert edges[0].out_vertex_id == repo.id
 
 
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+@pytest.mark.parametrize("out_direction", [True, False], ids=["out", "in"])
+@pytest.mark.parametrize(
+    ("target_confidence", "target_range", "external_confidence", "external_range", "expected_range"),
+    [
+        (EdgeConfidence.inferred_shadow, None, EdgeConfidence.verified_sbom, "1.2.3", "1.2.3"),
+        (EdgeConfidence.verified_sbom, "2.0.0", EdgeConfidence.inferred_shadow, "1.2.3", "2.0.0"),
+        (EdgeConfidence.verified_sbom, "2.0.0", EdgeConfidence.verified_sbom, "1.2.3", "2.0.0"),
+        (EdgeConfidence.inferred_shadow, ">=1", EdgeConfidence.verified_sbom, None, None),
+        (EdgeConfidence.verified_sbom, None, EdgeConfidence.verified_sbom, "1.2.3", None),
+    ],
+    ids=["upgrade", "preserve-verified", "both-verified", "copy-null-range", "preserve-verified-null-range"],
+)
+async def test_absorb_external_repo_preserves_verified_conflicts(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+    out_direction: bool,
+    target_confidence: EdgeConfidence,
+    target_range: str | None,
+    external_confidence: EdgeConfidence,
+    external_range: str | None,
+    expected_range: str | None,
+) -> None:
+    """Verified evidence survives conflicts in either direction without changing unrelated edges."""
+    factory, session = upsert_test_env
+    repo = Repo(
+        canonical_id="pkg:github/test-org/test-repo-verified-conflict",
+        display_name="test-repo",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    ext = ExternalRepo(
+        canonical_id="pkg:cargo/test-pkg-verified-conflict",
+        display_name="test-pkg",
+        latest_version="1.0.0",
+    )
+    other = ExternalRepo(
+        canonical_id="pkg:npm/other-verified-conflict",
+        display_name="other",
+        latest_version="1.0.0",
+    )
+    unrelated = ExternalRepo(
+        canonical_id="pkg:npm/unrelated-verified-conflict",
+        display_name="unrelated",
+        latest_version="1.0.0",
+    )
+    session.add_all([repo, ext, other, unrelated])
+    await session.commit()
+
+    target_pair = (other.id, repo.id) if out_direction else (repo.id, other.id)
+    external_pair = (other.id, ext.id) if out_direction else (ext.id, other.id)
+    unrelated_pair = (unrelated.id, repo.id) if out_direction else (repo.id, unrelated.id)
+    session.add_all(
+        [
+            DependsOn(
+                in_vertex_id=target_pair[0],
+                out_vertex_id=target_pair[1],
+                confidence=target_confidence,
+                version_range=target_range,
+            ),
+            DependsOn(
+                in_vertex_id=external_pair[0],
+                out_vertex_id=external_pair[1],
+                confidence=external_confidence,
+                version_range=external_range,
+            ),
+            DependsOn(
+                in_vertex_id=unrelated_pair[0],
+                out_vertex_id=unrelated_pair[1],
+                confidence=EdgeConfidence.inferred_shadow,
+                version_range=">=3",
+            ),
+        ]
+    )
+    await session.commit()
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        result = await absorb_external_repo(ext.canonical_id, repo.id)
+
+    assert result is True
+    await session.reset()
+
+    gone = (await session.execute(select(RepoVertex).where(RepoVertex.id == ext.id))).scalar_one_or_none()
+    assert gone is None
+    target_edges = (
+        (
+            await session.execute(
+                select(DependsOn).where(
+                    DependsOn.in_vertex_id == target_pair[0],
+                    DependsOn.out_vertex_id == target_pair[1],
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(target_edges) == 1
+    assert target_edges[0].confidence == EdgeConfidence.verified_sbom
+    assert target_edges[0].version_range == expected_range
+    unrelated_edge = (
+        await session.execute(
+            select(DependsOn).where(
+                DependsOn.in_vertex_id == unrelated_pair[0],
+                DependsOn.out_vertex_id == unrelated_pair[1],
+            )
+        )
+    ).scalar_one()
+    assert unrelated_edge.confidence == EdgeConfidence.inferred_shadow
+    assert unrelated_edge.version_range == ">=3"
+
+
 # ---------------------------------------------------------------------------
 # find_repo_by_release_purl
 # ---------------------------------------------------------------------------
