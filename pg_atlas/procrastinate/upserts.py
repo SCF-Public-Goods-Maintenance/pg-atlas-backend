@@ -314,12 +314,12 @@ async def _promote_external_to_repo(
     """
     from pg_atlas.db_models.base import RepoVertexType
 
-    # 1. Delete ExternalRepo child row.
+    # Delete ExternalRepo child row.
     await session.execute(
         delete(ExternalRepo.__table__).where(ExternalRepo.__table__.c.id == vertex_id)  # type: ignore[arg-type]
     )
 
-    # 2. Update discriminator on the base table.
+    # Update discriminator on the base table.
     await session.execute(
         update(RepoVertex.__table__)  # type: ignore[arg-type]
         .where(RepoVertex.__table__.c.id == vertex_id)
@@ -328,7 +328,7 @@ async def _promote_external_to_repo(
         )
     )
 
-    # 3. Insert Repo child row using Core (bypasses dataclass __init__ ordering).
+    # Insert Repo child row using Core (bypasses dataclass __init__ ordering).
     await session.execute(
         Repo.__table__.insert().values(  # type: ignore[attr-defined]
             id=vertex_id,
@@ -387,7 +387,7 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
     base_table = RepoVertex.metadata.tables[RepoVertex.__tablename__]
 
     try:
-        # 1. Look up ExternalRepo.
+        # Look up ExternalRepo.
         vertex = await get_vertex(session, external_canonical_id)
 
         if vertex is None:
@@ -407,7 +407,7 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
             return False
 
-        # 2. Delete self-loops that would result from the merge.
+        # Delete self-loops that would result from the merge.
         await session.execute(
             delete(dep).where(
                 dep.c.in_vertex_id == target_vertex_id,
@@ -421,8 +421,8 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
             )
         )
 
-        # 3. Preserve verified evidence, then delete conflicts (out_vertex_id direction):
-        #    edges where something depends on ext_id, but already depends on target.
+        # Preserve verified evidence, then delete conflicts (out_vertex_id direction):
+        # edges where something depends on ext_id, but already depends on target.
         await session.execute(
             update(dep)
             .where(
@@ -445,11 +445,11 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
             )
         )
 
-        # 4a. Re-point remaining out_vertex_id edges.
+        # Re-point remaining out_vertex_id edges.
         await session.execute(dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id))
 
-        # 3b. Preserve verified evidence, then delete conflicts (in_vertex_id direction):
-        #     edges where ext_id depends on something, but target already depends on it.
+        # Preserve verified evidence, then delete conflicts (in_vertex_id direction):
+        # edges where ext_id depends on something, but target already depends on it.
         await session.execute(
             update(dep)
             .where(
@@ -472,10 +472,10 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
             )
         )
 
-        # 4b. Re-point remaining in_vertex_id edges.
+        # Re-point remaining in_vertex_id edges.
         await session.execute(dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id))
 
-        # 5. Delete ExternalRepo child row, then RepoVertex base row.
+        # Delete ExternalRepo child row, then RepoVertex base row.
         await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))
         await session.execute(delete(base_table).where(base_table.c.id == ext_id))
 
