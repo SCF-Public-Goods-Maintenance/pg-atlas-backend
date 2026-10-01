@@ -33,8 +33,8 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.ingestion.persist import (
     _plan_sbom_edges,
     canonical_id_for_github_repo,
-    canonical_id_for_spdx_package,
     handle_sbom_submission,
+    normalize_spdx_package_id,
     parse_sbom_and_persist_graph,
     strip_purl_version,
 )
@@ -107,8 +107,8 @@ def test_strip_purl_version_strips_at_suffix() -> None:
     assert strip_purl_version("pkg:npm/react") == "pkg:npm/react"  # no @ — unchanged
 
 
-def test_canonical_id_for_spdx_package_from_purl() -> None:
-    """canonical_id_for_spdx_package extracts and strips the PURL from externalRefs."""
+def test_normalize_spdx_package_id_from_purl() -> None:
+    """Package normalization returns a versionless ID and the original PURL."""
 
     class FakeRef:
         reference_type = "purl"
@@ -118,17 +118,20 @@ def test_canonical_id_for_spdx_package_from_purl() -> None:
         name = "requests"
         external_references = [FakeRef()]
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "pkg:pypi/requests"  # pyright: ignore[reportArgumentType]
+    assert normalize_spdx_package_id(FakePkg()) == (  # pyright: ignore[reportArgumentType]
+        "pkg:pypi/requests",
+        "pkg:pypi/requests@2.32.0",
+    )
 
 
-def test_canonical_id_for_spdx_package_fallback() -> None:
-    """canonical_id_for_spdx_package falls back to lowercase name when no PURL."""
+def test_normalize_spdx_package_id_fallback() -> None:
+    """Package normalization falls back to the lower-cased name when no PURL exists."""
 
     class FakePkg:
         name = "MyPackage"
         external_references: list[Any] = []
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "mypackage"  # pyright: ignore[reportArgumentType]
+    assert normalize_spdx_package_id(FakePkg()) == ("mypackage", None)  # pyright: ignore[reportArgumentType]
 
 
 def test_plan_sbom_edges_deduplicates_repeated_nested_relationships() -> None:

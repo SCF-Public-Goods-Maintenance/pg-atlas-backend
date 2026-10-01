@@ -76,7 +76,7 @@ class SbomQueueingError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Canonical ID helpers
+# ID helpers
 # ---------------------------------------------------------------------------
 
 
@@ -110,7 +110,7 @@ def _purl_from_external_refs(pkg: Package) -> str | None:
 
 def strip_purl_version(purl: str) -> str:
     """
-    Strip the ``@version`` suffix from a PURL to produce a stable canonical ID.
+    Strip the ``@version`` suffix from a PURL to produce a normalized package ID.
 
     Examples::
 
@@ -124,25 +124,25 @@ def strip_purl_version(purl: str) -> str:
     return purl
 
 
-def canonical_id_for_spdx_package(pkg: Package) -> str:
+def normalize_spdx_package_id(pkg: Package) -> tuple[str, str | None]:
     """
-    Derive a stable, version-less canonical ID for an SPDX 2.3 package.
+    Normalize an SPDX package ID and return its PURL, if available.
 
-    Checks ``externalRefs`` for a PURL first and strips the version suffix
-    to obtain a version-agnostic identifier.  Falls back to the lower-cased
-    package name if no PURL is available.
+    The normalized ID is the versionless PURL when one is present, or the
+    lower-cased package name otherwise. It is for mapping SPDX package
+    references and is not suitable as a ``Repo.canonical_id``.
 
     Args:
         pkg: A ``spdx_tools.spdx.model.Package`` instance.
 
     Returns:
-        A canonical ID suitable for ``RepoVertex.canonical_id``.
+        The normalized package ID and the original PURL, or ``None`` if absent.
     """
     purl = _purl_from_external_refs(pkg)
     if purl:
-        return strip_purl_version(purl)
+        return strip_purl_version(purl), purl
 
-    return pkg.name.lower()
+    return pkg.name.lower(), None
 
 
 def _version_for_spdx_package(pkg: Package) -> str:
@@ -302,54 +302,57 @@ async def _upsert_sbom_vertices(
     """
     Upsert package vertices and map SPDX ids to graph vertex ids.
 
-    Non-root package vertices are deduplicated by canonical id and upserted in
-    canonical-id order. This reduces redundant updates and keeps row-lock
+    Non-root package vertices are deduplicated by normalized package ID and
+    upserted in normalized-ID order. This reduces redundant updates and keeps row-lock
     acquisition stable across concurrent SBOM ingests.
     """
 
     spdx_id_to_vertex_id: dict[str, int] = {}
     vertex_versions: dict[int, str] = {}
 
-    canonical_inputs: dict[str, tuple[str, str, str | None]] = {}
-    canonical_spdx_ids: dict[str, list[str]] = {}
-    canonical_ids_with_purls: set[str] = set()
+    normalized_inputs: dict[str, tuple[str, str, str | None]] = {}
+    normalized_spdx_ids: dict[str, list[str]] = {}
+    normalized_ids_with_purls: set[str] = set()
 
     for pkg in sbom.document.packages:
-        pkg_purl = _purl_from_external_refs(pkg)
-        pkg_canonical_id = canonical_id_for_spdx_package(pkg)
+        normalized_package_id, pkg_purl = normalize_spdx_package_id(pkg)
         pkg_spdx_id = pkg.spdx_id
-        if pkg_canonical_id == submitting_canonical_id:
+        if normalized_package_id == submitting_canonical_id:
             spdx_id_to_vertex_id[pkg_spdx_id] = submitting_repo.id
             continue
 
         if pkg_purl:
-            canonical_ids_with_purls.add(pkg_canonical_id)
+            normalized_ids_with_purls.add(normalized_package_id)
+        else:
+            logger.warning(f"SBOM for {submitting_canonical_id} references {normalized_package_id} without a PURL")
 
         version = _version_for_spdx_package(pkg)
         repo_url = _repo_url_for_spdx_package(pkg)
-        canonical_inputs[pkg_canonical_id] = (str(pkg.name), version, repo_url)
-        canonical_spdx_ids.setdefault(pkg_canonical_id, []).append(pkg_spdx_id)
+        normalized_inputs[normalized_package_id] = (str(pkg.name), version, repo_url)
+        normalized_spdx_ids.setdefault(normalized_package_id, []).append(pkg_spdx_id)
 
-    for canonical_id in sorted(canonical_inputs):
-        display_name, version, repo_url = canonical_inputs[canonical_id]
+    for normalized_package_id in sorted(normalized_inputs):
+        display_name, version, repo_url = normalized_inputs[normalized_package_id]
 
         matching_repo = (
-            await find_repo_by_release_purl(canonical_id, session=session)
-            if canonical_id in canonical_ids_with_purls
+            await find_repo_by_release_purl(normalized_package_id, session=session)
+            if normalized_package_id in normalized_ids_with_purls
             else None
         )
         dep_vertex: RepoVertex
         if matching_repo is not None:
             matching_repo_vertex = await session.get(Repo, matching_repo[0])
             if matching_repo_vertex is None:
-                raise RuntimeError(f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {canonical_id}")
+                raise RuntimeError(
+                    f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {normalized_package_id}"
+                )
 
             dep_vertex = matching_repo_vertex
         else:
             try:
                 dep_vertex = await upsert_external_repo(
                     session,
-                    canonical_id=canonical_id,
+                    canonical_id=normalized_package_id,
                     display_name=display_name,
                     latest_version=version,
                     repo_url=repo_url,
@@ -358,7 +361,7 @@ async def _upsert_sbom_vertices(
                 logger.warning(exc)
                 continue
 
-        for pkg_spdx_id in canonical_spdx_ids[canonical_id]:
+        for pkg_spdx_id in normalized_spdx_ids[normalized_package_id]:
             spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
 
         vertex_versions[dep_vertex.id] = version
