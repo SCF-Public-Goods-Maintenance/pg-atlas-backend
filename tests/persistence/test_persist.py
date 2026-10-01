@@ -15,6 +15,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import replace
@@ -229,15 +230,16 @@ async def test_handle_sbom_submission_github_dep_graph(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
     mocker: Any,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     A GitHub Dependency Graph SBOM (with PURL externalRefs and a DESCRIBES
-    relationship for the subject package) is processed without duplicating the
-    submitting repo as an ExternalRepo.
+    relationship for the subject package) resolves existing GitHub Repos while
+    warning about missing ones, without duplicating the submitting repo as an
+    ExternalRepo.
 
     The claims ``repository`` matches the subject package's PURL so the
-    self-reference check fires correctly.  The test is idempotent — the
-    SELECT-then-upsert pattern is safe to re-run.
+    self-reference check fires correctly.
     """
     # Use the exact owner/repo that appears in the SPDX fixture's PURL so that
     # the submitting_canonical_id check correctly identifies the subject package.
@@ -245,14 +247,30 @@ async def test_handle_sbom_submission_github_dep_graph(
         "repository": "SCF-Public-Goods-Maintenance/pg-atlas-sbom-action",
         "actor": "test-user",
     }
+    internal_repo = Repo(
+        canonical_id="pkg:github/SCF-Public-Goods-Maintenance/internal-tool",
+        display_name="internal-tool",
+        visibility=Visibility.public,
+        latest_version="main",
+    )
+    db_session.add(internal_repo)
+    await db_session.flush()
+
     defer_mock = mocker.AsyncMock()
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+    caplog.set_level(logging.WARNING, logger="pg_atlas.ingestion.persist")
     raw = (FIXTURES / "github_dep_graph.spdx.json").read_bytes()
     result = await handle_sbom_submission(db_session, raw, claims)
     assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, raw, claims)
     await parse_sbom_and_persist_graph(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+    assert (
+        "pg_atlas.ingestion.persist",
+        logging.WARNING,
+        "SBOM for pkg:github/SCF-Public-Goods-Maintenance/pg-atlas-sbom-action references "
+        "pkg:github/other-org/some-lib but that Repo vertex has not yet been created",
+    ) in caplog.record_tuples
 
     # Submitting repo → Repo vertex, NOT ExternalRepo
     repo_cid = canonical_id_for_github_repo(claims["repository"])
@@ -266,9 +284,10 @@ async def test_handle_sbom_submission_github_dep_graph(
     dep = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == dep_cid))).scalar_one_or_none()
     assert dep is not None and dep.display_name == "actions/checkout"
 
-    # DependsOn edge exists
+    # Existing and missing GitHub-namespace dependencies both resolve as expected.
     edges = (await db_session.execute(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).scalars().all()
-    assert any(e.out_vertex_id == dep.id for e in edges)
+    assert len(edges) == 2
+    assert {edge.out_vertex_id for edge in edges} == {dep.id, internal_repo.id}
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")

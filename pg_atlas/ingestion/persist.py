@@ -333,33 +333,46 @@ async def _upsert_sbom_vertices(
 
     for normalized_package_id in sorted(normalized_inputs):
         display_name, version, repo_url = normalized_inputs[normalized_package_id]
-
-        matching_repo = (
-            await find_repo_by_release_purl(normalized_package_id, session=session)
-            if normalized_package_id in normalized_ids_with_purls
-            else None
-        )
         dep_vertex: RepoVertex
-        if matching_repo is not None:
-            matching_repo_vertex = await session.get(Repo, matching_repo[0])
-            if matching_repo_vertex is None:
-                raise RuntimeError(
-                    f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {normalized_package_id}"
-                )
 
-            dep_vertex = matching_repo_vertex
-        else:
-            try:
-                dep_vertex = await upsert_external_repo(
-                    session,
-                    canonical_id=normalized_package_id,
-                    display_name=display_name,
-                    latest_version=version,
-                    repo_url=repo_url,
+        if normalized_package_id.startswith("pkg:github/"):
+            # possible in theory through the Dependency Submission API
+            # not yet observed in practice; most snapshot generators exclude git URL installs
+            maybe_dep_vertex = await session.scalar(select(RepoVertex).where(RepoVertex.canonical_id == normalized_package_id))
+            if maybe_dep_vertex is None:
+                logger.warning(
+                    f"SBOM for {submitting_canonical_id} references {normalized_package_id}"
+                    " but that Repo vertex has not yet been created"
                 )
-            except ValueError as exc:
-                logger.warning(exc)
                 continue
+            else:
+                dep_vertex = maybe_dep_vertex
+        else:
+            matching_repo = (
+                await find_repo_by_release_purl(normalized_package_id, session=session)
+                if normalized_package_id in normalized_ids_with_purls
+                else None
+            )
+            if matching_repo is not None:
+                matching_repo_vertex = await session.get(Repo, matching_repo[0])
+                if matching_repo_vertex is None:
+                    raise RuntimeError(
+                        f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {normalized_package_id}"
+                    )
+
+                dep_vertex = matching_repo_vertex
+            else:
+                try:
+                    dep_vertex = await upsert_external_repo(
+                        session,
+                        canonical_id=normalized_package_id,
+                        display_name=display_name,
+                        latest_version=version,
+                        repo_url=repo_url,
+                    )
+                except ValueError as exc:
+                    logger.warning(exc)
+                    continue
 
         for pkg_spdx_id in normalized_spdx_ids[normalized_package_id]:
             spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id

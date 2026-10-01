@@ -40,6 +40,34 @@
           "referenceLocator": "pkg:github/SCF-Public-Goods-Maintenance/pg-atlas-sbom-action@main"
         }
       ]
+    },
+    {
+      "name": "other-org/some-lib",
+      "SPDXID": "SPDXRef-DependencyWithGitHubNamespace",
+      "versionInfo": "v1.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/other-org/some-lib@v1.2.0"
+        }
+      ]
+    },
+    {
+      "name": "SCF-Public-Goods-Maintenance/internal-tool",
+      "SPDXID": "SPDXRef-ExistingGitHubRepo",
+      "versionInfo": "main",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/SCF-Public-Goods-Maintenance/internal-tool@main"
+        }
+      ]
     }
   ],
   "relationships": [
@@ -52,6 +80,16 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relatedSpdxElement": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-6482fd",
       "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-6482fd",
+      "relatedSpdxElement": "SPDXRef-DependencyWithGitHubNamespace",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-SCF-Public-Goods-Maintenance-pg-atlas-sbom-action-main-6482fd",
+      "relatedSpdxElement": "SPDXRef-ExistingGitHubRepo",
+      "relationshipType": "DEPENDS_ON"
     }
   ]
 }
