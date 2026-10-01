@@ -25,8 +25,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pg_atlas.db_models.base import SubmissionStatus
+from pg_atlas.db_models.base import SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.ingestion.persist import (
@@ -38,6 +39,7 @@ from pg_atlas.ingestion.persist import (
     strip_purl_version,
 )
 from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash, parse_and_validate_spdx
+from pg_atlas.procrastinate.upserts import find_repo_by_release_purl
 from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
@@ -264,6 +266,74 @@ async def test_handle_sbom_submission_github_dep_graph(
     # DependsOn edge exists
     edges = (await db_session.execute(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).scalars().all()
     assert any(e.out_vertex_id == dep.id for e in edges)
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+@pytest.mark.parametrize(
+    ("system", "base_package_name", "base_purl"),
+    [
+        ("CARGO", "stellar-xdr", "pkg:cargo/stellar-xdr"),
+        ("NPM", "@stellar/stellar-sdk", "pkg:npm/%40stellar/stellar-sdk"),
+        ("MAVEN", "network.lightsail:stellar-sdk", "pkg:maven/network.lightsail/stellar-sdk"),
+        ("PYPI", "stellar-sdk", "pkg:pypi/stellar-sdk"),
+    ],
+    ids=["cargo", "scoped-npm", "maven", "pypi"],
+)
+async def test_parse_sbom_links_package_purl_to_repo_release(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+    system: str,
+    base_package_name: str,
+    base_purl: str,
+) -> None:
+    """SBOM packages with a registered release PURL link to that Repo, not an ExternalRepo."""
+    package_version = "1.0.0"
+    registered_repo_canonical_id = f"pkg:github/test-org/sbom-release-purl-{system.lower()}"
+    registered_repo = Repo(
+        canonical_id=registered_repo_canonical_id,
+        display_name=f"sbom-release-purl-{system.lower()}",
+        visibility=Visibility.public,
+        latest_version=package_version,
+        repo_url=f"https://github.com/test-org/sbom-release-purl-{system.lower()}",
+        releases=[Release(version=package_version, release_date="", purl=base_purl)],
+    )
+    db_session.add(registered_repo)
+    await db_session.commit()
+    matching_repo = await find_repo_by_release_purl(base_purl, session=db_session)
+    assert matching_repo is not None
+
+    sbom_document: dict[str, Any] = json.loads((FIXTURES / "valid.spdx.json").read_bytes())
+    sbom_package = next(package for package in sbom_document["packages"] if package["name"] == "requests")
+    sbom_package["name"] = base_package_name
+    sbom_package["versionInfo"] = package_version
+    sbom_package["externalRefs"] = [
+        {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": f"{base_purl}@{package_version}",
+        }
+    ]
+    raw = json.dumps(sbom_document).encode()
+    claims = _unique_claims()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=mocker.AsyncMock())
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+
+    submitting_repo = await db_session.scalar(
+        select(Repo).where(Repo.canonical_id == canonical_id_for_github_repo(claims["repository"]))
+    )
+    assert submitting_repo is not None
+    linked_edge = await db_session.scalar(
+        select(DependsOn).where(
+            DependsOn.in_vertex_id == submitting_repo.id,
+            DependsOn.out_vertex_id == matching_repo[0],
+        )
+    )
+    assert linked_edge is not None
+    assert linked_edge.version_range == package_version
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")

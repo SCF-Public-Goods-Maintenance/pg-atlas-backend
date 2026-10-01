@@ -18,10 +18,9 @@ The worker path then owns the heavy graph mutation steps:
 5.  Re-read the stored artifact and re-validate it.
 6.  Upsert the submitting ``Repo`` vertex (canonical_id derived from the OIDC
     ``repository`` claim as ``pkg:github/owner/repo``).
-7.  Upsert each declared package as an ``ExternalRepo`` vertex when needed and
-    map SPDX package ids to graph vertices.
-    TODO: after A5 we need to check for Project membership; some vertices will
-    become ``Repo`` instead of ``ExternalRepo``.
+7.  Resolve declared package PURLs to known ``Repo`` releases, upsert unmatched
+    packages as ``ExternalRepo`` vertices, and map SPDX package ids to graph
+    vertices.
 8.  Bulk-replace outgoing ``DependsOn`` edges from the submitting repo and
     upsert any nested package-to-package ``DEPENDS_ON`` edges present in the
     SPDX relationships.
@@ -52,11 +51,12 @@ from sqlalchemy.orm import make_transient
 
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
-from pg_atlas.db_models.repo_vertex import Repo
+from pg_atlas.db_models.repo_vertex import Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
-from pg_atlas.db_models.vertex_ops import get_vertex, upsert_external_repo
+from pg_atlas.db_models.vertex_ops import upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
+from pg_atlas.procrastinate.upserts import find_repo_by_release_purl
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
@@ -312,13 +312,18 @@ async def _upsert_sbom_vertices(
 
     canonical_inputs: dict[str, tuple[str, str, str | None]] = {}
     canonical_spdx_ids: dict[str, list[str]] = {}
+    canonical_ids_with_purls: set[str] = set()
 
     for pkg in sbom.document.packages:
+        pkg_purl = _purl_from_external_refs(pkg)
         pkg_canonical_id = canonical_id_for_spdx_package(pkg)
         pkg_spdx_id = pkg.spdx_id
         if pkg_canonical_id == submitting_canonical_id:
             spdx_id_to_vertex_id[pkg_spdx_id] = submitting_repo.id
             continue
+
+        if pkg_purl:
+            canonical_ids_with_purls.add(pkg_canonical_id)
 
         version = _version_for_spdx_package(pkg)
         repo_url = _repo_url_for_spdx_package(pkg)
@@ -328,20 +333,30 @@ async def _upsert_sbom_vertices(
     for canonical_id in sorted(canonical_inputs):
         display_name, version, repo_url = canonical_inputs[canonical_id]
 
-        try:
-            dep_vertex = await upsert_external_repo(
-                session,
-                canonical_id=canonical_id,
-                display_name=display_name,
-                latest_version=version,
-                repo_url=repo_url,
-            )
-        except ValueError:
-            existing = await get_vertex(session, canonical_id)
-            if existing is None:
-                continue
+        matching_repo = (
+            await find_repo_by_release_purl(canonical_id, session=session)
+            if canonical_id in canonical_ids_with_purls
+            else None
+        )
+        dep_vertex: RepoVertex
+        if matching_repo is not None:
+            matching_repo_vertex = await session.get(Repo, matching_repo[0])
+            if matching_repo_vertex is None:
+                raise RuntimeError(f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {canonical_id}")
 
-            dep_vertex = existing
+            dep_vertex = matching_repo_vertex
+        else:
+            try:
+                dep_vertex = await upsert_external_repo(
+                    session,
+                    canonical_id=canonical_id,
+                    display_name=display_name,
+                    latest_version=version,
+                    repo_url=repo_url,
+                )
+            except ValueError as exc:
+                logger.warning(exc)
+                continue
 
         for pkg_spdx_id in canonical_spdx_ids[canonical_id]:
             spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id

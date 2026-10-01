@@ -260,10 +260,6 @@ async def upsert_external_repo(
 ) -> int:
     """
     Insert an ``ExternalRepo`` vertex or update it if it already exists.
-
-    If a vertex with the same ``canonical_id`` already exists as a ``Repo``
-    (i.e. it was promoted earlier), the existing ``Repo`` id is returned
-    without modification.
     """
     try:
         vertex = await _upsert_ext(
@@ -499,7 +495,11 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 # ---------------------------------------------------------------------------
 
 
-async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | None:
+async def find_repo_by_release_purl(
+    purl: str,
+    *,
+    session: AsyncSession | None = None,
+) -> tuple[int, str, int | None] | None:
     """
     Find a ``Repo`` whose ``releases`` JSONB contains a matching PURL.
 
@@ -507,11 +507,14 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
 
     Uses PostgreSQL JSONB containment (``@>``) which is GIN-indexable with
     ``jsonb_path_ops``.
+    If a session is supplied, it is used without being closed.
     """
     from sqlalchemy import cast, literal
     from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 
-    session = await _session()
+    owns_session = session is None
+    if session is None:
+        session = await _session()
 
     try:
         pattern = cast(literal(json.dumps([{"purl": purl}])), PG_JSONB)
@@ -531,7 +534,8 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
         return (row[0], row[1], row[2])
 
     finally:
-        await session.close()
+        if owns_session:
+            await session.close()
 
 
 # ---------------------------------------------------------------------------
