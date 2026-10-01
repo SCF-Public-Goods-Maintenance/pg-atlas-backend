@@ -366,3 +366,16 @@ class GithubDependentsResponse(BaseModel):
 
     summary: GithubDependentsSummary
     observations: PaginatedResponse[GithubDependentObservationItem]
+
+
+class MaintenanceProfileResponse(BaseModel):
+    """Stored maintenance profile for one repo, as materialized."""
+
+    schema_version: int
+    as_of: str
+    window_days: int
+    response_interval_days: int
+    eligible_population: int
+    #: Per-signal blocks; every ranked scalar carries its coverage state and,
+    #: when ranked, its percentile and pool size.
+    signals: dict[str, dict[str, Any]]

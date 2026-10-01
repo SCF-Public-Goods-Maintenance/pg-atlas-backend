@@ -4,7 +4,7 @@
 #   1. crawl       (opengrants queue)
 #   2. deps-dev    (package-deps queue)
 #   3. registries  (registry-crawl queue)
-#   4. metrics     (materialize criticality/adoption)
+#   4. metrics     (materialize criticality/adoption/maintenance)
 #
 # deps-dev and registries run in parallel after crawl completes.
 # metrics runs after both queue jobs complete.
@@ -45,6 +45,14 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PG_ATLAS_GITHUB_DEPENDENTS_ENABLED: ${{ vars.PGA_GITHUB_DEPENDENTS_ENABLED }}
       PG_ATLAS_GITHUB_DEPENDENTS_ALLOWLIST: ${{ vars.PGA_GITHUB_DEPENDENTS_ALLOWLIST }}
+      PG_ATLAS_MAINTENANCE_METRIC_ENABLED: ${{ vars.PGA_MAINTENANCE_METRIC_ENABLED || 'false' }}
+      PG_ATLAS_MAINTENANCE_METRIC_ALLOWLIST: ${{ vars.PGA_MAINTENANCE_METRIC_ALLOWLIST }}
+      PG_ATLAS_MAINTENANCE_HOST_REPOS: ${{ vars.PGA_MAINTENANCE_HOST_REPOS }}
+      PG_ATLAS_MAINTENANCE_EXTERNAL_TRACKER_REPOS: ${{ vars.PGA_MAINTENANCE_EXTERNAL_TRACKER_REPOS }}
+      PG_ATLAS_MAINTENANCE_DECLARED_MAINTAINERS: ${{ vars.PGA_MAINTENANCE_DECLARED_MAINTAINERS }}
+      PG_ATLAS_MAINTENANCE_ITEM_PAGE_CAP: ${{ vars.PGA_MAINTENANCE_ITEM_PAGE_CAP || '10' }}
+      PG_ATLAS_MAINTENANCE_REQUEST_CAP: ${{ vars.PGA_MAINTENANCE_REQUEST_CAP || '120' }}
+      PG_ATLAS_MAINTENANCE_TIME_CAP_SECONDS: ${{ vars.PGA_MAINTENANCE_TIME_CAP_SECONDS || '180' }}
       UV_NO_GROUP: dev
 
     steps:
@@ -209,6 +217,10 @@ jobs:
     timeout-minutes: 60
     env:
       PG_ATLAS_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PG_ATLAS_MAINTENANCE_METRIC_ENABLED: ${{ vars.PGA_MAINTENANCE_METRIC_ENABLED || 'false' }}
+      PG_ATLAS_MAINTENANCE_HOST_REPOS: ${{ vars.PGA_MAINTENANCE_HOST_REPOS }}
+      PG_ATLAS_MAINTENANCE_DECLARED_MAINTAINERS: ${{ vars.PGA_MAINTENANCE_DECLARED_MAINTAINERS }}
+      PG_ATLAS_MAINTENANCE_DEPLOY_ON_PUSH_REPOS: ${{ vars.PGA_MAINTENANCE_DEPLOY_ON_PUSH_REPOS }}
       UV_NO_GROUP: dev
 
     steps:
@@ -237,6 +249,21 @@ jobs:
         if: always()
         run: python .github/scripts/parse-materialize-adoption-log.py adoption.log
 
+      - name: Materialize maintenance
+        if: always()
+        env:
+          PG_ATLAS_IPFS_GATEWAY_URL: ${{ secrets.IPFS_GATEWAY_URL }}
+        run: |
+          if [ -z "$PG_ATLAS_IPFS_GATEWAY_URL" ]; then
+            unset PG_ATLAS_IPFS_GATEWAY_URL
+          fi
+          uv run python -m pg_atlas.metrics.materialize_maintenance --gated --tee=maintenance.log
+
+      - name: Parse maintenance logs
+        id: parse-maintenance
+        if: always()
+        run: python .github/scripts/parse-materialize-maintenance-log.py maintenance.log
+
       - name: Write job summary
         if: always()
         run: |
@@ -255,4 +282,9 @@ jobs:
             adoption_projects_seen="${{ steps.parse-adoption.outputs.adoption_projects_seen || '—' }}" \
             adoption_projects_scored="${{ steps.parse-adoption.outputs.adoption_projects_scored || '—' }}" \
             adoption_duration_seconds="${{ steps.parse-adoption.outputs.adoption_duration_seconds || '—' }}" \
+            maintenance_gate_skipped="${{ steps.parse-maintenance.outputs.maintenance_gate_skipped || '—' }}" \
+            maintenance_repos_eligible="${{ steps.parse-maintenance.outputs.maintenance_repos_eligible || '—' }}" \
+            maintenance_profiles_written="${{ steps.parse-maintenance.outputs.maintenance_profiles_written || '—' }}" \
+            maintenance_stale_profiles_cleared="${{ steps.parse-maintenance.outputs.maintenance_stale_profiles_cleared || '—' }}" \
+            maintenance_duration_seconds="${{ steps.parse-maintenance.outputs.maintenance_duration_seconds || '—' }}" \
             >> "$GITHUB_STEP_SUMMARY"

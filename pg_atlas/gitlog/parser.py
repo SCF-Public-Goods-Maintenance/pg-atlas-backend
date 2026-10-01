@@ -260,36 +260,85 @@ async def parse_git_log(repo_path: Path, since_months: int) -> list[CommitRecord
     return _parse_log_output(stdout.decode(errors="replace"))
 
 
+@dataclass(frozen=True)
+class ParsedGitLog:
+    """Commit records from one stored artifact plus its structural damage count."""
+
+    commits: list[CommitRecord]
+    malformed_lines: int
+
+
+def parse_log_bytes(raw: bytes) -> ParsedGitLog:
+    """
+    Parse stored raw git log bytes into commit records with parse diagnostics.
+
+    Public entry point for consumers of persisted git-log artifacts (e.g. the
+    maintenance metric's windowed commit count). Line parsing shares the exact
+    semantics of the live pipeline; ``malformed_lines`` counts structurally
+    broken lines (wrong field count, unparseable timestamp), so a truncated or
+    corrupted artifact is detectable and a valid empty log stays a real zero.
+    """
+
+    commits: list[CommitRecord] = []
+    malformed_lines = 0
+    tomorrow = dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
+    for line in raw.decode(errors="replace").strip().splitlines():
+        if not line:
+            continue
+
+        record, structurally_valid = _parse_log_line(line, cutoff=tomorrow)
+        if record is not None:
+            commits.append(record)
+        elif not structurally_valid:
+            malformed_lines += 1
+
+    return ParsedGitLog(commits=commits, malformed_lines=malformed_lines)
+
+
+def _parse_log_line(line: str, *, cutoff: dt.datetime) -> tuple[CommitRecord | None, bool]:
+    """
+    Parse one null-delimited git log line.
+
+    Returns the record (or ``None`` for a skipped line) plus whether the line
+    was structurally valid: an empty author email or a timestamp past
+    ``cutoff`` is a repository data oddity and stays structurally valid,
+    while a wrong field count or an unparseable timestamp marks structural
+    damage.
+    """
+
+    parts = line.split("\x00")
+    if len(parts) != 4:
+        logger.warning(f"Skipping malformed git log line: {line[:120]!r}")
+        return None, False
+
+    name, email, iso_ts, commit_hash = parts
+
+    if not email or not email.strip():
+        logger.warning(f"Skipping commit {commit_hash} with empty email")
+        return None, True
+
+    try:
+        ts = dt.datetime.fromisoformat(iso_ts).astimezone(dt.UTC)
+    except ValueError:
+        logger.warning(f"Skipping commit {commit_hash} with unparseable timestamp: {iso_ts!r}")
+        return None, False
+
+    if ts > cutoff:
+        logger.warning(f"Skipping commit {commit_hash} with future timestamp: {iso_ts!r}")
+        return None, True
+
+    return CommitRecord(author_name=name, author_email=email, timestamp=ts, commit_hash=commit_hash), True
+
+
 def _parse_log_output(raw: str) -> list[CommitRecord]:
     """Parse null-delimited git log output into CommitRecord objects."""
     tomorrow = dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
 
     records: list[CommitRecord] = []
     for line in raw.strip().splitlines():
-        parts = line.split("\x00")
-        if len(parts) != 4:
-            logger.warning(f"Skipping malformed git log line: {line[:120]!r}")
-            continue
-
-        name, email, iso_ts, commit_hash = parts
-
-        # Skip commits with empty email
-        if not email or not email.strip():
-            logger.warning(f"Skipping commit {commit_hash} with empty email")
-            continue
-
-        try:
-            ts = dt.datetime.fromisoformat(iso_ts).astimezone(dt.UTC)
-        except ValueError:
-            logger.warning(f"Skipping commit {commit_hash} with unparseable timestamp: {iso_ts!r}")
-            continue
-
-        # skip commits that are timestamped after tomorrow
-        if ts > tomorrow:
-            logger.warning(f"Skipping commit {commit_hash} with future timestamp: {iso_ts!r}")
-            continue
-
-        records.append(CommitRecord(author_name=name, author_email=email, timestamp=ts, commit_hash=commit_hash))
+        record, _ = _parse_log_line(line, cutoff=tomorrow)
+        if record is not None:
+            records.append(record)
 
     return records
 

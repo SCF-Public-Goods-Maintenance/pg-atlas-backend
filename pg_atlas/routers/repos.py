@@ -29,6 +29,7 @@ from pg_atlas.db_models.github_dependents_observation import (
 )
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
+from pg_atlas.metrics.maintenance import MAINTENANCE_PROFILE_KEY
 from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
 from pg_atlas.routers.models import (
     ContributorSummary,
@@ -36,6 +37,7 @@ from pg_atlas.routers.models import (
     GithubDependentObservationItem,
     GithubDependentsResponse,
     GithubDependentsSummary,
+    MaintenanceProfileResponse,
     PaginatedResponse,
     ProjectSummary,
     RepoContributorSummary,
@@ -354,6 +356,37 @@ async def get_repo_github_dependents(
             offset=pagination.offset,
         ),
     )
+
+
+@router.get(
+    "/repos/{canonical_id:path}/maintenance-profile",
+    response_model=MaintenanceProfileResponse,
+    summary="Maintenance profile for a repo",
+    tags=[Source.pg_atlas],
+)
+async def get_repo_maintenance_profile(
+    canonical_id: str,
+    db: DbSession,
+) -> MaintenanceProfileResponse:
+    """
+    Per-signal maintenance values with coverage states and percentile ranks.
+
+    Serves the profile written by the gated materializer. Every ranked value
+    carries its coverage state and, when ranked, its percentile and pool
+    size; the profile carries its as-of and the parameters it was computed
+    under. 404 while no profile has been materialized for the repository.
+    """
+    repo = await _get_repo_or_404(db, canonical_id)
+
+    metadata = repo.repo_metadata if isinstance(repo.repo_metadata, dict) else {}
+    profile = metadata.get(MAINTENANCE_PROFILE_KEY)
+    if not isinstance(profile, dict) or not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No maintenance profile has been materialized for this repository",
+        )
+
+    return MaintenanceProfileResponse.model_validate(profile)
 
 
 @router.get(
