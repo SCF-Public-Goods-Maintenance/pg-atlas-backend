@@ -19,11 +19,11 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
+from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import and_, case, delete, or_, select, update
+from sqlalchemy import String, and_, case, column, delete, or_, select, update, values
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -260,10 +260,6 @@ async def upsert_external_repo(
 ) -> int:
     """
     Insert an ``ExternalRepo`` vertex or update it if it already exists.
-
-    If a vertex with the same ``canonical_id`` already exists as a ``Repo``
-    (i.e. it was promoted earlier), the existing ``Repo`` id is returned
-    without modification.
     """
     try:
         vertex = await _upsert_ext(
@@ -499,7 +495,68 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 # ---------------------------------------------------------------------------
 
 
-async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | None:
+async def find_repos_by_release_purls(
+    purls: Sequence[str],
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, tuple[int, str, int | None]]:
+    """
+    Find Repos whose releases contain any requested PURL in one database query.
+
+    Returns a PURL-to-Repo mapping and warns when multiple Repos match a PURL.
+    If a session is supplied, it is used without being closed.
+    """
+    if not purls:
+        return {}
+
+    owns_session = session is None
+    if session is None:
+        session = await _session()
+
+    try:
+        from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
+        # Keep VALUES unique so repeated inputs cannot duplicate Repo matches or warnings.
+        requested_purls = tuple(dict.fromkeys(purls))
+        purl_lookup = values(
+            column("purl", String()),
+            column("pattern", PG_JSONB),
+            name="requested_purls",
+        ).data([(purl, [{"purl": purl}]) for purl in requested_purls])
+        statement = (
+            select(purl_lookup.c.purl, Repo.id, Repo.canonical_id, Repo.project_id)
+            .select_from(purl_lookup.join(Repo, Repo.releases.op("@>")(purl_lookup.c.pattern)))
+            .order_by(Repo.id, purl_lookup.c.purl)
+        )
+        result = await session.execute(statement)
+        matches: dict[str, list[tuple[int, str, int | None]]] = {}
+
+        for purl, repo_id, canonical_id, project_id in result:
+            matches.setdefault(purl, []).append((repo_id, canonical_id, project_id))
+
+        resolved: dict[str, tuple[int, str, int | None]] = {}
+        for purl in requested_purls:
+            purl_matches = matches.get(purl, [])
+            if not purl_matches:
+                continue
+
+            if len(purl_matches) > 1:
+                logger.warning(f"find_repo_by_release_purl: multiple Repos match purl={purl}, using first")
+
+            resolved[purl] = purl_matches[0]
+
+        return resolved
+
+    finally:
+        if owns_session:
+            await session.close()
+
+
+async def find_repo_by_release_purl(
+    purl: str,
+    *,
+    session: AsyncSession | None = None,
+) -> tuple[int, str, int | None] | None:
     """
     Find a ``Repo`` whose ``releases`` JSONB contains a matching PURL.
 
@@ -507,31 +564,11 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
 
     Uses PostgreSQL JSONB containment (``@>``) which is GIN-indexable with
     ``jsonb_path_ops``.
+    If a session is supplied, it is used without being closed.
     """
-    from sqlalchemy import cast, literal
-    from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+    matches = await find_repos_by_release_purls([purl], session=session)
 
-    session = await _session()
-
-    try:
-        pattern = cast(literal(json.dumps([{"purl": purl}])), PG_JSONB)
-        result = await session.execute(
-            select(Repo.id, Repo.canonical_id, Repo.project_id).where(Repo.releases.op("@>")(pattern))
-        )
-        rows = result.all()
-
-        if not rows:
-            return None
-
-        if len(rows) > 1:
-            logger.warning(f"find_repo_by_release_purl: multiple Repos match purl={purl}, using first")
-
-        row = rows[0]
-
-        return (row[0], row[1], row[2])
-
-    finally:
-        await session.close()
+    return matches.get(purl)
 
 
 # ---------------------------------------------------------------------------

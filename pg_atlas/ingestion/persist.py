@@ -18,10 +18,9 @@ The worker path then owns the heavy graph mutation steps:
 5.  Re-read the stored artifact and re-validate it.
 6.  Upsert the submitting ``Repo`` vertex (canonical_id derived from the OIDC
     ``repository`` claim as ``pkg:github/owner/repo``).
-7.  Upsert each declared package as an ``ExternalRepo`` vertex when needed and
-    map SPDX package ids to graph vertices.
-    TODO: after A5 we need to check for Project membership; some vertices will
-    become ``Repo`` instead of ``ExternalRepo``.
+7.  Resolve declared package PURLs to known ``Repo`` releases, upsert unmatched
+    packages as ``ExternalRepo`` vertices, and map SPDX package ids to graph
+    vertices.
 8.  Bulk-replace outgoing ``DependsOn`` edges from the submitting repo and
     upsert any nested package-to-package ``DEPENDS_ON`` edges present in the
     SPDX relationships.
@@ -52,11 +51,12 @@ from sqlalchemy.orm import make_transient
 
 from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
-from pg_atlas.db_models.repo_vertex import Repo
+from pg_atlas.db_models.repo_vertex import Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
-from pg_atlas.db_models.vertex_ops import get_vertex, upsert_external_repo
+from pg_atlas.db_models.vertex_ops import upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
+from pg_atlas.procrastinate.upserts import find_repos_by_release_purls
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class SbomQueueingError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Canonical ID helpers
+# ID helpers
 # ---------------------------------------------------------------------------
 
 
@@ -110,7 +110,7 @@ def _purl_from_external_refs(pkg: Package) -> str | None:
 
 def strip_purl_version(purl: str) -> str:
     """
-    Strip the ``@version`` suffix from a PURL to produce a stable canonical ID.
+    Strip the ``@version`` suffix from a PURL to produce a normalized package ID.
 
     Examples::
 
@@ -124,25 +124,25 @@ def strip_purl_version(purl: str) -> str:
     return purl
 
 
-def canonical_id_for_spdx_package(pkg: Package) -> str:
+def normalize_spdx_package_id(pkg: Package) -> tuple[str, str | None]:
     """
-    Derive a stable, version-less canonical ID for an SPDX 2.3 package.
+    Normalize an SPDX package ID and return its PURL, if available.
 
-    Checks ``externalRefs`` for a PURL first and strips the version suffix
-    to obtain a version-agnostic identifier.  Falls back to the lower-cased
-    package name if no PURL is available.
+    The normalized ID is the versionless PURL when one is present, or the
+    lower-cased package name otherwise. It is for mapping SPDX package
+    references and is not suitable as a ``Repo.canonical_id``.
 
     Args:
         pkg: A ``spdx_tools.spdx.model.Package`` instance.
 
     Returns:
-        A canonical ID suitable for ``RepoVertex.canonical_id``.
+        The normalized package ID and the original PURL, or ``None`` if absent.
     """
     purl = _purl_from_external_refs(pkg)
     if purl:
-        return strip_purl_version(purl)
+        return strip_purl_version(purl), purl
 
-    return pkg.name.lower()
+    return pkg.name.lower(), None
 
 
 def _version_for_spdx_package(pkg: Package) -> str:
@@ -302,51 +302,91 @@ async def _upsert_sbom_vertices(
     """
     Upsert package vertices and map SPDX ids to graph vertex ids.
 
-    Non-root package vertices are deduplicated by canonical id and upserted in
-    canonical-id order. This reduces redundant updates and keeps row-lock
-    acquisition stable across concurrent SBOM ingests.
+    GitHub-namespaced references link to an existing vertex by canonical ID;
+    missing GitHub vertices are warned about and skipped. Other references with
+    PURLs link to a Repo whose releases contain that PURL. Unmatched references
+    are upserted as ExternalRepos; references without a PURL are warned about
+    before using their normalized package ID for that fallback.
+
+    Non-root package vertices are deduplicated by normalized package ID and
+    processed in normalized-ID order. This reduces redundant updates and keeps
+    row-lock acquisition stable across concurrent SBOM ingests.
     """
 
     spdx_id_to_vertex_id: dict[str, int] = {}
     vertex_versions: dict[int, str] = {}
 
-    canonical_inputs: dict[str, tuple[str, str, str | None]] = {}
-    canonical_spdx_ids: dict[str, list[str]] = {}
+    normalized_inputs: dict[str, tuple[str, str, str | None]] = {}
+    normalized_spdx_ids: dict[str, list[str]] = {}
+    github_canonical_ids: set[str] = set()
+    release_purl_lookups: set[str] = set()
 
     for pkg in sbom.document.packages:
-        pkg_canonical_id = canonical_id_for_spdx_package(pkg)
+        normalized_package_id, pkg_purl = normalize_spdx_package_id(pkg)
         pkg_spdx_id = pkg.spdx_id
-        if pkg_canonical_id == submitting_canonical_id:
+        if normalized_package_id == submitting_canonical_id:
             spdx_id_to_vertex_id[pkg_spdx_id] = submitting_repo.id
             continue
 
+        if normalized_package_id.startswith("pkg:github/"):
+            github_canonical_ids.add(normalized_package_id)
+        elif pkg_purl:
+            release_purl_lookups.add(normalized_package_id)
+        else:
+            logger.warning(f"SBOM for {submitting_canonical_id} references {normalized_package_id} without a PURL")
+
         version = _version_for_spdx_package(pkg)
         repo_url = _repo_url_for_spdx_package(pkg)
-        canonical_inputs[pkg_canonical_id] = (str(pkg.name), version, repo_url)
-        canonical_spdx_ids.setdefault(pkg_canonical_id, []).append(pkg_spdx_id)
+        normalized_inputs[normalized_package_id] = (str(pkg.name), version, repo_url)
+        normalized_spdx_ids.setdefault(normalized_package_id, []).append(pkg_spdx_id)
 
-    for canonical_id in sorted(canonical_inputs):
-        display_name, version, repo_url = canonical_inputs[canonical_id]
+    matching_repos_by_purl = await find_repos_by_release_purls(sorted(release_purl_lookups), session=session)
+    github_vertices: dict[str, RepoVertex] = {}
+    if github_canonical_ids:
+        github_vertices = {
+            vertex.canonical_id: vertex
+            for vertex in (
+                await session.scalars(select(RepoVertex).where(RepoVertex.canonical_id.in_(sorted(github_canonical_ids))))
+            ).all()
+        }
 
-        try:
-            dep_vertex = await upsert_external_repo(
-                session,
-                canonical_id=canonical_id,
-                display_name=display_name,
-                latest_version=version,
-                repo_url=repo_url,
-            )
-        except ValueError:
-            existing = await get_vertex(session, canonical_id)
-            if existing is None:
+    for normalized_package_id in sorted(normalized_inputs):
+        display_name, version, repo_url = normalized_inputs[normalized_package_id]
+        dep_vertex_id: int
+
+        if normalized_package_id.startswith("pkg:github/"):
+            # possible in theory through the Dependency Submission API
+            # not yet observed in practice; most snapshot generators exclude git URL installs
+            dep_vertex = github_vertices.get(normalized_package_id)
+            if dep_vertex is None:
+                logger.warning(
+                    f"SBOM for {submitting_canonical_id} references {normalized_package_id}"
+                    " but that Repo vertex has not yet been created"
+                )
                 continue
 
-            dep_vertex = existing
+            dep_vertex_id = dep_vertex.id
+        elif matching_repo := matching_repos_by_purl.get(normalized_package_id):
+            dep_vertex_id = matching_repo[0]
+        else:
+            try:
+                dep_vertex = await upsert_external_repo(
+                    session,
+                    canonical_id=normalized_package_id,
+                    display_name=display_name,
+                    latest_version=version,
+                    repo_url=repo_url,
+                )
+            except ValueError as exc:
+                logger.warning(exc)
+                continue
 
-        for pkg_spdx_id in canonical_spdx_ids[canonical_id]:
-            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
+            dep_vertex_id = dep_vertex.id
 
-        vertex_versions[dep_vertex.id] = version
+        for pkg_spdx_id in normalized_spdx_ids[normalized_package_id]:
+            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex_id
+
+        vertex_versions[dep_vertex_id] = version
 
     for root_spdx_id in sbom.root_spdx_ids:
         spdx_id_to_vertex_id[root_spdx_id] = submitting_repo.id
