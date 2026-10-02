@@ -305,6 +305,7 @@ async def test_parse_sbom_links_package_purl_to_repo_release(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
     mocker: Any,
+    caplog: pytest.LogCaptureFixture,
     system: str,
     base_package_name: str,
     base_purl: str,
@@ -325,6 +326,18 @@ async def test_parse_sbom_links_package_purl_to_repo_release(
     matching_repo = await find_repo_by_release_purl(base_purl, session=db_session)
     assert matching_repo is not None
 
+    duplicate_repo = Repo(
+        canonical_id=f"pkg:github/test-org/sbom-release-purl-duplicate-{system.lower()}",
+        display_name=f"sbom-release-purl-duplicate-{system.lower()}",
+        visibility=Visibility.public,
+        latest_version=package_version,
+        releases=[Release(version=package_version, release_date="", purl=base_purl)],
+    )
+    db_session.add(duplicate_repo)
+    await db_session.commit()
+    caplog.set_level(logging.WARNING, logger="pg_atlas.procrastinate.upserts")
+    caplog.clear()
+
     sbom_document: dict[str, Any] = json.loads((FIXTURES / "valid.spdx.json").read_bytes())
     sbom_package = next(package for package in sbom_document["packages"] if package["name"] == "requests")
     sbom_package["name"] = base_package_name
@@ -343,6 +356,10 @@ async def test_parse_sbom_links_package_purl_to_repo_release(
     await handle_sbom_submission(db_session, raw, claims)
     submission = await _submission_for_payload(db_session, raw, claims)
     await parse_sbom_and_persist_graph(db_session, submission.id)
+    assert any(
+        record.message == f"find_repo_by_release_purl: multiple Repos match purl={base_purl}, using first"
+        for record in caplog.records
+    )
 
     submitting_repo = await db_session.scalar(
         select(Repo).where(Repo.canonical_id == canonical_id_for_github_repo(claims["repository"]))
@@ -356,6 +373,8 @@ async def test_parse_sbom_links_package_purl_to_repo_release(
     )
     assert linked_edge is not None
     assert linked_edge.version_range == package_version
+    external_repo = await db_session.scalar(select(ExternalRepo).where(ExternalRepo.canonical_id == base_purl))
+    assert external_repo is None, "A package linked to a Repo release must not also be created as an ExternalRepo"
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")

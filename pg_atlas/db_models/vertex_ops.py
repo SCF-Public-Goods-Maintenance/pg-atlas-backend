@@ -64,6 +64,9 @@ async def upsert_external_repo(
         if isinstance(vertex, ExternalRepo):
             vertex.display_name = display_name
             if latest_version:
+                # FIXME: this is the last seen version, not the latest
+                # suggested fix: remove the column and deduce latest on-demand from releases
+                # wontfix until there is a consumer of ExternalRepo.latest_version
                 vertex.latest_version = latest_version
             if repo_url:
                 vertex.repo_url = repo_url

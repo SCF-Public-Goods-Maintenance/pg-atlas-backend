@@ -56,7 +56,7 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.vertex_ops import upsert_external_repo
 from pg_atlas.ingestion.queue import defer_sbom_processing
 from pg_atlas.ingestion.spdx import ParsedSbom, SpdxValidationError, parse_and_validate_spdx
-from pg_atlas.procrastinate.upserts import find_repo_by_release_purl
+from pg_atlas.procrastinate.upserts import find_repos_by_release_purls
 from pg_atlas.storage.artifacts import read_artifact, store_artifact
 
 logger = logging.getLogger(__name__)
@@ -302,9 +302,15 @@ async def _upsert_sbom_vertices(
     """
     Upsert package vertices and map SPDX ids to graph vertex ids.
 
+    GitHub-namespaced references link to an existing vertex by canonical ID;
+    missing GitHub vertices are warned about and skipped. Other references with
+    PURLs link to a Repo whose releases contain that PURL. Unmatched references
+    are upserted as ExternalRepos; references without a PURL are warned about
+    before using their normalized package ID for that fallback.
+
     Non-root package vertices are deduplicated by normalized package ID and
-    upserted in normalized-ID order. This reduces redundant updates and keeps row-lock
-    acquisition stable across concurrent SBOM ingests.
+    processed in normalized-ID order. This reduces redundant updates and keeps
+    row-lock acquisition stable across concurrent SBOM ingests.
     """
 
     spdx_id_to_vertex_id: dict[str, int] = {}
@@ -312,7 +318,8 @@ async def _upsert_sbom_vertices(
 
     normalized_inputs: dict[str, tuple[str, str, str | None]] = {}
     normalized_spdx_ids: dict[str, list[str]] = {}
-    normalized_ids_with_purls: set[str] = set()
+    github_canonical_ids: set[str] = set()
+    release_purl_lookups: set[str] = set()
 
     for pkg in sbom.document.packages:
         normalized_package_id, pkg_purl = normalize_spdx_package_id(pkg)
@@ -321,8 +328,10 @@ async def _upsert_sbom_vertices(
             spdx_id_to_vertex_id[pkg_spdx_id] = submitting_repo.id
             continue
 
-        if pkg_purl:
-            normalized_ids_with_purls.add(normalized_package_id)
+        if normalized_package_id.startswith("pkg:github/"):
+            github_canonical_ids.add(normalized_package_id)
+        elif pkg_purl:
+            release_purl_lookups.add(normalized_package_id)
         else:
             logger.warning(f"SBOM for {submitting_canonical_id} references {normalized_package_id} without a PURL")
 
@@ -331,53 +340,53 @@ async def _upsert_sbom_vertices(
         normalized_inputs[normalized_package_id] = (str(pkg.name), version, repo_url)
         normalized_spdx_ids.setdefault(normalized_package_id, []).append(pkg_spdx_id)
 
+    matching_repos_by_purl = await find_repos_by_release_purls(sorted(release_purl_lookups), session=session)
+    github_vertices: dict[str, RepoVertex] = {}
+    if github_canonical_ids:
+        github_vertices = {
+            vertex.canonical_id: vertex
+            for vertex in (
+                await session.scalars(select(RepoVertex).where(RepoVertex.canonical_id.in_(sorted(github_canonical_ids))))
+            ).all()
+        }
+
     for normalized_package_id in sorted(normalized_inputs):
         display_name, version, repo_url = normalized_inputs[normalized_package_id]
-        dep_vertex: RepoVertex
+        dep_vertex_id: int
 
         if normalized_package_id.startswith("pkg:github/"):
             # possible in theory through the Dependency Submission API
             # not yet observed in practice; most snapshot generators exclude git URL installs
-            maybe_dep_vertex = await session.scalar(select(RepoVertex).where(RepoVertex.canonical_id == normalized_package_id))
-            if maybe_dep_vertex is None:
+            dep_vertex = github_vertices.get(normalized_package_id)
+            if dep_vertex is None:
                 logger.warning(
                     f"SBOM for {submitting_canonical_id} references {normalized_package_id}"
                     " but that Repo vertex has not yet been created"
                 )
                 continue
-            else:
-                dep_vertex = maybe_dep_vertex
-        else:
-            matching_repo = (
-                await find_repo_by_release_purl(normalized_package_id, session=session)
-                if normalized_package_id in normalized_ids_with_purls
-                else None
-            )
-            if matching_repo is not None:
-                matching_repo_vertex = await session.get(Repo, matching_repo[0])
-                if matching_repo_vertex is None:
-                    raise RuntimeError(
-                        f"Repo {matching_repo[1]} disappeared while resolving SBOM package PURL {normalized_package_id}"
-                    )
 
-                dep_vertex = matching_repo_vertex
-            else:
-                try:
-                    dep_vertex = await upsert_external_repo(
-                        session,
-                        canonical_id=normalized_package_id,
-                        display_name=display_name,
-                        latest_version=version,
-                        repo_url=repo_url,
-                    )
-                except ValueError as exc:
-                    logger.warning(exc)
-                    continue
+            dep_vertex_id = dep_vertex.id
+        elif matching_repo := matching_repos_by_purl.get(normalized_package_id):
+            dep_vertex_id = matching_repo[0]
+        else:
+            try:
+                dep_vertex = await upsert_external_repo(
+                    session,
+                    canonical_id=normalized_package_id,
+                    display_name=display_name,
+                    latest_version=version,
+                    repo_url=repo_url,
+                )
+            except ValueError as exc:
+                logger.warning(exc)
+                continue
+
+            dep_vertex_id = dep_vertex.id
 
         for pkg_spdx_id in normalized_spdx_ids[normalized_package_id]:
-            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex.id
+            spdx_id_to_vertex_id[pkg_spdx_id] = dep_vertex_id
 
-        vertex_versions[dep_vertex.id] = version
+        vertex_versions[dep_vertex_id] = version
 
     for root_spdx_id in sbom.root_spdx_ids:
         spdx_id_to_vertex_id[root_spdx_id] = submitting_repo.id
