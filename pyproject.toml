@@ -5,7 +5,7 @@ description = "PG Atlas backend: ingestion pipeline, storage, metric computation
 authors = [{ name = "Alex Olieman", email = "alex@olieman.net" }]
 license = { text = "MPL-2.0" }
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.133.1",
     "uvicorn[standard]>=0.41.0",
