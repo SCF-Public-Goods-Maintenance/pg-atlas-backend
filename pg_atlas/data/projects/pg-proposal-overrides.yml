@@ -147,6 +147,19 @@ daoip-5:scf:project:refractorspace:
     website: "https://refractor.space"
     first_released: "March 2021"
 
+daoip-5:scf:project:rumble_fish_software_development_-_rfp:
+  display_name: "Soroban Scan"
+  activity_status: "live"
+  git_owner_url: "https://github.com/rumblefishdev"
+  git_repo_urls:
+    - "https://github.com/rumblefishdev/soroban-block-explorer"
+  category: "Data Support"
+  metadata:
+    description: "Soroban Scan is an open-source, Soroban-first Stellar block explorer that decodes smart contract calls,
+      CAP-67 events, and swaps into human-readable transaction views, on mainnet and testnet."
+    website: "https://sorobanscan.rumblefish.dev/"
+    first_released: "17 July 2026, interest form sent 03 September 2026"
+
 daoip-5:scf:project:rust_soroban_client_library:
   display_name: "Rust Soroban Client Library"
   activity_status: "live"
@@ -209,19 +222,6 @@ daoip-5:scf:project:soroban_disassembler_(working_title):
     description: "Compile Rust to WebAssembly, disassemble Soroban contracts, and inspect on-chain bytecode."
     website: "https://stellarsecurityportal.com/dev-tools"
     first_released: "July 2026"
-
-daoip-5:scf:project:rumble_fish_software_development_-_rfp:
-  display_name: "Soroban Scan"
-  activity_status: "live"
-  git_owner_url: "https://github.com/rumblefishdev"
-  git_repo_urls:
-    - "https://github.com/rumblefishdev/soroban-block-explorer"
-  category: "Data Support"
-  metadata:
-    description: "Soroban Scan is an open-source, Soroban-first Stellar block explorer that decodes smart contract calls,
-      CAP-67 events, and swaps into human-readable transaction views, on mainnet and testnet."
-    website: "https://sorobanscan.rumblefish.dev/"
-    first_released: "17 July 2026"
 
 daoip-5:scf:project:soroban_security_portal:
   display_name: "Soroban Security Portal"
@@ -316,6 +316,19 @@ daoip-5:scf:project:stellar_registry:
       discover, and deploy Wasm binaries and contract instances, making contracts reusable across the ecosystem like packages."
     website: "https://rgstry.xyz"
     first_released: "March 2026"
+
+daoip-5:scf:project:stellaratlas:
+  display_name: "StellarAtlas"
+  activity_status: "live"
+  git_owner_url: "https://github.com/Stellar-Atlas"
+  git_repo_urls:
+    - "https://github.com/Stellar-Atlas/StellarAtlas"
+  category: "Infrastructure Monitoring"
+  metadata:
+    description: "StellarAtlas provides free, open-source network monitoring, archive verification and repair tooling, an
+      explorer, and historical data APIs for Stellar operators, developers and researchers."
+    website: "https://stellaratlas.io"
+    first_released: "April 2025"
 
 daoip-5:scf:project:stellarchain.io:
   display_name: "Stellarchain"
