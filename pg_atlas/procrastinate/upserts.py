@@ -795,12 +795,9 @@ async def clear_project_repo_associations(project_id: int, keep_canonical_ids: C
             .values(project_id=None)
         )
         await session.commit()
-
     except Exception:
         await session.rollback()
-
         raise
-
     finally:
         await session.close()
 
@@ -818,11 +815,8 @@ async def associate_repos_with_project(repo_canonical_ids: Sequence[str], projec
             .values(project_id=project_id)
         )
         await session.commit()
-
     except Exception:
         await session.rollback()
-
         raise
-
     finally:
         await session.close()
