@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any
 
 from sqlalchemy import String, and_, case, column, delete, or_, select, update, values
@@ -636,6 +636,31 @@ async def associate_repo_with_project(repo_canonical_id: str, project_id: int) -
         if repo is not None:
             repo.project_id = project_id
             await session.commit()
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()
+
+
+async def clear_project_repo_associations(project_id: int, keep_canonical_ids: Collection[str]) -> None:
+    """Clear this project's association from repos not in the current keep-set."""
+    session = await _session()
+
+    try:
+        await session.execute(
+            update(Repo)
+            .where(
+                Repo.id == RepoVertex.id,
+                Repo.project_id == project_id,
+                RepoVertex.canonical_id.not_in(keep_canonical_ids),
+            )
+            .values(project_id=None)
+        )
+        await session.commit()
 
     except Exception:
         await session.rollback()
