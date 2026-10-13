@@ -29,6 +29,7 @@ import logging
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -68,6 +69,7 @@ from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
     associate_repo_with_project,
+    clear_project_repo_associations,
     find_repo_by_release_purl,
     upsert_depends_on,
     upsert_external_repo,
@@ -310,10 +312,17 @@ async def process_project(
         owner = git_owner_url.rstrip("/").rsplit("/", 1)[-1]
 
     repos_to_crawl: list[GitHubRepoMetadata] = []
+    repo_canonical_ids_to_keep: set[str] | None = None
     if owner:
         if extended_universe or not git_repo_urls:
             repos_to_crawl = list_org_repos(owner)
         else:
+            repo_canonical_ids_to_keep = set()
+            for repo_url in git_repo_urls:
+                path_parts = [part for part in urlsplit(repo_url).path.split("/") if part]
+                repo_owner, repo_name = path_parts[-2:]
+                repo_canonical_ids_to_keep.add(f"pkg:github/{repo_owner}/{repo_name.removesuffix('.git')}")
+
             repos_to_crawl = fetch_repo_list(git_repo_urls)
             repo_names = [repo.full_name for repo in repos_to_crawl]
             logger.info(f"Restricting {canonical_id} crawl to {repo_names}.")
@@ -354,6 +363,10 @@ async def process_project(
         category=category,
         project_metadata=project_metadata,
     )
+
+    # ----- Reconcile Repo associations for the restricted crawl -----
+    if repo_canonical_ids_to_keep is not None:
+        await clear_project_repo_associations(project_id, repo_canonical_ids_to_keep)
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
     repo_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)

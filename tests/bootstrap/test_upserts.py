@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
 
@@ -18,11 +19,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from pg_atlas.db_models.base import EdgeConfidence, Visibility
+from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
-from pg_atlas.procrastinate.upserts import absorb_external_repo, find_repo_by_release_purl, upsert_depends_on
+from pg_atlas.procrastinate.upserts import (
+    absorb_external_repo,
+    clear_project_repo_associations,
+    find_repo_by_release_purl,
+    upsert_depends_on,
+)
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -359,6 +366,86 @@ async def test_find_repo_by_release_purl_not_found(
         result = await find_repo_by_release_purl("pkg:npm/nonexistent-ever-zz")
 
     assert result is None
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_clear_project_repo_associations_is_scoped(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Cleanup clears stale membership without affecting retained or other-project repos."""
+    factory, session = upsert_test_env
+    unique_suffix = uuid.uuid4().hex
+
+    project = Project(
+        canonical_id=f"test:reconcile-project-{unique_suffix}",
+        display_name="Reconcile Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    other_project = Project(
+        canonical_id=f"test:reconcile-other-project-{unique_suffix}",
+        display_name="Other Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    session.add_all([project, other_project])
+    await session.commit()
+    await session.refresh(project)
+    await session.refresh(other_project)
+
+    retained_repo = Repo(
+        canonical_id=f"pkg:github/test-org/retained-{unique_suffix}",
+        display_name="retained",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+    )
+    stale_repo = Repo(
+        canonical_id=f"pkg:github/test-org/stale-{unique_suffix}",
+        display_name="stale",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+    )
+    unavailable_repo = Repo(
+        canonical_id=f"pkg:github/test-org/unavailable-{unique_suffix}",
+        display_name="unavailable",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    other_project_repo = Repo(
+        canonical_id=f"pkg:github/test-org/other-{unique_suffix}",
+        display_name="other",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=other_project.id,
+    )
+    session.add_all([retained_repo, stale_repo, unavailable_repo, other_project_repo])
+    await session.commit()
+    await session.refresh(retained_repo)
+    await session.refresh(stale_repo)
+    await session.refresh(unavailable_repo)
+    await session.refresh(other_project_repo)
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        await clear_project_repo_associations(project.id, [retained_repo.canonical_id, unavailable_repo.canonical_id])
+
+    await session.reset()
+    repos = (
+        (
+            await session.execute(
+                select(Repo).where(Repo.id.in_([retained_repo.id, stale_repo.id, unavailable_repo.id, other_project_repo.id]))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    repos_by_id = {repo.id: repo for repo in repos}
+
+    assert repos_by_id[retained_repo.id].project_id == project.id
+    assert repos_by_id[stale_repo.id].project_id is None
+    assert repos_by_id[unavailable_repo.id].project_id is None
+    assert repos_by_id[other_project_repo.id].project_id == other_project.id
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")

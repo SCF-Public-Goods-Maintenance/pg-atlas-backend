@@ -289,6 +289,72 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     ]
 
 
+async def test_process_project_cleans_stale_repos_in_restricted_crawl(mocker: Any) -> None:
+    """Restricted crawls retain configured repos even when GitHub omits them."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=[])
+    upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:restricted",
+        display_name="Restricted Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=[
+            "https://github.com/org/available",
+            "https://github.com/org/unavailable",
+            "https://github.com/org/transient-error",
+        ],
+        project_metadata=None,
+    )
+
+    upsert_project_mock.assert_awaited_once()
+    clear_mock.assert_awaited_once_with(
+        101,
+        {
+            "pkg:github/org/available",
+            "pkg:github/org/unavailable",
+            "pkg:github/org/transient-error",
+        },
+    )
+    crawl_defer_mock.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize(
+    ("extended_universe", "git_repo_urls"),
+    [(True, ["https://github.com/org/one"]), (False, [])],
+)
+async def test_process_project_skips_cleanup_for_broad_crawls(
+    mocker: Any,
+    extended_universe: bool,
+    git_repo_urls: list[str],
+) -> None:
+    """Full-owner crawls must not unlink repos outside a targeted URL list."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos", return_value=[])
+    fetch_mock = mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=[])
+    upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:broad",
+        display_name="Broad Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=git_repo_urls,
+        project_metadata=None,
+        extended_universe=extended_universe,
+    )
+
+    upsert_mock.assert_awaited_once()
+    fetch_mock.assert_not_called()
+    clear_mock.assert_not_awaited()
+    crawl_defer_mock.assert_awaited_once_with()
+
+
 async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
