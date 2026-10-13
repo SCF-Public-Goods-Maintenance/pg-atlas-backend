@@ -67,6 +67,7 @@ daoip-5:scf:project:lumen_loop:
   activity_status: "live"
   git_owner_url: "https://github.com/lumenloop"
   git_repo_urls:
+    - "https://github.com/lumenloop/lumenloop-backend"
     - "https://github.com/lumenloop/stellar-ecosystem-db"
     - "https://github.com/lumenloop/lumenloop-skills"
   category: "Ecosystem Visibility"
