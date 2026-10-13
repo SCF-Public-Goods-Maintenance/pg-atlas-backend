@@ -1201,9 +1201,9 @@ class TestDeferredPayloadJsonSerializable:
         data = self._assert_json_round_trips(payload)
 
         # The value must survive the round-trip as a plain string.
-        assert isinstance(
-            data["activity_status"], str
-        ), "activity_status must be a str after JSON round-trip; check that ActivityStatus inherits from str"
+        assert isinstance(data["activity_status"], str), (
+            "activity_status must be a str after JSON round-trip; check that ActivityStatus inherits from str"
+        )
         assert data["activity_status"] == "live"
 
     def test_process_project_payload_all_activity_status_values(self) -> None:
