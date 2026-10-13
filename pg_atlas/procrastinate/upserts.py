@@ -824,3 +824,26 @@ async def clear_project_repo_associations(project_id: int, keep_canonical_ids: C
 
     finally:
         await session.close()
+
+
+async def associate_repos_with_project(repo_canonical_ids: Sequence[str], project_id: int) -> None:
+    """Set ``project_id`` on all ``Repo`` rows matching the canonical IDs."""
+    if not repo_canonical_ids:
+        return
+
+    session = await _session()
+    try:
+        await session.execute(
+            update(Repo)
+            .where(Repo.id == RepoVertex.id, RepoVertex.canonical_id.in_(repo_canonical_ids))
+            .values(project_id=project_id)
+        )
+        await session.commit()
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()

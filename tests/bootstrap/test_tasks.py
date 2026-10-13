@@ -652,10 +652,36 @@ async def test_demote_fork_repo_to_redirect_returns_for_missing_or_redirect_vert
     session.close.assert_awaited_once()
 
 
+async def test_process_project_associates_unavailable_repos(mocker: Any) -> None:
+    """Known repos unavailable on GitHub should still be linked to the project."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.fetch_repo_list",
+        return_value=([], ["org/unavailable"]),
+    )
+    upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    associate_mock = mocker.patch("pg_atlas.procrastinate.tasks.associate_repos_with_project", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:unavailable-repo",
+        display_name="Unavailable Repo Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=["https://github.com/org/unavailable"],
+        project_metadata=None,
+    )
+
+    upsert_project_mock.assert_awaited_once()
+
+    associate_mock.assert_awaited_once_with(["pkg:github/org/unavailable"], 101)
+    crawl_defer_mock.assert_not_awaited()
+
+
 async def test_process_project_cleans_stale_repos_in_restricted_crawl(mocker: Any) -> None:
     """Restricted crawls retain configured repos even when GitHub omits them."""
 
-    mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=[])
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=([], []))
     upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
     clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
     crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
@@ -697,7 +723,7 @@ async def test_process_project_skips_cleanup_for_broad_crawls(
     """Full-owner crawls must not unlink repos outside a targeted URL list."""
 
     mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos", return_value=[])
-    fetch_mock = mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=[])
+    fetch_mock = mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=([], []))
     upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
     clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
     crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
@@ -1182,9 +1208,9 @@ class TestDeferredPayloadJsonSerializable:
         data = self._assert_json_round_trips(payload)
 
         # The value must survive the round-trip as a plain string.
-        assert isinstance(data["activity_status"], str), (
-            "activity_status must be a str after JSON round-trip; check that ActivityStatus inherits from str"
-        )
+        assert isinstance(
+            data["activity_status"], str
+        ), "activity_status must be a str after JSON round-trip; check that ActivityStatus inherits from str"
         assert data["activity_status"] == "live"
 
     def test_process_project_payload_all_activity_status_values(self) -> None:

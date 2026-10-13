@@ -30,6 +30,7 @@ from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, R
 from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
+    associate_repos_with_project,
     clear_project_repo_associations,
     demote_repo_to_redirect,
     find_repo_by_release_purl,
@@ -714,6 +715,49 @@ async def test_upsert_repo_union_merges_releases(
     repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
     assert repo.releases is not None
     assert [release.version for release in repo.releases] == ["1.1.0", "1.0.0"]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_associate_repos_with_project_updates_matching_rows(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Bulk association updates matching Repo rows and leaves others unchanged."""
+    factory, session = upsert_test_env
+    unique_suffix = uuid.uuid4().hex
+
+    project = Project(
+        canonical_id=f"test:bulk-associate-project-{unique_suffix}",
+        display_name="Bulk Association Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    matched_repo = Repo(
+        canonical_id=f"pkg:github/test-org/bulk-associate-match-{unique_suffix}",
+        display_name="matched",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    unmatched_repo = Repo(
+        canonical_id=f"pkg:github/test-org/bulk-associate-unmatched-{unique_suffix}",
+        display_name="unmatched",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([project, matched_repo, unmatched_repo])
+    await session.commit()
+    await session.refresh(project)
+    await session.refresh(matched_repo)
+    await session.refresh(unmatched_repo)
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        await associate_repos_with_project([matched_repo.canonical_id], project.id)
+
+    await session.reset()
+    matched = (await session.execute(select(Repo).where(Repo.id == matched_repo.id))).scalar_one()
+    unmatched = (await session.execute(select(Repo).where(Repo.id == unmatched_repo.id))).scalar_one()
+
+    assert matched.project_id == project.id
+    assert unmatched.project_id is None
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
