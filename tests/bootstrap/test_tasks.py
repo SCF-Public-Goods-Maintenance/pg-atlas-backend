@@ -762,7 +762,6 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     )
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -789,7 +788,6 @@ async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any)
     )
     upsert_repo_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -860,7 +858,6 @@ async def test_crawl_github_repo_absorbs_name_and_depsdev_purl(
     )
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -891,7 +888,6 @@ async def test_crawl_github_repo_absorbs_name_without_depsdev_purl(mocker: Mocke
     )
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -1020,7 +1016,6 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_flutter(mock
     mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
 
     fake_result = mocker.Mock(packages_processed=1, errors=[])
@@ -1067,7 +1062,6 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: 
     mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
 
     fake_result = mocker.Mock(packages_processed=1, errors=[])
@@ -1128,7 +1122,6 @@ async def test_crawl_github_repo_supports_new_registry_systems_without_warning(
     mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     with caplog.at_level("WARNING"):

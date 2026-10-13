@@ -70,7 +70,6 @@ from pg_atlas.procrastinate.github import (
 from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
-    associate_repo_with_project,
     associate_repos_with_project,
     clear_project_repo_associations,
     demote_repo_to_redirect,
@@ -620,9 +619,6 @@ async def crawl_github_repo(
 
         if absorbed:
             logger.info(f"Absorbed ExternalRepo {pkg_canonical_id} into Repo {repo_canonical_id}")
-
-    # ----- Associate the github repo vertex with the project -----
-    await associate_repo_with_project(repo_canonical_id, project_id)
 
     # ----- Defer crawl_package_deps for deps.dev-supported packages -----
     for pkg in depsdev_packages:
