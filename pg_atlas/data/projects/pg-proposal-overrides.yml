@@ -311,6 +311,13 @@ daoip-5:scf:project:stellar_registry:
   display_name: "Stellar Registry"
   activity_status: "live"
   git_owner_url: "https://github.com/stellar-registry"
+  git_repo_urls:
+    - "https://github.com/stellar-registry/cli"
+    - "https://github.com/stellar-registry/ui"
+    - "https://github.com/stellar-registry/indexer"
+    - "https://github.com/stellar-registry/contracts"
+    - "https://github.com/stellar-registry/oz-combined-wasms"
+    - "https://github.com/stellar-registry/actions"
   category: "Developer Experience"
   metadata:
     description: "Stellar Registry is an on-chain smart contract registry for Soroban that lets developers publish, version,
