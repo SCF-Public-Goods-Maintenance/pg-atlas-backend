@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from pg_atlas.rate_limit import ApiRateLimitMiddleware
@@ -213,6 +213,43 @@ async def test_rate_limit_groups_route_templates_with_path_params() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert third.status_code == 429
+
+
+async def test_rate_limit_resolves_included_router_templates() -> None:
+    """Included-router routes use independent buckets keyed by their templates."""
+
+    fake_limiters: dict[tuple[str, str], RecordingLimiter] = {}
+
+    def limiter_factory(limit: int, key: tuple[str, str]) -> RecordingLimiter:
+        limiter = RecordingLimiter(limit_per_key=limit)
+        fake_limiters[key] = limiter
+
+        return limiter
+
+    app = make_rate_limited_app(default_limit_per_minute=1, limiter_factory=limiter_factory)
+    sbom_router = APIRouter()
+
+    async def get_submission(submission_id: int) -> dict[str, int]:
+        return {"submission_id": submission_id}
+
+    sbom_router.get("/sbom/{submission_id}")(get_submission)
+    app.include_router(sbom_router, prefix="/ingest")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.1", 12345)),
+        base_url="http://test",
+    ) as client:
+        first_submission = await client.get("/ingest/sbom/1")
+        unrelated_endpoint = await client.get("/limited")
+        second_submission = await client.get("/ingest/sbom/2")
+
+    assert first_submission.status_code == 200
+    assert unrelated_endpoint.status_code == 200
+    assert second_submission.status_code == 429
+    assert set(fake_limiters) == {
+        ("GET", "/ingest/sbom/{submission_id}"),
+        ("GET", "/limited"),
+    }
 
 
 async def test_rate_limit_groups_unmatched_paths_by_method() -> None:
