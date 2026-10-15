@@ -340,9 +340,8 @@ async def process_project(
         else:
             repo_canonical_ids_to_keep = set()
             for repo_url in git_repo_urls:
-                path_parts = [part for part in urlsplit(repo_url).path.split("/") if part]
-                repo_owner, repo_name = path_parts[-2:]
-                repo_canonical_ids_to_keep.add(f"pkg:github/{repo_owner}/{repo_name.removesuffix('.git')}")
+                repo_full_name = urlsplit(repo_url).path.strip("/")
+                repo_canonical_ids_to_keep.add(f"pkg:github/{repo_full_name}")
 
             repos_to_crawl = fetch_repo_list(git_repo_urls)
             repo_names = [repo.full_name for repo in repos_to_crawl]
@@ -412,11 +411,10 @@ async def process_project(
 @app.task(queue="opengrants")
 async def demote_fork_repo_to_redirect(github_repo_url: str) -> None:
     """Demote a tracked GitHub fork to a redirect to its best available upstream vertex."""
-    repo_path = urlsplit(github_repo_url).path.strip("/").split("/")
-    if len(repo_path) < 2:
+    repo_full_name = urlsplit(github_repo_url).path.strip("/")
+    if "/" not in repo_full_name:
         raise ValueError(f"Invalid GitHub repository URL: {github_repo_url}")
 
-    repo_full_name = f"{repo_path[0]}/{repo_path[1].removesuffix('.git')}"
     repo_canonical_id = f"pkg:github/{repo_full_name}"
     session = get_session_factory()()
 
