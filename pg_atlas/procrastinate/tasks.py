@@ -142,6 +142,18 @@ async def process_sbom_submission(
         submission = await session.get(SbomSubmission, submission_id)
         repository_claim = submission.repository_claim if submission is not None else None
 
+        if submission is not None:
+            canonical_id = f"pkg:github/{repository_claim}"
+            vertex = await get_vertex(session, canonical_id)
+            if isinstance(vertex, RedirectVertex):
+                submission.status = SubmissionStatus.processed
+                submission.processed_at = None
+                submission.error_detail = None
+                await session.commit()
+                logger.info(f"Skipping SBOM processing for redirect vertex {canonical_id}")
+
+                return
+
         await parse_sbom_and_persist_graph(
             session,
             submission_id,
