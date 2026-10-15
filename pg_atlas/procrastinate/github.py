@@ -169,6 +169,10 @@ class GitHubRepoMetadata:
     parent_full_name: str | None = None
     source_full_name: str | None = None
 
+    @property
+    def url(self) -> str:
+        return f"https://github.com/{self.full_name}"
+
 
 @dataclass
 class PackageReference:
