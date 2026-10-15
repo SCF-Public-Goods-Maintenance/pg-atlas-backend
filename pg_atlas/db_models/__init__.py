@@ -24,7 +24,7 @@ from pg_atlas.db_models.github_dependents_observation import (
 )
 from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.project import Project
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 
 __all__ = [
@@ -33,6 +33,7 @@ __all__ = [
     "RepoVertex",
     "Repo",
     "ExternalRepo",
+    "RedirectVertex",
     "Contributor",
     "DependsOn",
     "ContributedTo",

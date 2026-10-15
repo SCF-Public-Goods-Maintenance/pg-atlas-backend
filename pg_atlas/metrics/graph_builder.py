@@ -2,7 +2,8 @@
 Async loaders that materialise PostgreSQL graph data into NetworkX DiGraph objects.
 
 Two entry points:
-- build_dependency_graph: dep-layer only (Repo/ExternalRepo nodes + DependsOn edges).
+- build_dependency_graph: dep-layer only (Repo/ExternalRepo nodes + DependsOn edges;
+    RedirectVertex aliases are excluded).
 - build_full_graph: dep-layer + Project nodes linked to their repos.
 
 Use build_dependency_graph as input to active-subgraph projection and
@@ -29,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import get_all_vertices
 
 logger = logging.getLogger(__name__)
@@ -40,12 +41,16 @@ async def build_dependency_graph(
     reference_date: dt.date | None = None,
 ) -> nx.DiGraph[str]:
     """
-    Load all RepoVertex nodes and DependsOn edges from PostgreSQL into a NetworkX DiGraph.
+    Load Repo and ExternalRepo nodes and DependsOn edges into a NetworkX DiGraph.
+
+    RedirectVertex aliases are excluded because they do not participate in the
+    dependency network. Edges touching a redirect are excluded as well, so a
+    malformed edge cannot reintroduce the alias as an implicit graph node.
 
     Node key: canonical_id (DAOIP-5 URI string).
 
     Node attributes:
-        vertex_type (str): "Repo" | "ExternalRepo"  (title-cased from DB enum)
+        vertex_type (str): "Repo" | "ExternalRepo" (title-cased from DB enum)
         project_id (int | None): FK to projects (Repo only; None for ExternalRepo)
         activity_status (str | None): parent project status for Repo nodes;
             None when the Repo has no linked Project, or for ExternalRepo nodes
@@ -71,7 +76,11 @@ async def build_dependency_graph(
     G.graph["reference_date"] = ref.isoformat()
 
     vertices: Sequence[RepoVertex] = await get_all_vertices(session)
+    redirect_vertex_ids = {rv.id for rv in vertices if isinstance(rv, RedirectVertex)}
     for rv in vertices:
+        if isinstance(rv, RedirectVertex):
+            continue
+
         if isinstance(rv, Repo):
             commit_dt = rv.latest_commit_date
             commit_date = commit_dt.date() if commit_dt is not None else None
@@ -105,6 +114,9 @@ async def build_dependency_graph(
 
     edges: Sequence[DependsOn] = (await session.execute(select(DependsOn))).scalars().all()
     for edge in edges:
+        if edge.in_vertex_id in redirect_vertex_ids or edge.out_vertex_id in redirect_vertex_ids:
+            continue
+
         G.add_edge(
             edge.in_node.canonical_id,
             edge.out_node.canonical_id,
