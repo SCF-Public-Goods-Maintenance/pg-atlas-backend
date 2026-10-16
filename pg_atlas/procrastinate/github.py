@@ -307,9 +307,7 @@ def fetch_repo_list(git_repo_urls: list[str]) -> tuple[list[GitHubRepoMetadata],
             )
         except GithubException as exc:
             if exc.status in (404, 409):
-                msg = (
-                    str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""
-                )  # pyright: ignore[reportUnknownMemberType]
+                msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
                 logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} - {msg}")
                 unavailable.append(f"{owner}/{repo_name}")
             else:
