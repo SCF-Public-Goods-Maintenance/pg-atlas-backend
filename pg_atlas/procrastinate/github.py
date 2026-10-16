@@ -268,15 +268,19 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return []
 
 
-def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
+def fetch_repo_list(git_repo_urls: list[str]) -> tuple[list[GitHubRepoMetadata], list[str]]:
     """
-    Return metadata for a list of public repos.
+    Return available repo metadata and full names for unavailable repos.
 
-    Logs GitHub API errors and returns the available results. Fork parent and
-    source names are recorded when the individual repository response provides them.
+    Fork parent and source names are recorded when the individual repository response
+    provides them.
+
+    404 and 409 responses are recorded as ``owner/repo`` names so callers can
+    still associate previously known repositories. Other API errors are logged only.
     """
     gh = get_github_client()
     metadata: list[GitHubRepoMetadata] = []
+    unavailable: list[str] = []
 
     for repo_url in git_repo_urls:
         owner, repo_name = repo_url.rstrip("/").rsplit("/", 2)[-2:]
@@ -305,15 +309,16 @@ def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
             if exc.status in (404, 409):
                 msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
                 logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} - {msg}")
+                unavailable.append(f"{owner}/{repo_name}")
             else:
                 logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
 
-    return metadata
+    return metadata, unavailable
 
 
 def get_repo_fork_details(github_repo_url: str) -> tuple[str | None, str | None]:
     """Return the immediate parent and root source names for a GitHub fork."""
-    fetched = fetch_repo_list([github_repo_url])
+    fetched, _ = fetch_repo_list([github_repo_url])
     if fetched:
         repo = fetched[0]
         if not repo.is_fork:

@@ -70,7 +70,7 @@ from pg_atlas.procrastinate.github import (
 from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
-    associate_repo_with_project,
+    associate_repos_with_project,
     clear_project_repo_associations,
     demote_repo_to_redirect,
     find_repo_by_release_purl,
@@ -329,6 +329,7 @@ async def process_project(
     repos_to_crawl: list[GitHubRepoMetadata] = []
     repo_urls_to_demote: list[str] = []
     repo_canonical_ids_to_keep: set[str] | None = None
+    unavailable_repos: list[str] = []
     if owner:
         if extended_universe or not git_repo_urls:
             org_repos = list_org_repos(owner)
@@ -343,7 +344,7 @@ async def process_project(
                 repo_full_name = urlsplit(repo_url).path.strip("/")
                 repo_canonical_ids_to_keep.add(f"pkg:github/{repo_full_name}")
 
-            repos_to_crawl = fetch_repo_list(git_repo_urls)
+            repos_to_crawl, unavailable_repos = fetch_repo_list(git_repo_urls)
             repo_names = [repo.full_name for repo in repos_to_crawl]
             logger.info(f"Restricting {canonical_id} crawl to {repo_names}.")
 
@@ -387,6 +388,10 @@ async def process_project(
     # ----- Reconcile Repo associations for the restricted crawl -----
     if repo_canonical_ids_to_keep is not None:
         await clear_project_repo_associations(project_id, repo_canonical_ids_to_keep)
+
+    if unavailable_repos:
+        unavailable_canonical_ids = [f"pkg:github/{repo_name}" for repo_name in unavailable_repos]
+        await associate_repos_with_project(unavailable_canonical_ids, project_id)
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
     if repos_to_crawl:
@@ -614,9 +619,6 @@ async def crawl_github_repo(
 
         if absorbed:
             logger.info(f"Absorbed ExternalRepo {pkg_canonical_id} into Repo {repo_canonical_id}")
-
-    # ----- Associate the github repo vertex with the project -----
-    await associate_repo_with_project(repo_canonical_id, project_id)
 
     # ----- Defer crawl_package_deps for deps.dev-supported packages -----
     for pkg in depsdev_packages:

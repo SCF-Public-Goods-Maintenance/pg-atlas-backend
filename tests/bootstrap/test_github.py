@@ -10,6 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from github import GithubException
+
 from pg_atlas.procrastinate import github as gh
 
 
@@ -94,7 +96,7 @@ def test_fetch_repo_list_records_fork_parent_and_source(monkeypatch: Any) -> Non
     client = SimpleNamespace(get_repo=_get_repo)
     monkeypatch.setattr(gh, "get_github_client", lambda: client)
 
-    metadata = gh.fetch_repo_list(["https://github.com/test-org/forked"])
+    metadata, _ = gh.fetch_repo_list(["https://github.com/test-org/forked"])
 
     assert metadata[0].is_fork is True
     assert metadata[0].parent_full_name == "upstream-owner/parent"
@@ -200,6 +202,37 @@ def test_detect_packages_from_repo_uses_graphql_manifest_paths(monkeypatch: Any)
     assert len(package_refs) == 1
     assert package_refs[0].system == "NPM"
     assert package_refs[0].name == "pkg-name"
+
+
+def test_fetch_repo_list_returns_unavailable_full_names(monkeypatch: Any) -> None:
+    """Unavailable URLs should be returned alongside available repo metadata."""
+
+    available_repo = SimpleNamespace(
+        name="available",
+        full_name="org/available",
+        description=None,
+        default_branch="main",
+        fork=False,
+        stargazers_count=5,
+        forks_count=2,
+        pushed_at=None,
+        language=None,
+        topics=[],
+    )
+
+    class _FakeGitHubClient:
+        def get_repo(self, repo_path: str) -> SimpleNamespace:
+            if repo_path == "org/unavailable":
+                raise GithubException(404, {"message": "Not Found"}, {})
+
+            return available_repo
+
+    monkeypatch.setattr(gh, "get_github_client", lambda: _FakeGitHubClient())
+
+    metadata, unavailable = gh.fetch_repo_list(["https://github.com/org/available", "https://github.com/org/unavailable"])
+
+    assert [repo.full_name for repo in metadata] == ["org/available"]
+    assert unavailable == ["org/unavailable"]
 
 
 def test_extract_package_name_npm_private_fast_path_skips_even_if_json_is_invalid() -> None:

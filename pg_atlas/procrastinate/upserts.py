@@ -780,27 +780,6 @@ async def upsert_depends_on(
 # ---------------------------------------------------------------------------
 
 
-async def associate_repo_with_project(repo_canonical_id: str, project_id: int) -> None:
-    """Set ``project_id`` on a ``Repo`` row identified by its canonical ID."""
-    session = await _session()
-
-    try:
-        result = await session.execute(select(Repo).where(Repo.canonical_id == repo_canonical_id))
-        repo = result.scalar_one_or_none()
-
-        if repo is not None:
-            repo.project_id = project_id
-            await session.commit()
-
-    except Exception:
-        await session.rollback()
-
-        raise
-
-    finally:
-        await session.close()
-
-
 async def clear_project_repo_associations(project_id: int, keep_canonical_ids: Collection[str]) -> None:
     """Clear this project's association from repos not in the current keep-set."""
     session = await _session()
@@ -816,11 +795,28 @@ async def clear_project_repo_associations(project_id: int, keep_canonical_ids: C
             .values(project_id=None)
         )
         await session.commit()
-
     except Exception:
         await session.rollback()
-
         raise
+    finally:
+        await session.close()
 
+
+async def associate_repos_with_project(repo_canonical_ids: Sequence[str], project_id: int) -> None:
+    """Set ``project_id`` on all ``Repo`` rows matching the canonical IDs."""
+    if not repo_canonical_ids:
+        return
+
+    session = await _session()
+    try:
+        await session.execute(
+            update(Repo)
+            .where(Repo.id == RepoVertex.id, RepoVertex.canonical_id.in_(repo_canonical_ids))
+            .values(project_id=project_id)
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     finally:
         await session.close()
