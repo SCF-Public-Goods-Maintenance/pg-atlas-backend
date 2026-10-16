@@ -29,9 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from pg_atlas.auth.oidc import verify_github_oidc_token
-from pg_atlas.db_models.base import EdgeConfidence, SubmissionStatus
+from pg_atlas.db_models.base import EdgeConfidence, RedirectPredicate, SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.main import app
@@ -217,6 +217,51 @@ async def test_process_sbom_submission_marks_pending_row_processed(
     ]
     assert len(edges_for_repo) == 2
     assert {e.out_node.canonical_id for e in edges_for_repo} == {"httpx", "requests"}
+
+
+async def test_process_sbom_submission_skips_redirect_repo(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_queue_tests: None,
+    patched_worker_session_factory: None,
+    mocker: Any,
+) -> None:
+    """Redirect submissions become processed without parsing or graph mutation."""
+    token = uuid.uuid4().hex
+    repository_claim = f"test-org/redirect-{token}"
+    target = Repo(
+        canonical_id=f"pkg:github/test-org/target-{token}",
+        display_name="target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id=f"pkg:github/{repository_claim}",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+
+    raw_body = (FIXTURES / "valid.spdx.json").read_bytes()
+    submission = await _create_submission(db_session, raw_body, error_detail="stale error")
+    submission.repository_claim = repository_claim
+    submission.processed_at = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    await db_session.commit()
+    parser_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.parse_sbom_and_persist_graph",
+        new=mocker.AsyncMock(),
+    )
+
+    await process_sbom_submission(submission_id=submission.id)
+
+    await db_session.refresh(submission)
+    assert submission.status == SubmissionStatus.processed
+    assert submission.processed_at is None
+    assert submission.error_detail is None
+    parser_mock.assert_not_awaited()
 
 
 async def test_process_sbom_submission_chains_next_pending_submission_for_same_repo(

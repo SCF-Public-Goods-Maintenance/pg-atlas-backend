@@ -10,23 +10,28 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, Visibility
+from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, RedirectPredicate, Visibility
+from pg_atlas.db_models.contributed_to import ContributedTo
+from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
+from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
     clear_project_repo_associations,
+    demote_repo_to_redirect,
     find_repo_by_release_purl,
     upsert_depends_on,
 )
@@ -317,6 +322,238 @@ async def test_absorb_external_repo_preserves_verified_conflicts(
     ).scalar_one()
     assert unrelated_edge.confidence == EdgeConfidence.inferred_shadow
     assert unrelated_edge.version_range == ">=3"
+
+
+# ---------------------------------------------------------------------------
+# demote_repo_to_redirect
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+@pytest.mark.parametrize("target_is_external", [False, True], ids=["repo-target", "external-target"])
+async def test_demote_repo_to_redirect_repoints_edges_and_preserves_verified_evidence(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+    target_is_external: bool,
+) -> None:
+    """Demotion removes contributions, redirects edges, and preserves verified conflicts."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    source = Repo(
+        canonical_id=f"pkg:github/test-org/source-{token}",
+        display_name="source",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    if target_is_external:
+        target: RepoVertex = ExternalRepo(
+            canonical_id=f"pkg:npm/target-{token}",
+            display_name="target",
+            latest_version="1.0.0",
+        )
+    else:
+        target = Repo(
+            canonical_id=f"pkg:github/test-org/target-{token}",
+            display_name="target",
+            visibility=Visibility.public,
+            latest_version="1.0.0",
+        )
+    incoming = Repo(
+        canonical_id=f"pkg:github/test-org/incoming-{token}",
+        display_name="incoming",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    dependency = ExternalRepo(
+        canonical_id=f"pkg:npm/dependency-{token}",
+        display_name="dependency",
+        latest_version="1.0.0",
+    )
+    unrelated_dependency = ExternalRepo(
+        canonical_id=f"pkg:npm/unrelated-dependency-{token}",
+        display_name="unrelated dependency",
+        latest_version="1.0.0",
+    )
+    contributor = Contributor(email_hash=token, name="test contributor")
+    session.add_all([source, target, incoming, dependency, unrelated_dependency, contributor])
+    await session.flush()
+    existing_redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/old-alias-{token}",
+        target_vertex_id=source.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add_all(
+        [
+            existing_redirect,
+            DependsOn(
+                in_vertex_id=incoming.id,
+                out_vertex_id=source.id,
+                confidence=EdgeConfidence.verified_sbom,
+                version_range="^1.2",
+            ),
+            DependsOn(
+                in_vertex_id=incoming.id,
+                out_vertex_id=target.id,
+                confidence=EdgeConfidence.inferred_shadow,
+            ),
+            DependsOn(
+                in_vertex_id=source.id,
+                out_vertex_id=dependency.id,
+                confidence=EdgeConfidence.verified_sbom,
+                version_range="<2",
+            ),
+            DependsOn(
+                in_vertex_id=target.id,
+                out_vertex_id=dependency.id,
+                confidence=EdgeConfidence.inferred_shadow,
+            ),
+            DependsOn(in_vertex_id=source.id, out_vertex_id=unrelated_dependency.id),
+            ContributedTo(
+                contributor_id=contributor.id,
+                repo_id=source.id,
+                number_of_commits=1,
+                first_commit_date=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                last_commit_date=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+            ),
+        ]
+    )
+    await session.commit()
+
+    await demote_repo_to_redirect(
+        session,
+        repo_id=source.id,
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    await session.commit()
+    await session.reset()
+
+    redirected = await get_vertex(session, source.canonical_id)
+    assert isinstance(redirected, RedirectVertex)
+    assert redirected.target_vertex_id == target.id
+    assert redirected.predicate == RedirectPredicate.fork_of
+    assert (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == source.id))).scalars().all() == []
+    assert (
+        await session.execute(select(RedirectVertex).where(RedirectVertex.id == existing_redirect.id))
+    ).scalar_one().target_vertex_id == target.id
+
+    incoming_edges = (await session.execute(select(DependsOn).where(DependsOn.in_vertex_id == incoming.id))).scalars().all()
+    assert len(incoming_edges) == 1
+    assert incoming_edges[0].out_vertex_id == target.id
+    assert incoming_edges[0].confidence == EdgeConfidence.verified_sbom
+    assert incoming_edges[0].version_range == "^1.2"
+
+    outgoing_edges = (await session.execute(select(DependsOn).where(DependsOn.in_vertex_id == target.id))).scalars().all()
+    assert len(outgoing_edges) == 2
+    by_target = {edge.out_vertex_id: edge for edge in outgoing_edges}
+    assert by_target[dependency.id].confidence == EdgeConfidence.verified_sbom
+    assert by_target[unrelated_dependency.id].confidence == EdgeConfidence.inferred_shadow
+    source_edges = await session.execute(
+        select(DependsOn).where(or_(DependsOn.in_vertex_id == source.id, DependsOn.out_vertex_id == source.id))
+    )
+    assert source_edges.scalars().all() == []
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_demote_repo_to_redirect_updates_existing_redirect_and_removes_edges(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Repeated demotion retargets existing redirects and removes attached dependencies."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    old_target = Repo(
+        canonical_id=f"pkg:github/test-org/old-target-{token}",
+        display_name="old target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    new_target = ExternalRepo(
+        canonical_id=f"pkg:npm/new-target-{token}",
+        display_name="new target",
+        latest_version="1.0.0",
+    )
+    peer = Repo(
+        canonical_id=f"pkg:github/test-org/peer-{token}",
+        display_name="peer",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([old_target, new_target, peer])
+    await session.flush()
+    redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/alias-{token}",
+        target_vertex_id=old_target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add(redirect)
+    await session.flush()
+    redirect_id = redirect.id
+    session.add_all(
+        [
+            DependsOn(in_vertex_id=redirect_id, out_vertex_id=peer.id),
+            DependsOn(in_vertex_id=peer.id, out_vertex_id=redirect_id),
+        ]
+    )
+    await session.commit()
+
+    await demote_repo_to_redirect(
+        session,
+        repo_id=redirect_id,
+        target_vertex_id=new_target.id,
+        predicate=RedirectPredicate.package_of,
+    )
+    await session.commit()
+    await session.reset()
+
+    updated_redirect = await get_vertex(session, redirect.canonical_id)
+    assert isinstance(updated_redirect, RedirectVertex)
+    assert updated_redirect.target_vertex_id == new_target.id
+    assert updated_redirect.predicate == RedirectPredicate.package_of
+    attached_edges = await session.execute(
+        select(DependsOn).where(or_(DependsOn.in_vertex_id == redirect_id, DependsOn.out_vertex_id == redirect_id))
+    )
+    assert attached_edges.scalars().all() == []
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_demote_repo_to_redirect_rejects_invalid_targets(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Demotion rejects self-redirects, missing targets, and redirect targets."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    source = Repo(
+        canonical_id=f"pkg:github/test-org/source-invalid-{token}",
+        display_name="source",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    valid_target = Repo(
+        canonical_id=f"pkg:github/test-org/valid-target-{token}",
+        display_name="target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([source, valid_target])
+    await session.flush()
+    redirect_target = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/redirect-target-{token}",
+        target_vertex_id=valid_target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add(redirect_target)
+    await session.commit()
+
+    source_id = source.id
+    redirect_target_id = redirect_target.id
+    for target_vertex_id in (source_id, -1, redirect_target_id):
+        with pytest.raises(ValueError):
+            await demote_repo_to_redirect(
+                session,
+                repo_id=source_id,
+                target_vertex_id=target_vertex_id,
+                predicate=RedirectPredicate.fork_of,
+            )
+        await session.rollback()
 
 
 # ---------------------------------------------------------------------------

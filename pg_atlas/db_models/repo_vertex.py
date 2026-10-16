@@ -22,9 +22,18 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
-from pg_atlas.db_models.base import PgBase, ReleaseListJSONB, RepoVertexType, Visibility, canonical_id, enum_values, intpk
+from pg_atlas.db_models.base import (
+    PgBase,
+    RedirectPredicate,
+    ReleaseListJSONB,
+    RepoVertexType,
+    Visibility,
+    canonical_id,
+    enum_values,
+    intpk,
+)
 from pg_atlas.db_models.release import Release
 
 if TYPE_CHECKING:
@@ -42,9 +51,9 @@ class RepoVertex(PgBase):
     """
     Joined-table-inheritance base for all repository-like vertices.
 
-    Stores the identity columns shared by ``Repo`` and ``ExternalRepo``. All edge
-    tables carry FK constraints to ``repo_vertices.id`` so that a single FK column
-    can reference either subtype without sacrificing referential integrity.
+    Stores identity columns shared by ``Repo``, ``ExternalRepo``, and
+    ``RedirectVertex``. All edge tables carry FK constraints to
+    ``repo_vertices.id`` so that a single FK column can reference any subtype.
 
     Do not instantiate ``RepoVertex`` directly; use the concrete subclasses.
     """
@@ -227,4 +236,44 @@ class ExternalRepo(RepoVertex):
         server_default=func.now(),
         onupdate=func.now(),
         init=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Concrete subtype: RedirectVertex
+# ---------------------------------------------------------------------------
+
+
+class RedirectVertex(RepoVertex):
+    """An alias that points to a canonical Repo or ExternalRepo vertex."""
+
+    __tablename__ = "redirect_vertices"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("repo_vertices.id", ondelete="CASCADE"),
+        primary_key=True,
+        init=False,
+        repr=False,
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": RepoVertexType.redirect,
+        "inherit_condition": RepoVertex.id == id,
+        "inherit_foreign_keys": [id],
+        "properties": {"id": column_property(RepoVertex.id, id)},
+    }
+
+    target_vertex_id: Mapped[int] = mapped_column(
+        ForeignKey("repo_vertices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    predicate: Mapped[RedirectPredicate] = mapped_column(
+        Enum(RedirectPredicate, name="redirect_predicate", values_callable=enum_values)
+    )
+    target_vertex: Mapped[RepoVertex] = relationship(
+        foreign_keys=[target_vertex_id],
+        lazy="selectin",
+        init=False,
+        repr=False,
     )

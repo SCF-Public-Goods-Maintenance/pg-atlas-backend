@@ -31,12 +31,15 @@ from pg_atlas.db_models.base import (
     ActivityStatus,
     EdgeConfidence,
     ProjectType,
+    RedirectPredicate,
+    RepoVertexType,
     Visibility,
 )
+from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release, merge_releases, sorted_releases_desc
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_ext
@@ -163,7 +166,10 @@ async def upsert_repo(
     try:
         vertex = await get_vertex(session, canonical_id)
 
-        if vertex is not None and isinstance(vertex, ExternalRepo):
+        if isinstance(vertex, RedirectVertex):
+            raise ValueError(f"RedirectVertex {canonical_id} -> {vertex.target_vertex_id} cannot be reinstated automatically.")
+
+        if isinstance(vertex, ExternalRepo):
             merged_releases = merge_releases(vertex.releases, releases)
 
             repo_id = await _promote_external_to_repo(
@@ -183,7 +189,7 @@ async def upsert_repo(
 
             return repo_id
 
-        if vertex is not None and isinstance(vertex, Repo):
+        if isinstance(vertex, Repo):
             # Already a Repo — update mutable columns.
             vertex.display_name = display_name
             if latest_version:
@@ -345,6 +351,155 @@ async def _promote_external_to_repo(
     logger.info(f"Promoted ExternalRepo -> Repo (vertex_id={vertex_id})")
 
     return vertex_id
+
+
+# ---------------------------------------------------------------------------
+# Demote Repo to RedirectVertex
+# ---------------------------------------------------------------------------
+
+
+async def demote_repo_to_redirect(
+    session: AsyncSession,
+    *,
+    repo_id: int,
+    target_vertex_id: int,
+    predicate: RedirectPredicate,
+) -> None:
+    """Atomically demote a Repo vertex to a RedirectVertex pointing to target_vertex_id."""
+    if repo_id == target_vertex_id:
+        raise ValueError("A vertex cannot redirect to itself")
+
+    repo_vertex = (
+        await session.execute(select(RepoVertex).where(RepoVertex.id == repo_id).with_for_update())
+    ).scalar_one_or_none()
+    if repo_vertex is None:
+        raise ValueError(f"Repo vertex {repo_id} does not exist")
+
+    target_vertex = (
+        await session.execute(select(RepoVertex).where(RepoVertex.id == target_vertex_id).with_for_update())
+    ).scalar_one_or_none()
+    if target_vertex is None or isinstance(target_vertex, RedirectVertex):
+        raise ValueError(f"Target vertex {target_vertex_id} does not exist or is a redirect")
+
+    dependency_table = DependsOn.metadata.tables[DependsOn.__tablename__]
+    repo_table = Repo.metadata.tables[Repo.__tablename__]
+    base_table = RepoVertex.metadata.tables[RepoVertex.__tablename__]
+    redirect_table = RedirectVertex.metadata.tables[RedirectVertex.__tablename__]
+
+    if isinstance(repo_vertex, RedirectVertex):
+        await session.execute(
+            update(redirect_table)
+            .where(redirect_table.c.id == repo_id)
+            .values(target_vertex_id=target_vertex_id, predicate=predicate)
+        )
+        await session.execute(
+            delete(dependency_table).where(
+                or_(
+                    dependency_table.c.in_vertex_id == repo_id,
+                    dependency_table.c.out_vertex_id == repo_id,
+                )
+            )
+        )
+        await session.flush()
+
+        return
+
+    if not isinstance(repo_vertex, Repo):
+        raise ValueError(f"Vertex {repo_id} is not a Repo")
+
+    await session.execute(delete(ContributedTo).where(ContributedTo.repo_id == repo_id))
+
+    # Remove direct pairs that would become self-loops after endpoint replacement.
+    await session.execute(
+        delete(dependency_table).where(
+            or_(
+                and_(dependency_table.c.in_vertex_id == repo_id, dependency_table.c.out_vertex_id == target_vertex_id),
+                and_(dependency_table.c.in_vertex_id == target_vertex_id, dependency_table.c.out_vertex_id == repo_id),
+            )
+        )
+    )
+
+    # Preserve verified evidence when another vertex already depends on the target.
+    incoming_alias = dependency_table.alias("incoming_fork_edge")
+    await session.execute(
+        update(dependency_table)
+        .where(
+            dependency_table.c.out_vertex_id == target_vertex_id,
+            dependency_table.c.confidence != EdgeConfidence.verified_sbom,
+            incoming_alias.c.out_vertex_id == repo_id,
+            incoming_alias.c.in_vertex_id == dependency_table.c.in_vertex_id,
+            incoming_alias.c.confidence == EdgeConfidence.verified_sbom,
+        )
+        .values(
+            confidence=EdgeConfidence.verified_sbom,
+            version_range=incoming_alias.c.version_range,
+        )
+    )
+    incoming_conflicts = select(dependency_table.c.in_vertex_id).where(
+        dependency_table.c.out_vertex_id == repo_id,
+        dependency_table.c.in_vertex_id.in_(
+            select(dependency_table.c.in_vertex_id).where(dependency_table.c.out_vertex_id == target_vertex_id)
+        ),
+    )
+    await session.execute(
+        delete(dependency_table).where(
+            dependency_table.c.out_vertex_id == repo_id,
+            dependency_table.c.in_vertex_id.in_(select(incoming_conflicts.subquery().c.in_vertex_id)),
+        )
+    )
+    await session.execute(
+        update(dependency_table).where(dependency_table.c.out_vertex_id == repo_id).values(out_vertex_id=target_vertex_id)
+    )
+
+    # Preserve verified evidence when the target already depends on the same vertex.
+    outgoing_alias = dependency_table.alias("outgoing_fork_edge")
+    await session.execute(
+        update(dependency_table)
+        .where(
+            dependency_table.c.in_vertex_id == target_vertex_id,
+            dependency_table.c.confidence != EdgeConfidence.verified_sbom,
+            outgoing_alias.c.in_vertex_id == repo_id,
+            outgoing_alias.c.out_vertex_id == dependency_table.c.out_vertex_id,
+            outgoing_alias.c.confidence == EdgeConfidence.verified_sbom,
+        )
+        .values(
+            confidence=EdgeConfidence.verified_sbom,
+            version_range=outgoing_alias.c.version_range,
+        )
+    )
+    outgoing_conflicts = select(dependency_table.c.out_vertex_id).where(
+        dependency_table.c.in_vertex_id == repo_id,
+        dependency_table.c.out_vertex_id.in_(
+            select(dependency_table.c.out_vertex_id).where(dependency_table.c.in_vertex_id == target_vertex_id)
+        ),
+    )
+    await session.execute(
+        delete(dependency_table).where(
+            dependency_table.c.in_vertex_id == repo_id,
+            dependency_table.c.out_vertex_id.in_(select(outgoing_conflicts.subquery().c.out_vertex_id)),
+        )
+    )
+    await session.execute(
+        update(dependency_table).where(dependency_table.c.in_vertex_id == repo_id).values(in_vertex_id=target_vertex_id)
+    )
+
+    await session.execute(delete(dependency_table).where(dependency_table.c.in_vertex_id == dependency_table.c.out_vertex_id))
+    await session.execute(
+        update(redirect_table).where(redirect_table.c.target_vertex_id == repo_id).values(target_vertex_id=target_vertex_id)
+    )
+
+    await session.execute(delete(repo_table).where(repo_table.c.id == repo_id))
+    await session.execute(
+        update(base_table).where(base_table.c.id == repo_id).values(vertex_type=RepoVertexType.redirect.value)
+    )
+    await session.execute(
+        redirect_table.insert().values(
+            id=repo_id,
+            target_vertex_id=target_vertex_id,
+            predicate=predicate,
+        )
+    )
+    await session.flush()
 
 
 # ---------------------------------------------------------------------------

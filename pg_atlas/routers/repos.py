@@ -27,7 +27,7 @@ from pg_atlas.db_models.github_dependents_observation import (
     GithubDependentObservation,
     GithubDependentsCrawlRun,
 )
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
 from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
 from pg_atlas.routers.models import (
@@ -80,13 +80,20 @@ def _re_encode_purl(canonical_id: str) -> str:
     return quote(canonical_id, safe="/:")
 
 
-async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
+async def _get_repo_or_redirect(
+    db: AsyncSession,
+    canonical_id: str,
+    *,
+    subresource_suffix: str = "",
+) -> Repo:
     """
-    Fetch a Repo by canonical_id or raise 404.
+    Fetch a Repo, redirect Repo aliases, or raise 404.
 
-    Uses the JTI polymorphic loader and verifies the result is a ``Repo``
-    (not ``ExternalRepo``).  Tries the raw path parameter first, then the
-    re-encoded form to handle Starlette's automatic percent-decoding.
+    Redirect targets are followed only when they resolve to a ``Repo``;
+    redirects to ExternalRepos and missing targets return 404.  The optional
+    suffix preserves the requested subresource in the redirect location.
+    Tries the raw path parameter first, then the re-encoded form to handle
+    Starlette's automatic percent-decoding.
     """
     # Try decoded value first (most canonical_ids have no percent-encoding).
     result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(POLY_LOAD))
@@ -99,6 +106,15 @@ async def _get_repo_or_404(db: AsyncSession, canonical_id: str) -> Repo:
         if encoded != canonical_id:
             result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == encoded).options(POLY_LOAD))
             vertex = result.scalar_one_or_none()
+
+    if isinstance(vertex, RedirectVertex):
+        target_result = await db.execute(select(RepoVertex).where(RepoVertex.id == vertex.target_vertex_id).options(POLY_LOAD))
+        target = target_result.scalar_one_or_none()
+        if isinstance(target, Repo):
+            raise HTTPException(
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+                headers={"Location": f"/repos/{target.canonical_id}{subresource_suffix}"},
+            )
 
     if vertex is None or not isinstance(vertex, Repo):
         raise HTTPException(
@@ -225,7 +241,7 @@ async def get_repo_depends_on(
     Each entry includes the target vertex's canonical ID, display name,
     type (``repo`` or ``external-repo``), version range, and confidence level.
     """
-    repo = await _get_repo_or_404(db, canonical_id)
+    repo = await _get_repo_or_redirect(db, canonical_id, subresource_suffix="/depends-on")
 
     return await _dep_edges(db, repo.id, direction="outgoing")
 
@@ -246,7 +262,7 @@ async def get_repo_has_dependents(
     Each entry includes the source vertex's canonical ID, display name,
     type, version range, and confidence level.
     """
-    repo = await _get_repo_or_404(db, canonical_id)
+    repo = await _get_repo_or_redirect(db, canonical_id, subresource_suffix="/has-dependents")
 
     return await _dep_edges(db, repo.id, direction="incoming")
 
@@ -270,7 +286,7 @@ async def get_repo_github_dependents(
     endpoint: observations are not ``DependsOn`` relationships and feed no
     metric. Retired observations are not exposed here.
     """
-    repo = await _get_repo_or_404(db, canonical_id)
+    repo = await _get_repo_or_redirect(db, canonical_id, subresource_suffix="/github-dependents")
 
     applied = (GithubDependentsRunStatus.complete, GithubDependentsRunStatus.partial)
     latest_attempt = await db.scalar(
@@ -370,7 +386,7 @@ async def get_repo_contributors(
 ) -> PaginatedResponse[RepoContributorSummary]:
     """Paginated contributors for one repo with commit-count and commit-date spans."""
 
-    repo = await _get_repo_or_404(db, canonical_id)
+    repo = await _get_repo_or_redirect(db, canonical_id, subresource_suffix="/contributors")
 
     base = (
         select(ContributedTo)
@@ -426,7 +442,7 @@ async def get_repo(
     Full detail for a single repo including parent project, contributors,
     releases, and dependency counts.
     """
-    repo = await _get_repo_or_404(db, canonical_id)
+    repo = await _get_repo_or_redirect(db, canonical_id)
     active_30d, active_90d = await _active_contributors_for_repo(db, repo.id)
 
     # Dependency counts by direction and target vertex type.
@@ -513,6 +529,7 @@ async def _dep_edges(db: AsyncSession, repo_id: int, *, direction: str) -> list[
         select(DependsOn)
         .where(fk_col == repo_id)
         .options(
+            #: this omits RedirectVertex because it must not have edges.
             selectinload(DependsOn.out_node).selectin_polymorphic([Repo, ExternalRepo]),
             selectinload(DependsOn.in_node).selectin_polymorphic([Repo, ExternalRepo]),
         )

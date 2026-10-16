@@ -40,11 +40,12 @@ from pg_atlas.config import settings
 from pg_atlas.crawlers.base import USER_AGENT, AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
 from pg_atlas.crawlers.github_dependents import github_dependents_scheduling_allowed
-from pg_atlas.db_models.base import ActivityStatus, ProjectType, SubmissionStatus
+from pg_atlas.db_models.base import ActivityStatus, ProjectType, RedirectPredicate, SubmissionStatus
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
-from pg_atlas.db_models.repo_vertex import RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import get_session_factory
+from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.gitlog.runtime import process_gitlog_repo_batch
 from pg_atlas.ingestion.persist import parse_sbom_and_persist_graph, strip_purl_version
 from pg_atlas.procrastinate.app import app
@@ -62,6 +63,7 @@ from pg_atlas.procrastinate.github import (
     PackageReference,
     detect_packages_from_repo,
     fetch_repo_list,
+    get_repo_fork_details,
     latest_version_from_repo,
     list_org_repos,
 )
@@ -70,6 +72,7 @@ from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
     associate_repo_with_project,
     clear_project_repo_associations,
+    demote_repo_to_redirect,
     find_repo_by_release_purl,
     upsert_depends_on,
     upsert_external_repo,
@@ -138,6 +141,18 @@ async def process_sbom_submission(
     async with factory() as session:
         submission = await session.get(SbomSubmission, submission_id)
         repository_claim = submission.repository_claim if submission is not None else None
+
+        if submission is not None:
+            canonical_id = f"pkg:github/{repository_claim}"
+            vertex = await get_vertex(session, canonical_id)
+            if isinstance(vertex, RedirectVertex):
+                submission.status = SubmissionStatus.processed
+                submission.processed_at = None
+                submission.error_detail = None
+                await session.commit()
+                logger.info(f"Skipping SBOM processing for redirect vertex {canonical_id}")
+
+                return
 
         await parse_sbom_and_persist_graph(
             session,
@@ -312,16 +327,21 @@ async def process_project(
         owner = git_owner_url.rstrip("/").rsplit("/", 1)[-1]
 
     repos_to_crawl: list[GitHubRepoMetadata] = []
+    repo_urls_to_demote: list[str] = []
     repo_canonical_ids_to_keep: set[str] | None = None
     if owner:
         if extended_universe or not git_repo_urls:
-            repos_to_crawl = list_org_repos(owner)
+            org_repos = list_org_repos(owner)
+            for repo in org_repos:
+                if repo.is_fork and repo.url not in git_repo_urls:
+                    repo_urls_to_demote.append(repo.url)
+                else:
+                    repos_to_crawl.append(repo)
         else:
             repo_canonical_ids_to_keep = set()
             for repo_url in git_repo_urls:
-                path_parts = [part for part in urlsplit(repo_url).path.split("/") if part]
-                repo_owner, repo_name = path_parts[-2:]
-                repo_canonical_ids_to_keep.add(f"pkg:github/{repo_owner}/{repo_name.removesuffix('.git')}")
+                repo_full_name = urlsplit(repo_url).path.strip("/")
+                repo_canonical_ids_to_keep.add(f"pkg:github/{repo_full_name}")
 
             repos_to_crawl = fetch_repo_list(git_repo_urls)
             repo_names = [repo.full_name for repo in repos_to_crawl]
@@ -369,9 +389,94 @@ async def process_project(
         await clear_project_repo_associations(project_id, repo_canonical_ids_to_keep)
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
-    repo_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
-    await crawl_github_repo.batch_defer_async(*repo_batch_data)
+    if repos_to_crawl:
+        crawl_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
+        await crawl_github_repo.batch_defer_async(*crawl_batch_data)
+
     logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {canonical_id}")
+
+    # ----- Defer demote_fork_repo_to_redirect for each selected fork -----
+    if repo_urls_to_demote:
+        demote_batch_data = (dict[str, Any](github_repo_url=repo_url) for repo_url in repo_urls_to_demote)
+        await demote_fork_repo_to_redirect.batch_defer_async(*demote_batch_data)
+
+    logger.info(f"process_project: deferred {len(repo_urls_to_demote)} demote_fork_repo_to_redirect tasks for {canonical_id}")
+
+
+# ---------------------------------------------------------------------------
+# Task: demote_fork_repo_to_redirect
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="opengrants")
+async def demote_fork_repo_to_redirect(github_repo_url: str) -> None:
+    """Demote a tracked GitHub fork to a redirect to its best available upstream vertex."""
+    repo_full_name = urlsplit(github_repo_url).path.strip("/")
+    if "/" not in repo_full_name:
+        raise ValueError(f"Invalid GitHub repository URL: {github_repo_url}")
+
+    repo_canonical_id = f"pkg:github/{repo_full_name}"
+    session = get_session_factory()()
+
+    try:
+        vertex = await get_vertex(session, repo_canonical_id)
+        if vertex is None or isinstance(vertex, RedirectVertex):
+            return
+
+        if not isinstance(vertex, Repo):
+            raise ValueError(f"Fork vertex {repo_canonical_id} is not a Repo")
+
+        parent_full_name, source_full_name = get_repo_fork_details(github_repo_url)
+        target_vertex_id: int | None = None
+        upstream_names = dict.fromkeys(name for name in (source_full_name, parent_full_name) if name)
+
+        for upstream_name in upstream_names:
+            upstream = await get_vertex(session, f"pkg:github/{upstream_name}")
+            if isinstance(upstream, Repo):
+                target_vertex_id = upstream.id
+                break
+
+        package_purls = list(
+            dict.fromkeys(
+                release.purl
+                for release in vertex.releases or []
+                if release.purl.startswith("pkg:") and not release.purl.lower().startswith("pkg:github/")
+            )
+        )
+        if target_vertex_id is None:
+            for package_purl in package_purls:
+                package_vertex = await get_vertex(session, package_purl)
+                if isinstance(package_vertex, ExternalRepo):
+                    target_vertex_id = package_vertex.id
+                    break
+
+        if target_vertex_id is None and package_purls:
+            target_vertex_id = await upsert_external_repo(
+                session,
+                canonical_id=package_purls[0],
+                display_name=vertex.display_name,
+                latest_version=vertex.latest_version,
+            )
+
+        if target_vertex_id is None:
+            raise ValueError(f"Cannot resolve redirect target for fork {repo_canonical_id}")
+
+        await demote_repo_to_redirect(
+            session,
+            repo_id=vertex.id,
+            target_vertex_id=target_vertex_id,
+            predicate=RedirectPredicate.fork_of,
+        )
+        await session.commit()
+        logger.info(f"Demoted fork {repo_canonical_id} to redirect (target_vertex_id={target_vertex_id})")
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()
 
 
 # ---------------------------------------------------------------------------

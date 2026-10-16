@@ -13,6 +13,33 @@ from typing import Any
 from pg_atlas.procrastinate import github as gh
 
 
+def _github_repo(
+    *,
+    full_name: str,
+    is_fork: bool = False,
+    parent_full_name: str | None = None,
+    source_full_name: str | None = None,
+) -> SimpleNamespace:
+    """Build a PyGithub-shaped repository object for repository metadata tests."""
+    parent = SimpleNamespace(full_name=parent_full_name) if parent_full_name is not None else None
+    source = SimpleNamespace(full_name=source_full_name) if source_full_name is not None else None
+
+    return SimpleNamespace(
+        name=full_name.rsplit("/", 1)[-1],
+        full_name=full_name,
+        description="",
+        default_branch="main",
+        stargazers_count=1,
+        forks_count=2,
+        pushed_at=None,
+        language="Python",
+        topics=[],
+        fork=is_fork,
+        parent=parent,
+        source=source,
+    )
+
+
 def _graphql_response(
     *,
     nodes: list[gh._ManifestGraphNode],
@@ -26,6 +53,103 @@ def _graphql_response(
     repository = gh._RepositoryGraphPayload(dependencyGraphManifests=manifests)
 
     return gh._GraphQLResponse(data=gh._GraphQLData(repository=repository), errors=None)
+
+
+def test_list_org_repos_records_fork_flag(monkeypatch: Any) -> None:
+    """Organization listings record fork state without fetching parent details."""
+    repository = _github_repo(full_name="test-org/forked", is_fork=True)
+
+    def _get_repos(**_options: str) -> list[SimpleNamespace]:
+        """Return the one mocked organization repository."""
+        return [repository]
+
+    def _get_user(_owner: str) -> SimpleNamespace:
+        """Return the mocked GitHub user object."""
+        return SimpleNamespace(get_repos=_get_repos)
+
+    client = SimpleNamespace(get_user=_get_user)
+    monkeypatch.setattr(gh, "_gh_org_repos_cache", {})
+    monkeypatch.setattr(gh, "get_github_client", lambda: client)
+
+    metadata = gh.list_org_repos("test-org")
+
+    assert metadata[0].is_fork is True
+    assert metadata[0].parent_full_name is None
+    assert metadata[0].source_full_name is None
+
+
+def test_fetch_repo_list_records_fork_parent_and_source(monkeypatch: Any) -> None:
+    """Explicit repository fetches include the available fork parent and source."""
+    repository = _github_repo(
+        full_name="test-org/forked",
+        is_fork=True,
+        parent_full_name="upstream-owner/parent",
+        source_full_name="root-owner/source",
+    )
+
+    def _get_repo(_full_name: str) -> SimpleNamespace:
+        """Return the mocked fork repository."""
+        return repository
+
+    client = SimpleNamespace(get_repo=_get_repo)
+    monkeypatch.setattr(gh, "get_github_client", lambda: client)
+
+    metadata = gh.fetch_repo_list(["https://github.com/test-org/forked"])
+
+    assert metadata[0].is_fork is True
+    assert metadata[0].parent_full_name == "upstream-owner/parent"
+    assert metadata[0].source_full_name == "root-owner/source"
+
+
+def test_get_repo_fork_details_returns_parent_and_source(monkeypatch: Any) -> None:
+    """Fork detail lookup returns both the immediate parent and root source."""
+    repository = _github_repo(
+        full_name="test-org/forked",
+        is_fork=True,
+        parent_full_name="upstream-owner/parent",
+        source_full_name="root-owner/source",
+    )
+
+    def _get_repo(_full_name: str) -> SimpleNamespace:
+        """Return the mocked fork repository."""
+        return repository
+
+    client = SimpleNamespace(get_repo=_get_repo)
+    monkeypatch.setattr(gh, "get_github_client", lambda: client)
+
+    details = gh.get_repo_fork_details("test-org/forked")
+
+    assert details == ("upstream-owner/parent", "root-owner/source")
+
+
+def test_get_repo_fork_details_returns_empty_details_for_non_fork(monkeypatch: Any) -> None:
+    """Non-fork repository lookup returns no parent or source names."""
+    repository = _github_repo(full_name="test-org/not-forked")
+
+    def _get_repo(_full_name: str) -> SimpleNamespace:
+        """Return the mocked non-fork repository."""
+        return repository
+
+    client = SimpleNamespace(get_repo=_get_repo)
+    monkeypatch.setattr(gh, "get_github_client", lambda: client)
+
+    details = gh.get_repo_fork_details("test-org/not-forked")
+
+    assert details == (None, None)
+
+
+def test_get_repo_fork_details_handles_github_404(monkeypatch: Any) -> None:
+    """Unavailable repositories return empty details after logging the API error."""
+
+    def _raise_not_found(_full_name: str) -> SimpleNamespace:
+        raise gh.GithubException(404, {"message": "Not Found"})
+
+    client = SimpleNamespace(get_repo=_raise_not_found)
+    monkeypatch.setattr(gh, "get_github_client", lambda: client)
+
+    details = gh.get_repo_fork_details("test-org/missing")
+
+    assert details == (None, None)
 
 
 def test_manifest_paths_from_graphql_filters_non_parseable_and_ignored_paths(monkeypatch: Any) -> None:

@@ -67,13 +67,15 @@ async def test_list_contributors_search(
 ) -> None:
     """GET /contributors?search narrows list by contributor name."""
 
-    client, _ = seeded_client
-    resp = await client.get("/contributors", params={"search": "Test Contributor"})
+    client, seed = seeded_client
+    search = "Test Contributor"
+    resp = await client.get("/contributors", params={"search": search})
     assert resp.status_code == 200
 
     body = resp.json()
     assert body["total"] >= 1
-    assert all("Test Contributor" in item["name"] for item in body["items"])
+    assert all(search.casefold() in item["name"].casefold() for item in body["items"])
+    assert any(item["id"] == seed["contributor"].id for item in body["items"])
 
 
 async def test_get_contributor_includes_repo_activity(

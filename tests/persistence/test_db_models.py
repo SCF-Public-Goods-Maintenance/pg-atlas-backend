@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models import (
@@ -23,17 +23,21 @@ from pg_atlas.db_models import (
     ExternalRepo,
     GitLogArtifact,
     Project,
+    RedirectVertex,
     Repo,
+    RepoVertex,
     SbomSubmission,
 )
 from pg_atlas.db_models.base import (
     ActivityStatus,
     EdgeConfidence,
     ProjectType,
+    RedirectPredicate,
     RepoVertexType,
     SubmissionStatus,
     Visibility,
 )
+from pg_atlas.db_models.vertex_ops import get_all_vertices, get_vertex
 from tests.db_cleanup import DB_MODELS_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
 
@@ -110,6 +114,89 @@ async def test_external_repo_roundtrip(db_session: AsyncSession) -> None:
     result = await db_session.scalar(select(ExternalRepo).where(ExternalRepo.canonical_id == "npm:express"))
     assert result is not None
     assert result.vertex_type == RepoVertexType.external_repo
+
+
+async def test_redirect_vertex_roundtrip_and_polymorphic_loading(db_session: AsyncSession) -> None:
+    """Persist a redirect, then load its subtype and target through RepoVertex queries."""
+    target = Repo(
+        canonical_id="github:test-org/redirect-target",
+        display_name="redirect-target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id="github:test-org/redirect-fork",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+
+    result = await get_vertex(db_session, redirect.canonical_id)
+    all_vertices = await get_all_vertices(db_session)
+
+    assert isinstance(result, RedirectVertex)
+    assert result.vertex_type is RepoVertexType.redirect
+    assert result.predicate is RedirectPredicate.fork_of
+    assert result.target_vertex.canonical_id == target.canonical_id
+    assert any(isinstance(vertex, RedirectVertex) and vertex.id == redirect.id for vertex in all_vertices)
+
+
+async def test_redirect_vertex_delete_cascades_to_child_table(db_session: AsyncSession) -> None:
+    """Deleting a redirect base vertex removes its joined child row."""
+    target = ExternalRepo(canonical_id="pkg:npm/redirect-target", display_name="target", latest_version="1.0.0")
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id="github:test-org/redirect-base-cascade",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.package_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+    redirect_id = redirect.id
+
+    await db_session.execute(text("DELETE FROM repo_vertices WHERE id = :id"), {"id": redirect_id})
+
+    child_count = await db_session.scalar(
+        select(func.count()).select_from(RedirectVertex.__table__).where(RedirectVertex.__table__.c.id == redirect_id)
+    )
+    base_vertex = await db_session.scalar(select(RepoVertex).where(RepoVertex.id == redirect_id))
+    assert child_count == 0
+    assert base_vertex is None
+
+
+async def test_redirect_vertex_target_delete_cascades_to_child_table(db_session: AsyncSession) -> None:
+    """Deleting a redirect target cascades through the target foreign key."""
+    target = Repo(
+        canonical_id="github:test-org/redirect-target-cascade",
+        display_name="redirect-target-cascade",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id="github:test-org/redirect-target-cascade-alias",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+    redirect_id = redirect.id
+
+    await db_session.delete(target)
+    await db_session.flush()
+
+    child_count = await db_session.scalar(
+        select(func.count()).select_from(RedirectVertex.__table__).where(RedirectVertex.__table__.c.id == redirect_id)
+    )
+    assert child_count == 0
 
 
 # ---------------------------------------------------------------------------

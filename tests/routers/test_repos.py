@@ -7,9 +7,18 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
-from httpx import AsyncClient
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from pg_atlas.db_models.base import RedirectPredicate, Visibility
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo
+from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.main import app
 
 # ---------------------------------------------------------------------------
 # No-DB tests
@@ -159,6 +168,67 @@ async def test_get_repo_not_found_returns_404(
     client, _ = seeded_client
     resp = await client.get("/repos/pkg:github/nonexistent/repo")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "subresource",
+    ["", "/depends-on", "/has-dependents", "/contributors", "/github-dependents"],
+    ids=["detail", "depends-on", "has-dependents", "contributors", "github-dependents"],
+)
+@pytest.mark.parametrize("target_is_repo", [True, False], ids=["repo-target", "external-target"])
+async def test_get_redirect_repo_returns_307_to_target(
+    db_session: AsyncSession,
+    subresource: str,
+    target_is_repo: bool,
+) -> None:
+    """Redirect requests go to Repo targets and return 404 for ExternalRepo targets."""
+    token = uuid.uuid4().hex
+    if target_is_repo:
+        target: Repo | ExternalRepo = Repo(
+            canonical_id=f"pkg:github/test-org/target-{token}",
+            display_name="redirect target",
+            visibility=Visibility.public,
+            latest_version="1.0.0",
+        )
+    else:
+        target = ExternalRepo(
+            canonical_id=f"pkg:npm/redirect-target-{token}",
+            display_name="redirect target",
+            latest_version="1.0.0",
+        )
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/redirect-{token}",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+
+    async def _test_session() -> AsyncGenerator[AsyncSession, None]:
+        """Yield the transaction-scoped test session to the API dependency."""
+        yield db_session
+
+    app.dependency_overrides[maybe_db_session] = _test_session
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(f"/repos/{redirect.canonical_id}{subresource}")
+
+        assert response.status_code == (307 if target_is_repo else 404)
+        if target_is_repo:
+            assert response.headers["location"] == f"/repos/{target.canonical_id}{subresource}"
+        else:
+            assert "location" not in response.headers
+
+    finally:
+        app.dependency_overrides.pop(maybe_db_session, None)
+        await db_session.rollback()
 
 
 async def test_get_repo_depends_on(
