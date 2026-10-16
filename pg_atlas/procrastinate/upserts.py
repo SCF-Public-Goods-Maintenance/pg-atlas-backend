@@ -166,7 +166,10 @@ async def upsert_repo(
     try:
         vertex = await get_vertex(session, canonical_id)
 
-        if vertex is not None and isinstance(vertex, ExternalRepo):
+        if isinstance(vertex, RedirectVertex):
+            raise ValueError(f"RedirectVertex {canonical_id} -> {vertex.target_vertex_id} cannot be reinstated automatically.")
+
+        if isinstance(vertex, ExternalRepo):
             merged_releases = merge_releases(vertex.releases, releases)
 
             repo_id = await _promote_external_to_repo(
@@ -186,7 +189,7 @@ async def upsert_repo(
 
             return repo_id
 
-        if vertex is not None and isinstance(vertex, Repo):
+        if isinstance(vertex, Repo):
             # Already a Repo — update mutable columns.
             vertex.display_name = display_name
             if latest_version:

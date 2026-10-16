@@ -75,7 +75,7 @@ async def upsert_external_repo(
 
             return vertex
 
-        raise ValueError(f"Cannot overwrite Repo {vertex.canonical_id} (id={vertex.id}) with ExternalRepo")
+        raise ValueError(f"Cannot overwrite {type(vertex).__name__} {vertex.canonical_id} with ExternalRepo")
 
     ext = ExternalRepo(
         canonical_id=canonical_id,

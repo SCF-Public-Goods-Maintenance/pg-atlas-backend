@@ -529,6 +529,7 @@ async def _dep_edges(db: AsyncSession, repo_id: int, *, direction: str) -> list[
         select(DependsOn)
         .where(fk_col == repo_id)
         .options(
+            #: this omits RedirectVertex because it must not have edges.
             selectinload(DependsOn.out_node).selectin_polymorphic([Repo, ExternalRepo]),
             selectinload(DependsOn.in_node).selectin_polymorphic([Repo, ExternalRepo]),
         )
