@@ -273,7 +273,7 @@ async def test_gitlog_artifact_roundtrip(db_session: AsyncSession) -> None:
     await db_session.flush()
 
     row = GitLogArtifact(
-        repo_id=repo.id,
+        repo_vertex_id=repo.id,
         since_months=24,
         artifact_path="git-logs/test-org/gitlog-artifact-repo.gitlog",
         gitlog_content_hash="b" * 64,
@@ -284,7 +284,7 @@ async def test_gitlog_artifact_roundtrip(db_session: AsyncSession) -> None:
 
     result = await db_session.scalar(select(GitLogArtifact).where(GitLogArtifact.id == row.id))
     assert result is not None
-    assert result.repo_id == repo.id
+    assert result.repo_vertex_id == repo.id
     assert result.since_months == 24
     assert result.status is SubmissionStatus.processed
     assert result.gitlog_content_hash == "b" * 64

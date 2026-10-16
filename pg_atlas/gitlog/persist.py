@@ -169,7 +169,7 @@ async def record_gitlog_attempt(
 
     processed_at = dt.datetime.now(dt.UTC)
     row = GitLogArtifact(
-        repo_id=repo_id,
+        repo_vertex_id=repo_id,
         seed_run_ordinal=attempt.seed_run_ordinal,
         since_months=attempt.since_months,
         artifact_path=attempt.artifact_path,
@@ -184,7 +184,7 @@ async def record_gitlog_attempt(
     if attempt.null_previous_artifact_paths and attempt.artifact_path:
         await session.execute(
             update(GitLogArtifact)
-            .where(GitLogArtifact.repo_id == repo_id)
+            .where(GitLogArtifact.repo_vertex_id == repo_id)
             .where(GitLogArtifact.id != row.id)
             .where(GitLogArtifact.artifact_path.isnot(None))
             .values(artifact_path=None)

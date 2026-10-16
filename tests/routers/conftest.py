@@ -256,7 +256,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
         seed_session.add_all([contrib_edge, anchored_contrib_edge])
 
         gitlog_artifact = GitLogArtifact(
-            repo_id=repo_a1.id,
+            repo_vertex_id=repo_a1.id,
             since_months=24,
             artifact_path=None,
             gitlog_content_hash=None,
