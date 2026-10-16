@@ -13,20 +13,18 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from pg_atlas.db_models.base import HexBinary, PgBase, SubmissionStatus, enum_values, intpk
-
-if TYPE_CHECKING:
-    from pg_atlas.db_models.repo_vertex import Repo
 
 
 class GitLogArtifact(PgBase):
     """
     Audit row for one git log processing attempt for a repo.
+
+    The foreign key constraint is relaxed to RepoVertex to support repo downgrades.
 
     ``status=processed`` indicates contributor parsing and persistence succeeded.
     ``status=failed`` indicates a terminal or transient processing failure.
@@ -35,7 +33,7 @@ class GitLogArtifact(PgBase):
     __tablename__ = "gitlog_artifacts"
 
     id: Mapped[intpk] = mapped_column(init=False)
-    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"))
+    repo_vertex_id: Mapped[int] = mapped_column(ForeignKey("repo_vertices.id"))
     since_months: Mapped[int]
     seed_run_ordinal: Mapped[int] = mapped_column(default=0)
 
@@ -59,15 +57,9 @@ class GitLogArtifact(PgBase):
         init=False,
     )
 
-    repo: Mapped[Repo] = relationship(
-        lazy="selectin",
-        init=False,
-        repr=False,
-    )
 
-
-idx_gitlog_artifacts_repo_id = Index("ix_gitlog_artifacts_repo_id", GitLogArtifact.repo_id)
+idx_gitlog_artifacts_repo_vertex_id = Index("ix_gitlog_artifacts_repo_vertex_id", GitLogArtifact.repo_vertex_id)
 idx_gitlog_artifacts_repo_seed_ordinal = Index(
-    "ix_gitlog_artifacts_repo_seed_ordinal", GitLogArtifact.repo_id, GitLogArtifact.seed_run_ordinal
+    "ix_gitlog_artifacts_repo_seed_ordinal", GitLogArtifact.repo_vertex_id, GitLogArtifact.seed_run_ordinal
 )
 idx_gitlog_artifacts_submitted_at = Index("ix_gitlog_artifacts_submitted_at", GitLogArtifact.submitted_at)
