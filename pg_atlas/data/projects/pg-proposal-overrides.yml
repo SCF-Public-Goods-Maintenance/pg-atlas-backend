@@ -142,6 +142,7 @@ daoip-5:scf:project:refractorspace:
   git_owner_url: "https://github.com/stellar-expert"
   git_repo_urls:
     - "https://github.com/stellar-expert/refractor"
+    - "https://github.com/stellar-expert/stellar-tx-signers-inspector"
   category: "Governance Tools"
   metadata:
     description: "Pending transactions storage and multisig aggregator for Stellar Network."
