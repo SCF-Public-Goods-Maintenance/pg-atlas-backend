@@ -44,7 +44,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import httpx
+import httpx2
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -430,7 +430,7 @@ def _dependents_url(
     return url
 
 
-def _retry_after_seconds(resp: httpx.Response) -> float | None:
+def _retry_after_seconds(resp: httpx2.Response) -> float | None:
     """
     Bounded wait suggested by 403 rate-limit headers, or ``None``.
 
@@ -482,7 +482,7 @@ class GitHubDependentsCrawler(RegistryCrawler):
 
     def __init__(
         self,
-        client: httpx.AsyncClient,
+        client: httpx2.AsyncClient,
         session_factory: async_sessionmaker[AsyncSession],
         rate_limit: float = 1.0,
         max_retries: int = 3,
@@ -521,7 +521,7 @@ class GitHubDependentsCrawler(RegistryCrawler):
         for attempt in range(self.MAX_RATELIMIT_RETRIES + 1):
             try:
                 resp = await self._request_with_retry(url, on_attempt=builder.count_request)
-            except httpx.HTTPStatusError as exc:
+            except httpx2.HTTPStatusError as exc:
                 wait = _retry_after_seconds(exc.response) if exc.response.status_code == 403 else None
                 if wait is None or attempt >= self.MAX_RATELIMIT_RETRIES:
                     raise

@@ -1,7 +1,7 @@
 """
 Tests for the PyPI registry crawler.
 
-Unit tests mock HTTP responses by stubbing ``httpx.AsyncClient.get`` for both
+Unit tests mock HTTP responses by stubbing ``httpx2.AsyncClient.get`` for both
 the PyPI JSON API and the PyPIStats endpoint.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 from pytest import MonkeyPatch
 
 from pg_atlas.crawlers.pypi import PyPICrawler
@@ -23,13 +23,13 @@ def _response(
     data: dict[str, Any],
     status_code: int = 200,
     url: str = "https://pypi.org/pypi",
-) -> httpx.Response:
+) -> httpx2.Response:
     """Create a mock PyPI JSON API response."""
 
-    return httpx.Response(
+    return httpx2.Response(
         status_code=status_code,
         json=data,
-        request=httpx.Request("GET", url),
+        request=httpx2.Request("GET", url),
     )
 
 
@@ -96,9 +96,9 @@ async def test_fetch_package_handles_stats_failure(
     mock_http_client.get = AsyncMock(
         side_effect=[
             _response(pypi_package_data, url="https://pypi.org/pypi/requests/json"),
-            httpx.TimeoutException("boom"),
-            httpx.TimeoutException("boom"),
-            httpx.TimeoutException("boom"),
+            httpx2.TimeoutException("boom"),
+            httpx2.TimeoutException("boom"),
+            httpx2.TimeoutException("boom"),
         ]
     )
 

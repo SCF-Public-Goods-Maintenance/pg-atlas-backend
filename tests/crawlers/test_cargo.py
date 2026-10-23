@@ -12,18 +12,18 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 
 from pg_atlas.crawlers.cargo import CargoCrawler
 
 
-def _response(data: dict[str, Any], status_code: int = 200) -> httpx.Response:
+def _response(data: dict[str, Any], status_code: int = 200) -> httpx2.Response:
     """Create a mock crates.io API response."""
 
-    return httpx.Response(
+    return httpx2.Response(
         status_code=status_code,
         json=data,
-        request=httpx.Request("GET", "https://crates.io/api/v1"),
+        request=httpx2.Request("GET", "https://crates.io/api/v1"),
     )
 
 

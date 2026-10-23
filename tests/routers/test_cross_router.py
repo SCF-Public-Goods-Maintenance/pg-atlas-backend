@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 
 async def test_project_repos_match_repo_list_filter(

@@ -17,7 +17,6 @@ dependencies = [
     "pyjwt[crypto]>=2.15.1",
     "cryptography>=50.0.2",
     "aiobotocore>=3.10.0",
-    "httpx>=0.28.1",
     "cachetools>=7.2.4",
     "procrastinate>=3.10.0",
     "psycopg[binary,pool]>=3.3.6",
@@ -30,6 +29,7 @@ dependencies = [
     "pypistats>=1.14.0",
     "packaging>=26.3",
     "freezegun>=1.5.5",
+    "httpx2>=2.16.0",
 ]
 
 [dependency-groups]

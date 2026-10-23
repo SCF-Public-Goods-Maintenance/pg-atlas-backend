@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pg_atlas.crawlers.base import RegistryCrawler
@@ -52,7 +52,7 @@ def normalize_registry_system(system: str) -> str | None:
 
 def build_registry_crawler(
     system: str,
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     rate_limit: float,
     max_retries: int,

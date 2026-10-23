@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 # ---------------------------------------------------------------------------
 # No-DB tests
