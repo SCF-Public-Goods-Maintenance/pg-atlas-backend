@@ -31,6 +31,7 @@ commit is created.
 
 As mandatory preparation for any task, use your GitHub tools to list all open issues for the current
 repo. Read the open issues in full with all their comments when they are relevant for the current task.
+Do not list issues again after the first turn, unless the user asks you to.
 
 Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if
 the feature branch is associated with a PR: read the full PR including its comments to understand
