@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.base import RedirectPredicate, Visibility

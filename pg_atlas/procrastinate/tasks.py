@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 import yaml
 from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import select
@@ -220,7 +220,7 @@ async def sync_opengrants(
     logger.info("sync_opengrants: starting")
     project_overrides = _load_project_overrides()
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx2.AsyncClient(timeout=60.0) as client:
         projects: list[ScfProject] = await fetch_scf_projects(client)
 
     # ----- Continue only with selected projects -----
@@ -710,8 +710,8 @@ async def crawl_package_registry(
         return
 
     session_factory = get_session_factory()
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+    async with httpx2.AsyncClient(
+        timeout=httpx2.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:
@@ -764,8 +764,8 @@ async def crawl_github_dependents(
     package_name = f"{owner}/{repo}"
 
     session_factory = get_session_factory()
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+    async with httpx2.AsyncClient(
+        timeout=httpx2.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:

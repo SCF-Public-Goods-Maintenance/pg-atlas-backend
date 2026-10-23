@@ -7,7 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 from pg_atlas.main import app
 

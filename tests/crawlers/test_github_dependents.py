@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 
 from pg_atlas.config import settings
@@ -713,7 +713,7 @@ async def test_403_without_rate_limit_evidence_fails() -> None:
     client.get = AsyncMock(return_value=_html_response("forbidden", status_code=403))
     crawler = _make_crawler(client)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler.collect_snapshot("owner/repo")
 
 
@@ -907,7 +907,7 @@ async def test_403_reset_beyond_budget_fails_fast() -> None:
     client.get = AsyncMock(return_value=_html_response("rate limited", status_code=403, headers={"Retry-After": "3600"}))
     crawler = _make_crawler(client)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler.collect_snapshot("owner/repo")
 
     # One attempt only: no futile capped sleeps.

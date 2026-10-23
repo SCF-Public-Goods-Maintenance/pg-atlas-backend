@@ -66,7 +66,7 @@ def compute_criticality(G_active: nx.DiGraph[str]) -> dict[str, int]:
         return {}
 
     # Induced subgraph on dep-layer nodes — preserves all edges between them.
-    G_dep = G_active.subgraph(dep_nodes)
+    G_dep: nx.DiGraph[str] = G_active.subgraph(dep_nodes)
     # Reverse: edges now flow FROM depended-upon package TOWARD its dependents.
     G_rev = G_dep.reverse(copy=True)
 

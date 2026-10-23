@@ -17,7 +17,7 @@ import argparse
 import asyncio
 import logging
 
-import httpx
+import httpx2
 
 from pg_atlas.config import settings
 from pg_atlas.crawlers.base import USER_AGENT
@@ -66,8 +66,8 @@ async def main() -> None:
         logger.error(f"Unsupported registry argument: {args.registry}")
         raise SystemExit(2)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
+    async with httpx2.AsyncClient(
+        timeout=httpx2.Timeout(settings.CRAWLER_TIMEOUT, connect=10.0),
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:

@@ -15,7 +15,7 @@ import math
 import re
 from typing import Any
 
-import httpx
+import httpx2
 import msgspec
 import pypistats  # pyright: ignore[reportMissingTypeStubs]
 from packaging.requirements import InvalidRequirement, Requirement
@@ -135,7 +135,7 @@ class PyPICrawler(RegistryCrawler):
         stats_url = f"{pypistats.BASE_URL}packages/{package_name}/recent?period=month&mirrors=true"
         try:
             stats_resp = await self._request_with_retry(stats_url)
-        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
+        except (httpx2.HTTPStatusError, httpx2.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch PyPIStats downloads for {package_name}: {exc}")
 
             return None, {}

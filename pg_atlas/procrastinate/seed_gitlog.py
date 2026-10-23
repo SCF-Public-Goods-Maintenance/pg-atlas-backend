@@ -134,7 +134,7 @@ async def _load_last_successful_seed_runs(session: AsyncSession, repo_ids: Seque
     )
     rows = list((await session.execute(stmt)).all())
 
-    return {int(repo_id): int(max_ordinal) for repo_id, max_ordinal in rows if max_ordinal is not None}
+    return {int(repo_id): int(max_ordinal) for repo_id, max_ordinal in rows}
 
 
 def _due_dormant_repo_ids(

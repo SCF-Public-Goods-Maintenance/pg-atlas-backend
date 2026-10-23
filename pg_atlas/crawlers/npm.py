@@ -15,7 +15,7 @@ import logging
 from typing import Any
 from urllib.parse import quote
 
-import httpx
+import httpx2
 
 from pg_atlas.crawlers.base import (
     CrawledDependency,
@@ -56,7 +56,7 @@ class NpmCrawler(RegistryCrawler):
         try:
             downloads_resp = await self._request_with_retry(f"{self.DOWNLOADS_BASE_URL}/{escaped_name}")
             downloads = downloads_resp.json()
-        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
+        except (httpx2.HTTPStatusError, httpx2.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch npm downloads for {package_name}: {exc}")
 
         return self._parse_package(metadata, downloads)
