@@ -15,10 +15,11 @@ from __future__ import annotations
 # ``AsyncSession | None`` path (e.g. ingestion's POST) can import from one place.
 __all__ = ["DbSession", "PaginationParams", "maybe_db_session", "parse_sort_params", "require_session"]
 
+from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Query, status
-from sqlalchemy import UnaryExpression, asc, case, desc, nulls_last
+from sqlalchemy import OrderByList, UnaryExpression, asc, case, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import ColumnProperty, InstrumentedAttribute
 
@@ -69,7 +70,7 @@ def parse_sort_params(
     sort: str | None,
     allowed_fields: dict[str, InstrumentedAttribute[Any]],
     tiebreaker: InstrumentedAttribute[Any],
-) -> list[UnaryExpression[Any]]:
+) -> list[UnaryExpression[Any] | OrderByList]:
     """
     Parse a comma-separated ``field:direction`` sort string into ORDER BY clauses.
 
@@ -87,7 +88,7 @@ def parse_sort_params(
 
     Returns
     -------
-    list[UnaryExpression]
+    list[UnaryExpression | OrderByList]
         Ready-to-use ORDER BY clauses for ``Select.order_by(*clauses)``.
 
     Special handling
@@ -101,7 +102,7 @@ def parse_sort_params(
     if not sort:
         return [asc(tiebreaker)]
 
-    clauses: list[UnaryExpression[Any]] = []
+    clauses: list[UnaryExpression[Any] | OrderByList] = []
 
     for part in sort.split(","):
         part = part.strip()
@@ -125,7 +126,7 @@ def parse_sort_params(
             )
 
         col = allowed_fields[field_name]
-        dir_fn = asc if direction == "asc" else desc
+        dir_fn: Callable[[Any], OrderByList | UnaryExpression[Any]] = asc if direction == "asc" else desc
 
         # activity_status: use CASE-based ordering instead of raw enum text.
         # Searched CASE (explicit comparisons) is more robust for native Enums in PG.
@@ -142,6 +143,7 @@ def parse_sort_params(
 
         # Nullable metric columns: NULLS LAST to prevent nulls burying real data.
         col_prop = getattr(col, "property", None)
+
         if isinstance(col_prop, ColumnProperty) and col_prop.columns:
             col_obj = col_prop.columns[0]
             col_type = getattr(col_obj.type, "python_type", None)
@@ -151,7 +153,7 @@ def parse_sort_params(
             is_nullable = True
 
         if is_nullable and col_type in (int, float):
-            clauses.append(nulls_last(dir_fn(col)))
+            clauses.append(dir_fn(col).nulls_last())
         else:
             clauses.append(dir_fn(col))
 
