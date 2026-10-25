@@ -54,4 +54,4 @@ daoip-5:scf:project:edunode:
   category: "E-learning"
   metadata:
     description: "An e-learning platform that creates interactive Web3 educational experiences for developers and innovators."
-    open_source: false
+    open_source: true
