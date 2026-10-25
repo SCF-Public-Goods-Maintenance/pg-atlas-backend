@@ -48,3 +48,10 @@ daoip-5:scf:project:edunode:
   display_name: "EduNode"
   activity_status: "live"
   git_owner_url: "https://github.com/EduNodeOrg"
+  git_repo_urls:
+    - "https://github.com/EduNodeOrg/server"
+    - "https://github.com/EduNodeOrg/website"
+  category: "E-learning"
+  metadata:
+    description: "An e-learning platform that creates interactive Web3 educational experiences for developers and innovators."
+    open_source: false
