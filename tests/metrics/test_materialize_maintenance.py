@@ -169,7 +169,7 @@ async def _seed_maintenance_fixture(
     )
     session.add(
         GitLogArtifact(
-            repo_id=repo_full.id,
+            repo_vertex_id=repo_full.id,
             since_months=24,
             artifact_path=artifact_path,
             status=SubmissionStatus.processed,
@@ -408,7 +408,7 @@ async def _seed_host_candidate(
     full_path.write_bytes(_gitlog_content([("Host Dev", "dev@example.org", now - dt.timedelta(days=3))]))
     session.add(
         GitLogArtifact(
-            repo_id=repo_host.id,
+            repo_vertex_id=repo_host.id,
             since_months=24,
             artifact_path=artifact_path,
             status=SubmissionStatus.processed,
@@ -852,13 +852,13 @@ class TestArtifactTransportAndDamage:
     ) -> None:
         """An IPFS gateway timeout marks one repo incomplete; the pass survives."""
 
-        import httpx
+        import httpx2
 
         import pg_atlas.metrics.materialize_maintenance as mm
         from pg_atlas.metrics.materialize_maintenance import _ArtifactRef, _commit_activity_for_repo
 
         async def _timeout(path: str) -> bytes:
-            raise httpx.ReadTimeout("gateway timeout")
+            raise httpx2.ReadTimeout("gateway timeout")
 
         monkeypatch.setattr(mm, "read_artifact", _timeout)
         now = dt.datetime.now(dt.UTC)

@@ -53,8 +53,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 from sqlalchemy import literal, select, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.config import settings
@@ -607,16 +608,16 @@ async def _load_latest_artifacts(session: AsyncSession, repo_ids: list[int]) -> 
 
     stmt = (
         select(
-            GitLogArtifact.repo_id,
+            GitLogArtifact.repo_vertex_id,
             GitLogArtifact.artifact_path,
             GitLogArtifact.since_months,
             GitLogArtifact.submitted_at,
         )
-        .where(GitLogArtifact.repo_id.in_(repo_ids))
+        .where(GitLogArtifact.repo_vertex_id.in_(repo_ids))
         .where(GitLogArtifact.status == SubmissionStatus.processed)
         .where(GitLogArtifact.artifact_path.is_not(None))
-        .order_by(GitLogArtifact.repo_id, GitLogArtifact.submitted_at.desc(), GitLogArtifact.id.desc())
-        .distinct(GitLogArtifact.repo_id)
+        .order_by(GitLogArtifact.repo_vertex_id, GitLogArtifact.submitted_at.desc(), GitLogArtifact.id.desc())
+        .ext(distinct_on(GitLogArtifact.repo_vertex_id))
     )
     rows = (await session.execute(stmt)).all()
 
@@ -658,7 +659,7 @@ async def _commit_activity_for_repo(
     try:
         raw = await read_artifact(artifact.artifact_path)
         parsed = parse_log_bytes(raw)
-    except (OSError, RuntimeError, ValueError, httpx.HTTPError) as exc:
+    except (OSError, RuntimeError, ValueError, httpx2.HTTPError) as exc:
         logger.warning(f"Git-log artifact unreadable for {canonical_id}: {type(exc).__name__}: {exc}")
 
         return (
