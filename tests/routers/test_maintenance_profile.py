@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
