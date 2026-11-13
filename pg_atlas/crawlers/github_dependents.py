@@ -64,6 +64,7 @@ from pg_atlas.db_models.github_dependents_observation import (
     GithubDependentsCrawlRun,
 )
 from pg_atlas.db_models.repo_vertex import Repo
+from pg_atlas.repo_identity import parse_owner_repo_entries
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +108,9 @@ def github_dependents_scheduling_allowed(owner: str, repo: str) -> bool:
     if raw == "*":
         return True
 
-    allowed: set[str] = set()
-    for item in raw.split(","):
-        entry = item.strip().lower()
-        if not entry:
-            continue
-
-        parts = entry.split("/")
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            logger.warning(f"github-dependents allowlist entry rejected: {item.strip()!r}")
-            continue
-
-        allowed.add(entry)
+    allowed, rejected = parse_owner_repo_entries(raw)
+    for item in rejected:
+        logger.warning(f"github-dependents allowlist entry rejected: {item!r}")
 
     return f"{owner}/{repo}".lower() in allowed
 

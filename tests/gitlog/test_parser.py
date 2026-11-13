@@ -474,3 +474,61 @@ async def test_parse_repo_bot_commit_count(mock_git_subprocess: Callable[..., As
     assert result.bot_commit_count == 2
     assert result.bot_contributor_count == 1
     assert result.total_commits == 3
+
+
+def _days_ago(days: float) -> dt.datetime:
+    return dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+
+
+class TestParseLogBytes:
+    def test_future_timestamp_is_skipped_but_not_malformed(self) -> None:
+        """A future-dated commit is a data oddity: skipped, not structural damage."""
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        future = (dt.datetime.now(dt.UTC) + dt.timedelta(days=30)).isoformat()
+        past = (dt.datetime.now(dt.UTC) - dt.timedelta(days=10)).isoformat()
+        raw = f"Alice\x00alice@example.org\x00{future}\x00aaa\nBob\x00bob@example.org\x00{past}\x00bbb\n".encode()
+
+        parsed = parse_log_bytes(raw)
+
+        assert [c.author_name for c in parsed.commits] == ["Bob"]
+        assert parsed.malformed_lines == 0
+
+    def test_valid_lines_parse_with_zero_damage(self) -> None:
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        raw = f"Alice\x00alice@example.org\x00{_days_ago(10).isoformat()}\x00{'a' * 40}\n".encode()
+        parsed = parse_log_bytes(raw)
+        assert len(parsed.commits) == 1
+        assert parsed.malformed_lines == 0
+
+    def test_empty_content_is_a_valid_empty_log(self) -> None:
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        parsed = parse_log_bytes(b"")
+        assert parsed.commits == []
+        assert parsed.malformed_lines == 0
+
+    def test_wholly_malformed_content_is_counted(self) -> None:
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        parsed = parse_log_bytes(b"corrupted nonempty artifact\n")
+        assert parsed.commits == []
+        assert parsed.malformed_lines == 1
+
+    def test_partially_malformed_content_reports_both(self) -> None:
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        good = f"Alice\x00alice@example.org\x00{_days_ago(10).isoformat()}\x00{'a' * 40}"
+        bad_timestamp = f"Bob\x00bob@example.org\x00not-a-time\x00{'b' * 40}"
+        parsed = parse_log_bytes(f"{good}\n{bad_timestamp}\n".encode())
+        assert len(parsed.commits) == 1
+        assert parsed.malformed_lines == 1
+
+    def test_empty_email_is_a_data_oddity_not_damage(self) -> None:
+        from pg_atlas.gitlog.parser import parse_log_bytes
+
+        raw = f"Alice\x00\x00{_days_ago(10).isoformat()}\x00{'a' * 40}\n".encode()
+        parsed = parse_log_bytes(raw)
+        assert parsed.commits == []
+        assert parsed.malformed_lines == 0
