@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 import pytest_mock
 
@@ -45,8 +45,8 @@ def _fixture(name: str) -> dict[str, Any]:
     return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
-def _response(data: dict[str, Any], status_code: int = 200) -> httpx.Response:
-    return httpx.Response(status_code=status_code, json=data, request=httpx.Request("GET", "https://example.com"))
+def _response(data: dict[str, Any], status_code: int = 200) -> httpx2.Response:
+    return httpx2.Response(status_code=status_code, json=data, request=httpx2.Request("GET", "https://example.com"))
 
 
 def test_parse_github_url_repo() -> None:
@@ -150,19 +150,19 @@ def test_check_project_completion_no_warn_when_not_live(caplog: pytest.LogCaptur
 
 
 def test_retry_delay_from_reset_header() -> None:
-    headers = httpx.Headers({"x-ratelimit-reset": "2099-01-01T00:00:00.000Z"})
+    headers = httpx2.Headers({"x-ratelimit-reset": "2099-01-01T00:00:00.000Z"})
     delay = _retry_delay_from_headers(headers, fallback=5.0)
     assert delay > 100  # Far-future timestamp
 
 
 def test_retry_delay_from_retry_after() -> None:
-    headers = httpx.Headers({"Retry-After": "3"})
+    headers = httpx2.Headers({"Retry-After": "3"})
     delay = _retry_delay_from_headers(headers, fallback=5.0)
     assert delay == 3.0
 
 
 def test_retry_delay_fallback() -> None:
-    headers = httpx.Headers({})
+    headers = httpx2.Headers({})
     delay = _retry_delay_from_headers(headers, fallback=7.0)
     assert delay == 7.0
 
@@ -175,7 +175,7 @@ def test_retry_delay_fallback() -> None:
 @pytest.mark.slow
 async def test_fetch_grant_pools(mocker: pytest_mock.MockerFixture) -> None:
     fixture = _fixture("opengrants_pools.json.gz")
-    client = mocker.AsyncMock(spec=httpx.AsyncClient)
+    client = mocker.AsyncMock(spec=httpx2.AsyncClient)
     client.get = mocker.AsyncMock(return_value=_response(fixture))
 
     pools = await fetch_grant_pools(client)
@@ -185,7 +185,7 @@ async def test_fetch_grant_pools(mocker: pytest_mock.MockerFixture) -> None:
 
 async def test_fetch_grant_applications(mocker: pytest_mock.MockerFixture) -> None:
     fixture = _fixture("opengrants_applications_round1.json")
-    client = mocker.AsyncMock(spec=httpx.AsyncClient)
+    client = mocker.AsyncMock(spec=httpx2.AsyncClient)
     client.get = mocker.AsyncMock(return_value=_response(fixture))
 
     apps = await fetch_grant_applications(client, "daoip-5:scf:grantPool:scf_#1")
@@ -309,7 +309,7 @@ async def test_fetch_scf_projects_merges_projects_and_apps(
     r1_fixture = _fixture("opengrants_applications_round1.json")
     rate_limited = _response({}, status_code=429)
 
-    client = mocker.AsyncMock(spec=httpx.AsyncClient)
+    client = mocker.AsyncMock(spec=httpx2.AsyncClient)
     client.get = mocker.AsyncMock(
         side_effect=[
             # fetch_opengrants_projects call

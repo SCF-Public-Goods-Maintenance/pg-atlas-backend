@@ -16,8 +16,11 @@ from typing import Any
 
 import pytest
 from procrastinate.exceptions import AlreadyEnqueued
+from pytest_mock import MockerFixture
 
-from pg_atlas.db_models.base import ActivityStatus, ProjectType
+from pg_atlas.db_models.base import ActivityStatus, ProjectType, RedirectPredicate, Visibility
+from pg_atlas.db_models.release import Release
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo
 from pg_atlas.procrastinate.depsdev import (
     DepsDevError,
     DepsDevRequirement,
@@ -36,6 +39,7 @@ try:
         crawl_package_deps,
         crawl_package_registry,
         defer_with_lock,
+        demote_fork_repo_to_redirect,
         process_gitlog_batch,
         process_project,
         sync_opengrants,
@@ -49,13 +53,20 @@ class _FakeConfiguredTask:
         self.defer_async = mocker.AsyncMock()
 
 
-def _depsdev_package_info(default_version: str, versions: list[SimpleNamespace]) -> SimpleNamespace:
+def _depsdev_package_info(
+    default_version: str,
+    versions: list[SimpleNamespace],
+    *,
+    system: str = "PYPI",
+    name: str = "stellar-sdk",
+    purl: str = "pkg:pypi/stellar-sdk",
+) -> SimpleNamespace:
     """Build a minimal deps.dev package info stub for task tests."""
 
     return SimpleNamespace(
-        system="PYPI",
-        name="stellar-sdk",
-        purl="pkg:pypi/stellar-sdk",
+        system=system,
+        name=name,
+        purl=purl,
         default_version=default_version,
         versions=versions,
     )
@@ -282,6 +293,458 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     ]
 
 
+async def test_process_project_defers_forks_and_crawls_only_normal_repos(mocker: Any) -> None:
+    """Forks bypass deps.dev and normal crawling and are queued for demotion."""
+    fork = GitHubRepoMetadata(
+        name="fork",
+        full_name="org/fork",
+        description="",
+        default_branch="main",
+        stars=1,
+        forks=0,
+        pushed_at=None,
+        language="",
+        topics=[],
+        is_fork=True,
+        parent_full_name="upstream/fork",
+        source_full_name="upstream/fork",
+    )
+    normal = GitHubRepoMetadata(
+        name="normal",
+        full_name="org/normal",
+        description="",
+        default_branch="main",
+        stars=2,
+        forks=0,
+        pushed_at=None,
+        language="Python",
+        topics=[],
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos", return_value=[fork, normal])
+    get_project_batch_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_project_batch",
+        new=mocker.AsyncMock(return_value={}),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+    demote_task_mock = mocker.Mock()
+    demote_task_mock.batch_defer_async = mocker.AsyncMock()
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_fork_repo_to_redirect",
+        new=demote_task_mock,
+        create=True,
+    )
+
+    await process_project(
+        canonical_id="proj:fork-partition",
+        display_name="Fork Partition",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=[],
+        project_metadata=None,
+    )
+
+    requested_project_ids = get_project_batch_mock.await_args.args[0]
+    assert requested_project_ids == ["github.com/org/normal"]
+    crawl_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args.args
+    assert [item["repo"] for item in crawl_data] == ["normal"]
+    demote_task_mock.batch_defer_async.assert_awaited_once_with({"github_repo_url": "https://github.com/org/fork"})
+
+
+async def test_process_project_exempts_explicit_fork_urls_from_demotion(mocker: Any) -> None:
+    """Explicit repository URLs remain crawl candidates even when GitHub marks them as forks."""
+    explicit_fork = GitHubRepoMetadata(
+        name="explicit-fork",
+        full_name="org/explicit-fork",
+        description="",
+        default_branch="main",
+        stars=1,
+        forks=0,
+        pushed_at=None,
+        language="",
+        topics=[],
+        is_fork=True,
+        parent_full_name="upstream/explicit-fork",
+        source_full_name="upstream/explicit-fork",
+    )
+    unlisted_fork = GitHubRepoMetadata(
+        name="unlisted-fork",
+        full_name="org/unlisted-fork",
+        description="",
+        default_branch="main",
+        stars=1,
+        forks=0,
+        pushed_at=None,
+        language="",
+        topics=[],
+        is_fork=True,
+        parent_full_name="upstream/unlisted-fork",
+        source_full_name="upstream/unlisted-fork",
+    )
+    normal = GitHubRepoMetadata(
+        name="normal",
+        full_name="org/normal",
+        description="",
+        default_branch="main",
+        stars=2,
+        forks=0,
+        pushed_at=None,
+        language="Python",
+        topics=[],
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.list_org_repos",
+        return_value=[explicit_fork, unlisted_fork, normal],
+    )
+    get_project_batch_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_project_batch",
+        new=mocker.AsyncMock(return_value={}),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+    demote_task_mock = mocker.Mock()
+    demote_task_mock.batch_defer_async = mocker.AsyncMock()
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_fork_repo_to_redirect",
+        new=demote_task_mock,
+        create=True,
+    )
+
+    await process_project(
+        canonical_id="proj:explicit-fork-exemption",
+        display_name="Explicit Fork Exemption",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=["https://github.com/org/explicit-fork"],
+        project_metadata=None,
+        extended_universe=True,
+    )
+
+    requested_project_ids = get_project_batch_mock.await_args.args[0]
+    assert requested_project_ids == ["github.com/org/explicit-fork", "github.com/org/normal"]
+    crawl_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args.args
+    assert [item["repo"] for item in crawl_data] == ["explicit-fork", "normal"]
+    demote_task_mock.batch_defer_async.assert_awaited_once_with({"github_repo_url": "https://github.com/org/unlisted-fork"})
+
+
+async def test_demote_fork_repo_to_redirect_prefers_source_repo(mocker: Any) -> None:
+    """The root source Repo takes priority over a parent Repo or package vertex."""
+    session = mocker.AsyncMock()
+    session_factory = mocker.Mock(return_value=session)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
+
+    fork = Repo(
+        canonical_id="pkg:github/org/fork",
+        display_name="fork",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        releases=[Release(purl="pkg:pypi/fork-package", version="1.0.0")],
+    )
+    fork.id = 11
+    source = Repo(
+        canonical_id="pkg:github/root/source",
+        display_name="source",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    source.id = 12
+    get_vertex_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_vertex",
+        new=mocker.AsyncMock(side_effect=[fork, source]),
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_repo_fork_details",
+        return_value=("org/parent", "root/source"),
+    )
+    upsert_external_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.upsert_external_repo",
+        new=mocker.AsyncMock(),
+    )
+    demote_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_repo_to_redirect",
+        new=mocker.AsyncMock(),
+    )
+
+    await demote_fork_repo_to_redirect("https://github.com/org/fork")
+
+    assert [call.args[1] for call in get_vertex_mock.await_args_list] == [
+        "pkg:github/org/fork",
+        "pkg:github/root/source",
+    ]
+    upsert_external_mock.assert_not_awaited()
+    demote_mock.assert_awaited_once_with(
+        session,
+        repo_id=11,
+        target_vertex_id=12,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.commit.assert_awaited_once()
+    session.close.assert_awaited_once()
+
+
+async def test_demote_fork_repo_to_redirect_falls_back_to_parent_repo(mocker: Any) -> None:
+    """An existing parent Repo is used when no source Repo exists."""
+    session = mocker.AsyncMock()
+    session_factory = mocker.Mock(return_value=session)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
+    fork = Repo(
+        canonical_id="pkg:github/org/fork",
+        display_name="fork",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    fork.id = 21
+    parent = Repo(
+        canonical_id="pkg:github/org/parent",
+        display_name="parent",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    parent.id = 22
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_vertex",
+        new=mocker.AsyncMock(side_effect=[fork, None, parent]),
+    )
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_repo_fork_details",
+        return_value=("org/parent", "root/source"),
+    )
+    demote_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_repo_to_redirect",
+        new=mocker.AsyncMock(),
+    )
+
+    await demote_fork_repo_to_redirect("https://github.com/org/fork")
+
+    demote_mock.assert_awaited_once_with(
+        session,
+        repo_id=21,
+        target_vertex_id=22,
+        predicate=RedirectPredicate.fork_of,
+    )
+
+
+@pytest.mark.parametrize("package_exists", [True, False], ids=["reuse-package", "create-package"])
+async def test_demote_fork_repo_to_redirect_uses_release_package_fallback(mocker: Any, package_exists: bool) -> None:
+    """A release package PURL reuses an ExternalRepo or creates one when absent."""
+    session = mocker.AsyncMock()
+    session_factory = mocker.Mock(return_value=session)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
+    fork = Repo(
+        canonical_id="pkg:github/org/fork",
+        display_name="fork",
+        visibility=Visibility.public,
+        latest_version="2.3.4",
+        releases=[Release(purl="pkg:pypi/fork-package", version="2.3.4")],
+    )
+    fork.id = 31
+    external_package = ExternalRepo(
+        canonical_id="pkg:pypi/fork-package",
+        display_name="fork package",
+        latest_version="2.3.4",
+    )
+    external_package.id = 32
+    if package_exists:
+        get_vertex_results: list[Repo | ExternalRepo | None] = [fork, external_package]
+    else:
+        get_vertex_results = [fork, None]
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_vertex",
+        new=mocker.AsyncMock(side_effect=get_vertex_results),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_repo_fork_details", return_value=(None, None))
+    upsert_external_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.upsert_external_repo",
+        new=mocker.AsyncMock(return_value=33),
+    )
+    demote_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_repo_to_redirect",
+        new=mocker.AsyncMock(),
+    )
+
+    await demote_fork_repo_to_redirect("https://github.com/org/fork")
+
+    if package_exists:
+        upsert_external_mock.assert_not_awaited()
+        target_vertex_id = 32
+    else:
+        upsert_external_mock.assert_awaited_once_with(
+            session,
+            canonical_id="pkg:pypi/fork-package",
+            display_name="fork",
+            latest_version="2.3.4",
+        )
+        target_vertex_id = 33
+    demote_mock.assert_awaited_once_with(
+        session,
+        repo_id=31,
+        target_vertex_id=target_vertex_id,
+        predicate=RedirectPredicate.fork_of,
+    )
+
+
+@pytest.mark.parametrize("release_purl", [None, "pkg:github/upstream/repo"], ids=["no-package", "reserved-github-purl"])
+async def test_demote_fork_repo_to_redirect_raises_without_a_valid_target(mocker: Any, release_purl: str | None) -> None:
+    """Missing targets fail instead of creating an invalid GitHub ExternalRepo."""
+    session = mocker.AsyncMock()
+    session_factory = mocker.Mock(return_value=session)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
+    releases = [Release(purl=release_purl, version="1.0.0")] if release_purl is not None else []
+    fork = Repo(
+        canonical_id="pkg:github/org/fork",
+        display_name="fork",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        releases=releases,
+    )
+    fork.id = 41
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_vertex",
+        new=mocker.AsyncMock(return_value=fork),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.get_repo_fork_details", return_value=(None, None))
+    upsert_external_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.upsert_external_repo",
+        new=mocker.AsyncMock(),
+    )
+    demote_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_repo_to_redirect",
+        new=mocker.AsyncMock(),
+    )
+
+    with pytest.raises(ValueError, match="Cannot resolve redirect target"):
+        await demote_fork_repo_to_redirect("https://github.com/org/fork")
+
+    upsert_external_mock.assert_not_awaited()
+    demote_mock.assert_not_awaited()
+    session.rollback.assert_awaited_once()
+    session.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("redirected", [False, True], ids=["missing", "already-redirect"])
+async def test_demote_fork_repo_to_redirect_returns_for_missing_or_redirect_vertex(mocker: Any, redirected: bool) -> None:
+    """Missing GitHub vertices and vertices already redirected are harmless no-ops."""
+    session = mocker.AsyncMock()
+    session_factory = mocker.Mock(return_value=session)
+    mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=session_factory)
+    vertex = None
+    if redirected:
+        vertex = RedirectVertex(
+            canonical_id="pkg:github/org/fork",
+            target_vertex_id=99,
+            predicate=RedirectPredicate.fork_of,
+        )
+    get_vertex_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_vertex",
+        new=mocker.AsyncMock(return_value=vertex),
+    )
+    details_mock = mocker.patch("pg_atlas.procrastinate.tasks.get_repo_fork_details")
+    demote_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.demote_repo_to_redirect",
+        new=mocker.AsyncMock(),
+    )
+
+    await demote_fork_repo_to_redirect("https://github.com/org/fork")
+
+    get_vertex_mock.assert_awaited_once()
+    details_mock.assert_not_called()
+    demote_mock.assert_not_awaited()
+    session.commit.assert_not_awaited()
+    session.close.assert_awaited_once()
+
+
+async def test_process_project_associates_unavailable_repos(mocker: Any) -> None:
+    """Known repos unavailable on GitHub should still be linked to the project."""
+
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.fetch_repo_list",
+        return_value=([], ["org/unavailable"]),
+    )
+    upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    associate_mock = mocker.patch("pg_atlas.procrastinate.tasks.associate_repos_with_project", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:unavailable-repo",
+        display_name="Unavailable Repo Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=["https://github.com/org/unavailable"],
+        project_metadata=None,
+    )
+
+    upsert_project_mock.assert_awaited_once()
+
+    associate_mock.assert_awaited_once_with(["pkg:github/org/unavailable"], 101)
+    crawl_defer_mock.assert_not_awaited()
+
+
+async def test_process_project_cleans_stale_repos_in_restricted_crawl(mocker: Any) -> None:
+    """Restricted crawls retain configured repos even when GitHub omits them."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=([], []))
+    upsert_project_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:restricted",
+        display_name="Restricted Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=[
+            "https://github.com/org/available",
+            "https://github.com/org/unavailable",
+            "https://github.com/org/transient-error",
+        ],
+        project_metadata=None,
+    )
+
+    upsert_project_mock.assert_awaited_once()
+    clear_mock.assert_awaited_once_with(
+        101,
+        {
+            "pkg:github/org/available",
+            "pkg:github/org/unavailable",
+            "pkg:github/org/transient-error",
+        },
+    )
+    crawl_defer_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("extended_universe", "git_repo_urls"),
+    [(True, ["https://github.com/org/one"]), (False, [])],
+)
+async def test_process_project_skips_cleanup_for_broad_crawls(
+    mocker: Any,
+    extended_universe: bool,
+    git_repo_urls: list[str],
+) -> None:
+    """Full-owner crawls must not unlink repos outside a targeted URL list."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.list_org_repos", return_value=[])
+    fetch_mock = mocker.patch("pg_atlas.procrastinate.tasks.fetch_repo_list", return_value=([], []))
+    upsert_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_project", new=mocker.AsyncMock(return_value=101))
+    clear_mock = mocker.patch("pg_atlas.procrastinate.tasks.clear_project_repo_associations", new=mocker.AsyncMock())
+    crawl_defer_mock = mocker.patch.object(crawl_github_repo, "batch_defer_async", new=mocker.AsyncMock())
+
+    await process_project(
+        canonical_id="proj:broad",
+        display_name="Broad Project",
+        activity_status="live",
+        git_owner_url="https://github.com/org",
+        git_repo_urls=git_repo_urls,
+        project_metadata=None,
+        extended_universe=extended_universe,
+    )
+
+    upsert_mock.assert_awaited_once()
+    fetch_mock.assert_not_called()
+    clear_mock.assert_not_awaited()
+    crawl_defer_mock.assert_not_awaited()
+
+
 async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
@@ -300,7 +763,6 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
     )
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -320,13 +782,13 @@ async def test_crawl_github_repo_defers_package_deps(mocker: Any) -> None:
 
 
 async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any) -> None:
+    mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
-        new=mocker.AsyncMock(return_value=_depsdev_package_info("11.1.0", versions=[])),
+        new=mocker.AsyncMock(return_value=_depsdev_package_info("11.1.0", versions=[], purl="pkg:pypi/stellar-sdk")),
     )
     upsert_repo_mock = mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -341,14 +803,104 @@ async def test_crawl_github_repo_processes_all_depsdev_package_refs(mocker: Any)
         adoption_forks=44,
     )
 
-    # 1 upsert for github repo; per-package loop calls absorb, not upsert_repo.
     assert upsert_repo_mock.call_count == 1
-    assert absorb_mock.call_count == 2
+    assert [c.args[0] for c in absorb_mock.await_args_list] == ["pkg:pypi/stellar-sdk"]
     deps_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_deps]
     registry_defer_calls = [call for call in defer_mock.call_args_list if call.args[0] is crawl_package_registry]
 
     assert len(deps_defer_calls) == 2
     assert len(registry_defer_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("system", "name", "canonical_name", "purl", "expected_ids"),
+    [
+        (
+            "CARGO",
+            "stellar_xdr",
+            "stellar-xdr",
+            "pkg:cargo/stellar-xdr",
+            ["pkg:cargo/stellar_xdr", "pkg:cargo/stellar-xdr"],
+        ),
+        (
+            "NPM",
+            "@stellar/stellar-sdk",
+            "@stellar/stellar-sdk",
+            "pkg:npm/%40stellar/stellar-sdk",
+            ["pkg:npm/@stellar/stellar-sdk", "pkg:npm/%40stellar/stellar-sdk"],
+        ),
+        (
+            "MAVEN",
+            "network.lightsail:stellar-sdk",
+            "network.lightsail:stellar-sdk",
+            "pkg:maven/network.lightsail/stellar-sdk",
+            ["pkg:maven/network.lightsail:stellar-sdk", "pkg:maven/network.lightsail/stellar-sdk"],
+        ),
+        ("PYPI", "stellar-sdk", "stellar-sdk", "pkg:pypi/stellar-sdk", ["pkg:pypi/stellar-sdk"]),
+    ],
+    ids=["cargo", "scoped-npm", "maven", "identical-pypi"],
+)
+async def test_crawl_github_repo_absorbs_name_and_depsdev_purl(
+    mocker: MockerFixture,
+    system: str,
+    name: str,
+    canonical_name: str,
+    purl: str,
+    expected_ids: list[str],
+) -> None:
+    """Absorb dependency-crawler and SBOM ids in order, deduplicating all package refs."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
+    get_package_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_package",
+        new=mocker.AsyncMock(
+            return_value=_depsdev_package_info("1.0.0", versions=[], system=system, name=canonical_name, purl=purl)
+        ),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
+
+    await crawl_github_repo(
+        owner="test-org",
+        repo="test-repo",
+        project_id=1,
+        packages=[{"system": system, "name": name}, {"system": system, "name": name}],
+        adoption_stars=0,
+        adoption_forks=0,
+    )
+
+    assert [c.args[:2] for c in get_package_mock.await_args_list] == [(system, name), (system, name)]
+    assert [c.args[0] for c in absorb_mock.await_args_list] == expected_ids
+    assert all(c.args[1] == 10 for c in absorb_mock.await_args_list)
+
+
+@pytest.mark.parametrize("package_error", [False, True], ids=["empty-purl", "depsdev-error"])
+async def test_crawl_github_repo_absorbs_name_without_depsdev_purl(mocker: MockerFixture, package_error: bool) -> None:
+    """Missing deps.dev purls leave the name-based absorption path available."""
+
+    mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.get_package",
+        new=mocker.AsyncMock(
+            return_value=_depsdev_package_info("1.0.0", versions=[], system="CARGO", name="stellar-xdr", purl=""),
+            side_effect=DepsDevError("not found") if package_error else None,
+        ),
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
+    absorb_mock = mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
+    mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
+
+    await crawl_github_repo(
+        owner="test-org",
+        repo="test-repo",
+        project_id=1,
+        packages=[{"system": "CARGO", "name": "stellar_xdr"}],
+        adoption_stars=0,
+        adoption_forks=0,
+    )
+
+    absorb_mock.assert_awaited_once_with("pkg:cargo/stellar_xdr", 10)
 
 
 async def test_crawl_package_deps_uses_source_repo_canonical_id(mocker: Any) -> None:
@@ -465,7 +1017,6 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_flutter(mock
     mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
 
     fake_result = mocker.Mock(packages_processed=1, errors=[])
@@ -512,7 +1063,6 @@ async def test_crawl_github_repo_defers_and_runs_registry_crawl_for_php(mocker: 
     mocker.patch("pg_atlas.procrastinate.tasks.get_package", new=mocker.AsyncMock(side_effect=DepsDevError("missing")))
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.get_session_factory", return_value=mocker.Mock())
 
     fake_result = mocker.Mock(packages_processed=1, errors=[])
@@ -573,7 +1123,6 @@ async def test_crawl_github_repo_supports_new_registry_systems_without_warning(
     mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="")
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     with caplog.at_level("WARNING"):
@@ -869,7 +1418,7 @@ async def test_crawl_github_repo_defers_maintenance_when_allowlisted(
     mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="11.1.0")
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repos_with_project", new=mocker.AsyncMock())
     defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     await crawl_github_repo(
@@ -920,7 +1469,7 @@ def _patch_crawl_github_repo_io(mocker: Any) -> Any:
     mocker.patch("pg_atlas.procrastinate.tasks.latest_version_from_repo", return_value="11.1.0")
     mocker.patch("pg_atlas.procrastinate.tasks.upsert_repo", new=mocker.AsyncMock(return_value=10))
     mocker.patch("pg_atlas.procrastinate.tasks.absorb_external_repo", new=mocker.AsyncMock(return_value=False))
-    mocker.patch("pg_atlas.procrastinate.tasks.associate_repo_with_project", new=mocker.AsyncMock())
+    mocker.patch("pg_atlas.procrastinate.tasks.associate_repos_with_project", new=mocker.AsyncMock())
     mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
     return mocker.patch("pg_atlas.procrastinate.tasks.persist_pushed_at", new=mocker.AsyncMock(return_value=True))

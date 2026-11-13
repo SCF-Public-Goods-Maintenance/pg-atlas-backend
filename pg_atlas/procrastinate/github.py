@@ -165,10 +165,17 @@ class GitHubRepoMetadata:
     pushed_at: dt.datetime | None
     language: str
     topics: list[str]
+    is_fork: bool = False
+    parent_full_name: str | None = None
+    source_full_name: str | None = None
     #: UTC time captured immediately before the GitHub call that returned this
     #: metadata; the observation time of ``pushed_at``. Cached listings keep
     #: the time of the call that filled the cache.
     observed_at: dt.datetime | None = None
+
+    @property
+    def url(self) -> str:
+        return f"https://github.com/{self.full_name}"
 
 
 @dataclass
@@ -223,7 +230,8 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
     Return metadata for every public repo owned by *owner*.
 
     Results are cached in ``_gh_org_repos_cache`` to avoid redundant API
-    calls when multiple projects belong to the same GitHub org.
+    calls when multiple projects belong to the same GitHub org. Parent and
+    source repository names are left unset because list results may omit them.
     """
     if owner in _gh_org_repos_cache:
         return _gh_org_repos_cache[owner]
@@ -245,6 +253,7 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
                     pushed_at=repo.pushed_at,
                     language=repo.language or "",
                     topics=repo.topics,
+                    is_fork=bool(repo.fork),
                     observed_at=observed_at,
                 )
             )
@@ -265,20 +274,28 @@ def list_org_repos(owner: str) -> list[GitHubRepoMetadata]:
         return []
 
 
-def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
+def fetch_repo_list(git_repo_urls: list[str]) -> tuple[list[GitHubRepoMetadata], list[str]]:
     """
-    Return metadata for a list of public repos.
+    Return available repo metadata and full names for unavailable repos.
 
-    Logs GitHub API errors and returns the available results.
+    Fork parent and source names are recorded when the individual repository response
+    provides them.
+
+    404 and 409 responses are recorded as ``owner/repo`` names so callers can
+    still associate previously known repositories. Other API errors are logged only.
     """
     gh = get_github_client()
     metadata: list[GitHubRepoMetadata] = []
+    unavailable: list[str] = []
 
     for repo_url in git_repo_urls:
         owner, repo_name = repo_url.rstrip("/").rsplit("/", 2)[-2:]
         observed_at = dt.datetime.now(dt.UTC)
         try:
             repo = gh.get_repo(f"{owner}/{repo_name}")
+            is_fork = bool(repo.fork)
+            parent = repo.parent if is_fork else None
+            source = repo.source if is_fork else None
             metadata.append(
                 GitHubRepoMetadata(
                     name=repo.name,
@@ -290,6 +307,9 @@ def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
                     pushed_at=repo.pushed_at,
                     language=repo.language or "",
                     topics=repo.topics,
+                    is_fork=is_fork,
+                    parent_full_name=parent.full_name if parent is not None else None,
+                    source_full_name=source.full_name if source is not None else None,
                     observed_at=observed_at,
                 )
             )
@@ -297,10 +317,24 @@ def fetch_repo_list(git_repo_urls: list[str]) -> list[GitHubRepoMetadata]:
             if exc.status in (404, 409):
                 msg = str(exc.data.get("message", "")) if hasattr(exc.data, "get") else ""  # pyright: ignore[reportUnknownMemberType]
                 logger.warning(f"GitHub repo unavailable ({exc.status}): {owner}/{repo_name} - {msg}")
+                unavailable.append(f"{owner}/{repo_name}")
             else:
                 logger.error(f"GitHub API error getting repo {owner}/{repo_name}: {exc}")
 
-    return metadata
+    return metadata, unavailable
+
+
+def get_repo_fork_details(github_repo_url: str) -> tuple[str | None, str | None]:
+    """Return the immediate parent and root source names for a GitHub fork."""
+    fetched, _ = fetch_repo_list([github_repo_url])
+    if fetched:
+        repo = fetched[0]
+        if not repo.is_fork:
+            return None, None
+
+        return repo.parent_full_name, repo.source_full_name
+
+    return None, None
 
 
 def detect_packages_from_repo(owner: str, repo_name: str) -> list[PackageReference]:

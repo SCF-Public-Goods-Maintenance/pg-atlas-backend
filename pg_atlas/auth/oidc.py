@@ -40,7 +40,7 @@ GITHUB_JWKS_URL = f"{GITHUB_OIDC_ISSUER}/.well-known/jwks"
 # Thread/coroutine safety: cachetools.TTLCache is not inherently async-safe for
 # concurrent cache misses, but the write is idempotent (same JWKS response),
 # so a brief thundering-herd on expiry is harmless.
-_jwks_cache: TTLCache[str, PyJWKClient] = TTLCache(
+_jwks_cache: TTLCache[str, PyJWKClient, float] = TTLCache[str, PyJWKClient, float](
     maxsize=4,
     ttl=settings.JWKS_CACHE_TTL_SECONDS,
 )

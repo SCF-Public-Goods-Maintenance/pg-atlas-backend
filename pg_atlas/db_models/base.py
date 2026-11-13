@@ -131,6 +131,14 @@ class RepoVertexType(str, enum.Enum):
 
     repo = "repo"
     external_repo = "external-repo"
+    redirect = "redirect"
+
+
+class RedirectPredicate(str, enum.Enum):
+    """Relationship represented by a redirect vertex."""
+
+    fork_of = "fork-of"
+    package_of = "package-of"
 
 
 class ProjectType(str, enum.Enum):

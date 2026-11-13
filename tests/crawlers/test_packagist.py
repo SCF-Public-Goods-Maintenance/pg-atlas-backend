@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 
 from pg_atlas.crawlers.packagist import PackagistCrawler
 
@@ -22,19 +22,19 @@ def _response(
     status_code: int = 200,
     content_type: str = "application/json",
     text: str = "",
-) -> httpx.Response:
-    """Create a mock httpx.Response."""
+) -> httpx2.Response:
+    """Create a mock httpx2.Response."""
     if data is not None:
-        return httpx.Response(
+        return httpx2.Response(
             status_code=status_code,
             json=data,
-            request=httpx.Request("GET", "https://packagist.org"),
+            request=httpx2.Request("GET", "https://packagist.org"),
         )
-    return httpx.Response(
+    return httpx2.Response(
         status_code=status_code,
         text=text,
         headers={"Content-Type": content_type},
-        request=httpx.Request("GET", "https://packagist.org"),
+        request=httpx2.Request("GET", "https://packagist.org"),
     )
 
 
@@ -195,9 +195,9 @@ async def test_fetch_dependents_timeout(
     """Timeout on dependents endpoint returns empty list."""
     mock_http_client.get = AsyncMock(
         side_effect=[
-            httpx.TimeoutException("timeout"),
-            httpx.TimeoutException("timeout"),
-            httpx.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
         ]
     )
     crawler = _make_crawler(mock_http_client)

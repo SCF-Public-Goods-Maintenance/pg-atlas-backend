@@ -9,20 +9,27 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from pg_atlas.db_models.base import RedirectPredicate, SubmissionStatus
 from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.contributor import Contributor
-from pg_atlas.db_models.repo_vertex import Repo
+from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
+from pg_atlas.db_models.repo_vertex import RedirectVertex, Repo, RepoVertex
+from pg_atlas.gitlog import runtime as gitlog_runtime
 from pg_atlas.gitlog.parser import ContributorStats, RepoParseResult, hash_email, parse_repo_with_raw_output
-from pg_atlas.gitlog.persist import persist_repo_result
+from pg_atlas.gitlog.persist import GitLogAttemptAudit, PersistResult, persist_repo_result, record_gitlog_attempt
+from pg_atlas.gitlog.runtime import GitLogRunSummary
+from pg_atlas.procrastinate.upserts import demote_repo_to_redirect
 from tests.conftest import get_test_database_url
 from tests.gitlog.conftest import create_test_repo
 
@@ -286,3 +293,275 @@ async def test_repo_latest_commit_date_is_at_least_max_contributed_to_last_commi
     assert repo.latest_commit_date is not None
     assert max_edge_last_commit is not None
     assert repo.latest_commit_date >= max_edge_last_commit
+
+
+async def _create_demotion_repos(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> tuple[Repo, int, str]:
+    """Create a unique fork Repo and a valid redirect target."""
+    fork_canonical_id, fork_url = _unique_repo_identity()
+    target_canonical_id, target_url = _unique_repo_identity()
+
+    async with db_session_factory() as session:
+        fork = await create_test_repo(session, canonical_id=fork_canonical_id, repo_url=fork_url)
+        target = await create_test_repo(session, canonical_id=target_canonical_id, repo_url=target_url)
+        await session.commit()
+
+    return fork, target.id, fork_url
+
+
+async def _demote_test_repo(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    repo_id: int,
+    target_vertex_id: int,
+) -> None:
+    """Demote a test Repo in its own committed transaction."""
+    async with db_session_factory() as session:
+        await demote_repo_to_redirect(
+            session,
+            repo_id=repo_id,
+            target_vertex_id=target_vertex_id,
+            predicate=RedirectPredicate.fork_of,
+        )
+        await session.commit()
+
+
+async def _run_single_repo_gitlog(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    repo: Repo,
+    clone_dir: Path,
+) -> GitLogRunSummary:
+    """Run one repo through the shared pipeline with network and clone behavior mocked."""
+    return await gitlog_runtime.run_gitlog_pipeline(
+        db_session_factory,
+        [repo],
+        since_months=24,
+        clone_dir=clone_dir,
+        clone_timeout=1.0,
+        clone_delay=0.0,
+        max_rate_limit_retries=0,
+        initial_backoff_seconds=0.0,
+        max_backoff_seconds=0.0,
+        mark_terminal_failures_private=False,
+        seed_run_ordinal=1,
+    )
+
+
+async def _load_gitlog_artifacts(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    repo_vertex_id: int,
+) -> list[GitLogArtifact]:
+    """Return audit rows associated with one vertex."""
+    async with db_session_factory() as session:
+        result = await session.execute(select(GitLogArtifact).where(GitLogArtifact.repo_vertex_id == repo_vertex_id))
+
+        return list(result.scalars().all())
+
+
+async def _load_repo_vertex(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    repo_vertex_id: int,
+) -> RepoVertex:
+    """Load one polymorphic repository vertex."""
+    async with db_session_factory() as session:
+        result = await session.execute(select(RepoVertex).where(RepoVertex.id == repo_vertex_id))
+
+        return result.scalar_one()
+
+
+def _make_demotion_parse_result(repo_url: str) -> RepoParseResult:
+    """Create a parse result that attempts at least one contributor-edge write."""
+    return _make_result(
+        repo_url,
+        [_make_stats(f"{uuid.uuid4().hex}@example.invalid", "Gitlog Demotion Test", 1)],
+    )
+
+
+async def test_demotion_during_parse_records_failed_audit(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    A demotion during parsing stores raw output and records a failed audit with
+    its artifact pointer instead of abandoning it when the Repo row disappears.
+    """
+    repo, target_id, repo_url = await _create_demotion_repos(db_session_factory)
+    parse_result = _make_demotion_parse_result(repo_url)
+    store_artifact_mock = AsyncMock(return_value=("git-logs/demoted-fork.gitlog", "a" * 64))
+
+    async def demote_during_parse(
+        _repo_url: str,
+        _clone_dir: Path,
+        _since_months: int,
+        _clone_timeout: float,
+    ) -> tuple[RepoParseResult, bytes | None]:
+        await _demote_test_repo(db_session_factory, repo_id=repo.id, target_vertex_id=target_id)
+
+        return parse_result, b"raw gitlog output"
+
+    monkeypatch.setattr(gitlog_runtime, "parse_repo_with_raw_output", demote_during_parse)
+    monkeypatch.setattr(gitlog_runtime, "store_artifact", store_artifact_mock)
+
+    summary = await _run_single_repo_gitlog(db_session_factory, repo, tmp_path / "demoted-during-parse")
+    artifacts = await _load_gitlog_artifacts(db_session_factory, repo.id)
+
+    store_artifact_mock.assert_awaited_once()
+    assert summary.repos_with_errors == 1
+    assert len(artifacts) == 1
+    assert artifacts[0].status is SubmissionStatus.failed
+    assert artifacts[0].error_detail == f"Repo {repo.id} no longer exists"
+    assert artifacts[0].artifact_path == "git-logs/demoted-fork.gitlog"
+    assert artifacts[0].gitlog_content_hash == "a" * 64
+    assert isinstance(await _load_repo_vertex(db_session_factory, repo.id), RedirectVertex)
+
+
+async def test_demotion_during_persistence_records_failed_audit(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    A contributor FK violation should produce a failed-attempt audit linked to
+    the surviving RedirectVertex, even after the persistence session rolls back.
+    """
+    repo, target_id, repo_url = await _create_demotion_repos(db_session_factory)
+    parse_result = _make_demotion_parse_result(repo_url)
+
+    async def parse_without_raw_artifact(
+        _repo_url: str,
+        _clone_dir: Path,
+        _since_months: int,
+        _clone_timeout: float,
+    ) -> tuple[RepoParseResult, bytes | None]:
+        return parse_result, None
+
+    async def demote_before_persistence(
+        session: AsyncSession,
+        db_repo: Repo,
+        result: RepoParseResult,
+    ) -> PersistResult:
+        await _demote_test_repo(db_session_factory, repo_id=repo.id, target_vertex_id=target_id)
+
+        return await persist_repo_result(session, db_repo, result)
+
+    monkeypatch.setattr(gitlog_runtime, "parse_repo_with_raw_output", parse_without_raw_artifact)
+    monkeypatch.setattr(gitlog_runtime, "persist_repo_result", demote_before_persistence)
+
+    summary = await _run_single_repo_gitlog(db_session_factory, repo, tmp_path / "demoted-during-persist")
+    artifacts = await _load_gitlog_artifacts(db_session_factory, repo.id)
+
+    assert summary.repos_with_errors == 1
+    assert len(artifacts) == 1
+    assert artifacts[0].status is SubmissionStatus.failed
+    assert artifacts[0].error_detail is not None
+    assert "DB persistence failed" in artifacts[0].error_detail
+    assert isinstance(await _load_repo_vertex(db_session_factory, repo.id), RedirectVertex)
+
+
+async def test_demotion_between_persistence_and_audit_preserves_successful_attempt(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A demotion between persistence and audit insertion leaves a processed audit on the RedirectVertex."""
+    repo, target_id, repo_url = await _create_demotion_repos(db_session_factory)
+    parse_result = _make_demotion_parse_result(repo_url)
+    original_record_gitlog_attempt = record_gitlog_attempt
+
+    async def parse_without_raw_artifact(
+        _repo_url: str,
+        _clone_dir: Path,
+        _since_months: int,
+        _clone_timeout: float,
+    ) -> tuple[RepoParseResult, bytes | None]:
+        return parse_result, None
+
+    async def demote_before_audit(
+        session: AsyncSession,
+        repo_id: int,
+        attempt: GitLogAttemptAudit,
+    ) -> GitLogArtifact:
+        await _demote_test_repo(db_session_factory, repo_id=repo.id, target_vertex_id=target_id)
+
+        return await original_record_gitlog_attempt(session, repo_id, attempt)
+
+    monkeypatch.setattr(gitlog_runtime, "parse_repo_with_raw_output", parse_without_raw_artifact)
+    monkeypatch.setattr(gitlog_runtime, "record_gitlog_attempt", demote_before_audit)
+
+    summary = await _run_single_repo_gitlog(db_session_factory, repo, tmp_path / "demoted-before-audit")
+    artifacts = await _load_gitlog_artifacts(db_session_factory, repo.id)
+
+    assert summary.repos_with_errors == 0
+    assert len(artifacts) == 1
+    assert artifacts[0].status is SubmissionStatus.processed
+    assert isinstance(await _load_repo_vertex(db_session_factory, repo.id), RedirectVertex)
+
+    async with db_session_factory() as session:
+        edge_count = await session.scalar(
+            select(func.count()).select_from(ContributedTo).where(ContributedTo.repo_id == repo.id)
+        )
+
+    assert edge_count == 0
+
+
+async def test_demotion_waits_for_uncommitted_gitlog_audit(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The RepoVertex FK lock blocks demotion until a flushed gitlog audit commits."""
+    repo, target_id, repo_url = await _create_demotion_repos(db_session_factory)
+    parse_result = _make_demotion_parse_result(repo_url)
+    audit_flushed = asyncio.Event()
+    allow_audit_commit = asyncio.Event()
+    original_record_gitlog_attempt = record_gitlog_attempt
+
+    async def parse_without_raw_artifact(
+        _repo_url: str,
+        _clone_dir: Path,
+        _since_months: int,
+        _clone_timeout: float,
+    ) -> tuple[RepoParseResult, bytes | None]:
+        return parse_result, None
+
+    async def flush_then_hold_audit(
+        session: AsyncSession,
+        repo_id: int,
+        attempt: GitLogAttemptAudit,
+    ) -> GitLogArtifact:
+        artifact = await original_record_gitlog_attempt(session, repo_id, attempt)
+        audit_flushed.set()
+        await allow_audit_commit.wait()
+
+        return artifact
+
+    monkeypatch.setattr(gitlog_runtime, "parse_repo_with_raw_output", parse_without_raw_artifact)
+    monkeypatch.setattr(gitlog_runtime, "record_gitlog_attempt", flush_then_hold_audit)
+    pipeline_task = asyncio.create_task(_run_single_repo_gitlog(db_session_factory, repo, tmp_path / "demoted-during-audit"))
+
+    try:
+        await asyncio.wait_for(audit_flushed.wait(), timeout=5.0)
+        with pytest.raises(SQLAlchemyError, match="lock timeout"):
+            async with db_session_factory() as session:
+                await session.execute(text("SET LOCAL lock_timeout = '150ms'"))
+                await demote_repo_to_redirect(
+                    session,
+                    repo_id=repo.id,
+                    target_vertex_id=target_id,
+                    predicate=RedirectPredicate.fork_of,
+                )
+                await session.commit()
+    finally:
+        allow_audit_commit.set()
+        await asyncio.gather(pipeline_task, return_exceptions=True)
+
+    summary = pipeline_task.result()
+    await _demote_test_repo(db_session_factory, repo_id=repo.id, target_vertex_id=target_id)
+    artifacts = await _load_gitlog_artifacts(db_session_factory, repo.id)
+
+    assert summary.repos_with_errors == 0
+    assert len(artifacts) == 1
+    assert artifacts[0].status is SubmissionStatus.processed
+    assert isinstance(await _load_repo_vertex(db_session_factory, repo.id), RedirectVertex)

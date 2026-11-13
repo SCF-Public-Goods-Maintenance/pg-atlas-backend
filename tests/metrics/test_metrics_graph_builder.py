@@ -15,8 +15,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pg_atlas.db_models import ExternalRepo, Project, Repo
-from pg_atlas.db_models.base import ActivityStatus, ProjectType, Visibility
+from pg_atlas.db_models import ExternalRepo, Project, RedirectVertex, Repo
+from pg_atlas.db_models.base import ActivityStatus, ProjectType, RedirectPredicate, Visibility
 from pg_atlas.metrics.graph_builder import build_dependency_graph, build_full_graph
 from tests.db_cleanup import DB_MODELS_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -110,6 +110,35 @@ async def test_build_dependency_graph_surfaces_repo_activity_status(
 
     assert G.nodes[repo.canonical_id]["activity_status"] == ActivityStatus.in_dev.value
     assert G.nodes[external.canonical_id]["activity_status"] is None
+
+
+async def test_build_dependency_graph_excludes_redirect_vertices(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_metrics_builder_tests: None,
+) -> None:
+    """Redirect vertices are aliases and must not appear in the dependency graph."""
+    suffix = uuid4().hex[:8]
+    target = Repo(
+        canonical_id=f"pkg:github/test/redirect-target-{suffix}",
+        display_name=f"redirect-target-{suffix}",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test/redirect-alias-{suffix}",
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    db_session.add(redirect)
+    await db_session.flush()
+
+    graph = await build_dependency_graph(db_session)
+
+    assert redirect.canonical_id not in graph
+    assert target.canonical_id in graph
 
 
 async def test_build_full_graph_has_project_nodes(db_session: AsyncSession):

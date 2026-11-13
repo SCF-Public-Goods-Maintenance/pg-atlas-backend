@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 import msgspec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -127,7 +127,7 @@ class RegistryCrawler(ABC):
 
     def __init__(
         self,
-        client: httpx.AsyncClient,
+        client: httpx2.AsyncClient,
         session_factory: async_sessionmaker[AsyncSession],
         rate_limit: float = 1.0,
         max_retries: int = 3,
@@ -151,11 +151,11 @@ class RegistryCrawler(ABC):
         """Fetch reverse dependencies from the registry API."""
         ...
 
-    async def _request_with_retry(self, url: str, on_attempt: Callable[[], None] | None = None) -> httpx.Response:
+    async def _request_with_retry(self, url: str, on_attempt: Callable[[], None] | None = None) -> httpx2.Response:
         """
         Make an HTTP GET request with retry logic for 429 and 5xx responses.
 
-        Raises ``httpx.HTTPStatusError`` for 404 (no retry).
+        Raises ``httpx2.HTTPStatusError`` for 404 (no retry).
         Returns the response for 200. ``on_attempt`` is invoked once per HTTP
         attempt, including retries, so callers can count real request volume.
         """
@@ -165,7 +165,7 @@ class RegistryCrawler(ABC):
                 if on_attempt is not None:
                     on_attempt()
                 resp = await self.client.get(url)
-            except httpx.TimeoutException as exc:
+            except httpx2.TimeoutException as exc:
                 last_exc = exc
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
@@ -190,7 +190,7 @@ class RegistryCrawler(ABC):
                 continue
 
             if resp.status_code >= 500:
-                last_exc = httpx.HTTPStatusError(
+                last_exc = httpx2.HTTPStatusError(
                     f"Server error {resp.status_code}",
                     request=resp.request,
                     response=resp,

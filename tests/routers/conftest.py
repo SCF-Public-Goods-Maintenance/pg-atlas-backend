@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -256,7 +256,7 @@ async def seeded_client() -> AsyncGenerator[tuple[AsyncClient, dict[str, Any]], 
         seed_session.add_all([contrib_edge, anchored_contrib_edge])
 
         gitlog_artifact = GitLogArtifact(
-            repo_id=repo_a1.id,
+            repo_vertex_id=repo_a1.id,
             since_months=24,
             artifact_path=None,
             gitlog_content_hash=None,

@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "One-off Prettier Wrap",
+      "type": "shell",
+      "command": "npx prettier --prose-wrap always --print-width 100 --write ${file}",
+      "problemMatcher": []
+    }
+  ]
+}

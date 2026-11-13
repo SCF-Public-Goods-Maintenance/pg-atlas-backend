@@ -54,6 +54,7 @@ jobs:
       PG_ATLAS_MAINTENANCE_REQUEST_CAP: ${{ vars.PGA_MAINTENANCE_REQUEST_CAP || '120' }}
       PG_ATLAS_MAINTENANCE_TIME_CAP_SECONDS: ${{ vars.PGA_MAINTENANCE_TIME_CAP_SECONDS || '180' }}
       UV_NO_GROUP: dev
+      PROJECT_FILTER: ${{ github.event.inputs.projects }}
 
     steps:
       - uses: actions/checkout@v6
@@ -64,7 +65,10 @@ jobs:
         run: uv sync --frozen
 
       - name: Queue bootstrap tasks
-        run: uv run python -m pg_atlas.procrastinate.seed_opengrants ${{ github.event.inputs.projects }}
+        shell: bash
+        run: |
+          read -r -a project_ids <<< "$PROJECT_FILTER"
+          uv run python -m pg_atlas.procrastinate.seed_opengrants "${project_ids[@]}"
 
       - name: Run worker — opengrants queue
         timeout-minutes: 320

@@ -532,7 +532,7 @@ async def test_record_gitlog_attempt_success(
     assert row.id is not None
 
     async with db_session_factory() as session:
-        rows = (await session.execute(select(GitLogArtifact).where(GitLogArtifact.repo_id == repo_id))).scalars().all()
+        rows = (await session.execute(select(GitLogArtifact).where(GitLogArtifact.repo_vertex_id == repo_id))).scalars().all()
 
     assert len(rows) == 1
     assert rows[0].status == SubmissionStatus.processed
@@ -579,7 +579,7 @@ async def test_record_gitlog_attempt_nulls_previous_artifact_paths(
         rows = (
             (
                 await session.execute(
-                    select(GitLogArtifact).where(GitLogArtifact.repo_id == repo_id).order_by(GitLogArtifact.id.asc())
+                    select(GitLogArtifact).where(GitLogArtifact.repo_vertex_id == repo_id).order_by(GitLogArtifact.id.asc())
                 )
             )
             .scalars()

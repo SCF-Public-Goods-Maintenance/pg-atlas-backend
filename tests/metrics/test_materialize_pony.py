@@ -219,19 +219,19 @@ async def _seed_pony_component(session: AsyncSession) -> SeededPonyFixture:
     session.add_all(
         [
             GitLogArtifact(
-                repo_id=repo_a1.id,
+                repo_vertex_id=repo_a1.id,
                 since_months=12,
                 seed_run_ordinal=ordinal_lower,
                 status=SubmissionStatus.processed,
             ),
             GitLogArtifact(
-                repo_id=repo_g1.id,
+                repo_vertex_id=repo_g1.id,
                 since_months=12,
                 seed_run_ordinal=ordinal_lower,
                 status=SubmissionStatus.processed,
             ),
             GitLogArtifact(
-                repo_id=repo_b1.id,
+                repo_vertex_id=repo_b1.id,
                 since_months=12,
                 seed_run_ordinal=ordinal_upper,
                 status=SubmissionStatus.processed,

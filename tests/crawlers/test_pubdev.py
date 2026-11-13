@@ -12,17 +12,17 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 
 from pg_atlas.crawlers.pubdev import PubDevCrawler
 
 
-def _response(data: dict[str, Any], status_code: int = 200) -> httpx.Response:
-    """Create a mock httpx.Response with JSON content."""
-    return httpx.Response(
+def _response(data: dict[str, Any], status_code: int = 200) -> httpx2.Response:
+    """Create a mock httpx2.Response with JSON content."""
+    return httpx2.Response(
         status_code=status_code,
         json=data,
-        request=httpx.Request("GET", "https://pub.dev/api"),
+        request=httpx2.Request("GET", "https://pub.dev/api"),
     )
 
 
@@ -167,9 +167,9 @@ async def test_fetch_package_metrics_failure(
         side_effect=[
             _response(pubdev_package_data),
             # _request_with_retry retries on timeout (max_retries=3)
-            httpx.TimeoutException("timeout"),
-            httpx.TimeoutException("timeout"),
-            httpx.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
         ]
     )
     crawler = _make_crawler(mock_http_client)

@@ -12,18 +12,18 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 
 from pg_atlas.crawlers.npm import NpmCrawler
 
 
-def _response(data: dict[str, Any], status_code: int = 200) -> httpx.Response:
+def _response(data: dict[str, Any], status_code: int = 200) -> httpx2.Response:
     """Create a mock npm API response."""
 
-    return httpx.Response(
+    return httpx2.Response(
         status_code=status_code,
         json=data,
-        request=httpx.Request("GET", "https://registry.npmjs.org"),
+        request=httpx2.Request("GET", "https://registry.npmjs.org"),
     )
 
 

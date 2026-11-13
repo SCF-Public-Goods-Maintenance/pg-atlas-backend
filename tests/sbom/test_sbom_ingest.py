@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from jwt import PyJWKClientError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -140,7 +140,7 @@ async def test_github_dep_graph_sbom_returns_202(
     assert response.status_code == 202
     body = response.json()
     assert body["repository"] == mock_oidc_claims["repository"]
-    assert body["package_count"] == 2  # two packages in github_dep_graph.spdx.json
+    assert body["package_count"] == 4  # four packages in github_dep_graph.spdx.json
     assert body["message"] == "queued"
 
 
@@ -165,7 +165,7 @@ async def test_github_api_envelope_sbom_returns_202(
     assert response.status_code == 202
     body = response.json()
     assert body["repository"] == mock_oidc_claims["repository"]
-    assert body["package_count"] == 2
+    assert body["package_count"] == 4
     assert body["message"] == "queued"
 
 

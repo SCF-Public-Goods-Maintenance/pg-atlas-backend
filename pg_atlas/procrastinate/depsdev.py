@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import logging
 from abc import ABC
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any, AsyncGenerator, TypeVar
 
 import grpc
 from grpclib.client import Channel
@@ -215,7 +215,7 @@ T = TypeVar("T")
 
 
 @asynccontextmanager
-async def depsdev_session() -> AsyncIterator[InsightsStub]:
+async def depsdev_session() -> AsyncGenerator[InsightsStub]:
     """
     Yield a reusable ``InsightsStub`` backed by a single TLS channel.
 

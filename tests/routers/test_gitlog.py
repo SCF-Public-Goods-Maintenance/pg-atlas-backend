@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 
 async def test_gitlog_db_unavailable_returns_503(no_db_client: AsyncClient) -> None:

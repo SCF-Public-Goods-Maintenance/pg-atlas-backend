@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 
-import httpx
+import httpx2
 import msgspec
 
 from pg_atlas.crawlers.base import (
@@ -121,7 +121,7 @@ class PubDevCrawler(RegistryCrawler):
         try:
             metrics_resp = await self._request_with_retry(f"{self.BASE_URL}/packages/{package_name}/metrics")
             metrics_data = _decode_pubdev_metrics_payload(metrics_resp.content, package_name)
-        except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
+        except (httpx2.HTTPStatusError, httpx2.TimeoutException, ExhaustedRetries) as exc:
             logger.warning(f"Failed to fetch metrics for {package_name}: {exc}")
 
         return self._parse_package(pkg_data, metrics_data)

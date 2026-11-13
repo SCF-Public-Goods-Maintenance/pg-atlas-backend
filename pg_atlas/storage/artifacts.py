@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import httpx
+import httpx2
 from aiobotocore.config import AioConfig
 from aiobotocore.session import ClientCreatorContext, get_session
 
@@ -146,7 +146,7 @@ async def _read_artifact_ipfs(artifact_cid: str) -> bytes:
     """Read artifact bytes from the configured IPFS gateway using the stored CID."""
 
     url = f"{settings.IPFS_GATEWAY_URL}/{artifact_cid}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx2.AsyncClient(timeout=30.0) as client:
         response = await client.get(url)
 
     if response.status_code == 404:

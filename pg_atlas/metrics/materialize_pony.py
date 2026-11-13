@@ -96,10 +96,10 @@ async def _resolve_target_repo_ids(
             return [], None
 
         stmt = (
-            select(GitLogArtifact.repo_id)
+            select(GitLogArtifact.repo_vertex_id)
             .where(GitLogArtifact.seed_run_ordinal == resolved_seed_run_ordinal)
             .distinct()
-            .order_by(GitLogArtifact.repo_id)
+            .order_by(GitLogArtifact.repo_vertex_id)
         )
         repo_ids = [int(repo_id) for repo_id in (await session.execute(stmt)).scalars().all()]
 
@@ -107,10 +107,10 @@ async def _resolve_target_repo_ids(
 
     if seed_run_ordinal is not None:
         stmt = (
-            select(GitLogArtifact.repo_id)
+            select(GitLogArtifact.repo_vertex_id)
             .where(GitLogArtifact.seed_run_ordinal == seed_run_ordinal)
             .distinct()
-            .order_by(GitLogArtifact.repo_id)
+            .order_by(GitLogArtifact.repo_vertex_id)
         )
         repo_ids = [int(repo_id) for repo_id in (await session.execute(stmt)).scalars().all()]
 

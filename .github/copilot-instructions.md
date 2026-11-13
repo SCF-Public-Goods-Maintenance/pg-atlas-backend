@@ -31,6 +31,7 @@ commit is created.
 
 As mandatory preparation for any task, use your GitHub tools to list all open issues for the current
 repo. Read the open issues in full with all their comments when they are relevant for the current task.
+Do not list issues again after the first turn, unless the user asks you to.
 
 Work is always done on feature branches. If the current branch is `main`, WARN the user. Check if
 the feature branch is associated with a PR: read the full PR including its comments to understand
@@ -60,7 +61,9 @@ Previous work was organised into deliverables labelled A1, A2, A3 … (from the 
   exhausted these options.
 - **pytest-asyncio** with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` on individual tests.
 - Translate all `pytest` commands to the `runTests` tool equivalent, and run them with the tool.
-  Only fall back to the terminal after trying `runTests` on the test you must run.
+  Only fall back to the terminal after trying `runTests` on the test you must run. Scope test runs to
+  the changed modules, unless the user asks you to run all tests or approves you to commit: all tests
+  must have run locally before changes reach CI.
 - Run the full check suite before considering work done:
   ```sh
   rg '%[sdf]' pg_atlas/  # always use f-strings

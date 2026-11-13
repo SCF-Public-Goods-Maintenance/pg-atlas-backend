@@ -1,7 +1,7 @@
 """add repo pushed_at for maintenance signals
 
 Revision ID: 71172408d9bd
-Revises: a0f47bdaf820
+Revises: e6cc9b647b72
 Create Date: 2026-09-09 19:52:07.737250+00:00
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "71172408d9bd"
-down_revision: Union[str, Sequence[str], None] = "a0f47bdaf820"
+down_revision: Union[str, Sequence[str], None] = "e6cc9b647b72"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

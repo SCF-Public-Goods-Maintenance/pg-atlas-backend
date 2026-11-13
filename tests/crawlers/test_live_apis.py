@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -44,10 +44,10 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-async def live_client() -> AsyncGenerator[httpx.AsyncClient, None]:
-    """Real httpx client for live API calls."""
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
+async def live_client() -> AsyncGenerator[httpx2.AsyncClient, None]:
+    """Real httpx2 client for live API calls."""
+    async with httpx2.AsyncClient(
+        timeout=httpx2.Timeout(30.0, connect=10.0),
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:
@@ -63,7 +63,7 @@ def _dummy_session_factory() -> async_sessionmaker[AsyncSession]:
 # ---------------------------------------------------------------------------
 
 
-async def test_pubdev_live_fetch(live_client: httpx.AsyncClient) -> None:
+async def test_pubdev_live_fetch(live_client: httpx2.AsyncClient) -> None:
     """Fetch stellar_flutter_sdk from real pub.dev and validate structure."""
     crawler = PubDevCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
@@ -74,7 +74,7 @@ async def test_pubdev_live_fetch(live_client: httpx.AsyncClient) -> None:
     assert isinstance(pkg.dependencies, list)
 
 
-async def test_pubdev_live_metrics(live_client: httpx.AsyncClient) -> None:
+async def test_pubdev_live_metrics(live_client: httpx2.AsyncClient) -> None:
     """Fetch metrics for stellar_flutter_sdk — weekly sums should be ints."""
     crawler = PubDevCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("stellar_flutter_sdk")
@@ -90,7 +90,7 @@ async def test_pubdev_live_metrics(live_client: httpx.AsyncClient) -> None:
     assert isinstance(pkg.metadata.get("download_count_30d"), int)
 
 
-async def test_pubdev_live_dependents(live_client: httpx.AsyncClient) -> None:
+async def test_pubdev_live_dependents(live_client: httpx2.AsyncClient) -> None:
     """Fetch dependents for stellar_flutter_sdk — should return a list."""
     crawler = PubDevCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     dependents = await crawler.fetch_dependents("stellar_flutter_sdk")
@@ -105,7 +105,7 @@ async def test_pubdev_live_dependents(live_client: httpx.AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_packagist_live_fetch(live_client: httpx.AsyncClient) -> None:
+async def test_packagist_live_fetch(live_client: httpx2.AsyncClient) -> None:
     """Fetch soneso/stellar-php-sdk from real Packagist and validate structure."""
     crawler = PackagistCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
@@ -116,7 +116,7 @@ async def test_packagist_live_fetch(live_client: httpx.AsyncClient) -> None:
     assert isinstance(pkg.dependencies, list)
 
 
-async def test_packagist_live_downloads(live_client: httpx.AsyncClient) -> None:
+async def test_packagist_live_downloads(live_client: httpx2.AsyncClient) -> None:
     """Fetch downloads for soneso/stellar-php-sdk — downloads should be ints."""
     crawler = PackagistCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     pkg = await crawler.fetch_package("soneso/stellar-php-sdk")
@@ -127,7 +127,7 @@ async def test_packagist_live_downloads(live_client: httpx.AsyncClient) -> None:
         assert pkg.downloads_30d >= 0
 
 
-async def test_packagist_live_dependents(live_client: httpx.AsyncClient) -> None:
+async def test_packagist_live_dependents(live_client: httpx2.AsyncClient) -> None:
     """Fetch dependents for soneso/stellar-php-sdk — should return a list."""
     crawler = PackagistCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
     dependents = await crawler.fetch_dependents("soneso/stellar-php-sdk")
@@ -142,7 +142,7 @@ async def test_packagist_live_dependents(live_client: httpx.AsyncClient) -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_npm_live_fetch(live_client: httpx.AsyncClient) -> None:
+async def test_npm_live_fetch(live_client: httpx2.AsyncClient) -> None:
     """Fetch lodash from the live npm APIs and validate the parsed structure."""
 
     crawler = NpmCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
@@ -154,7 +154,7 @@ async def test_npm_live_fetch(live_client: httpx.AsyncClient) -> None:
     assert isinstance(pkg.dependencies, list)
 
 
-async def test_cargo_live_fetch(live_client: httpx.AsyncClient) -> None:
+async def test_cargo_live_fetch(live_client: httpx2.AsyncClient) -> None:
     """Fetch serde from the live crates.io APIs and validate the parsed structure."""
 
     crawler = CargoCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
@@ -166,7 +166,7 @@ async def test_cargo_live_fetch(live_client: httpx.AsyncClient) -> None:
     assert isinstance(pkg.dependencies, list)
 
 
-async def test_pypi_live_fetch(live_client: httpx.AsyncClient) -> None:
+async def test_pypi_live_fetch(live_client: httpx2.AsyncClient) -> None:
     """Fetch requests from live PyPI and PyPIStats and validate the parsed structure."""
 
     crawler = PyPICrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
@@ -183,7 +183,7 @@ async def test_pypi_live_fetch(live_client: httpx.AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_github_dependents_live_markers(live_client: httpx.AsyncClient) -> None:
+async def test_github_dependents_live_markers(live_client: httpx2.AsyncClient) -> None:
     """
     Fetch one real dependents page and assert every marker class still matches.
 
@@ -211,7 +211,7 @@ async def test_github_dependents_live_markers(live_client: httpx.AsyncClient) ->
     assert find_next_cursor(html)
 
 
-async def test_github_dependents_live_fetch_package(live_client: httpx.AsyncClient) -> None:
+async def test_github_dependents_live_fetch_package(live_client: httpx2.AsyncClient) -> None:
     """fetch_package returns a repo-shaped package with integer header totals."""
 
     crawler = GitHubDependentsCrawler(client=live_client, session_factory=_dummy_session_factory(), rate_limit=0.0)
@@ -224,7 +224,7 @@ async def test_github_dependents_live_fetch_package(live_client: httpx.AsyncClie
     assert isinstance(pkg.metadata["public_repos_observed"], int)
 
 
-async def test_github_dependents_live_multi_package_selector(live_client: httpx.AsyncClient) -> None:
+async def test_github_dependents_live_multi_package_selector(live_client: httpx2.AsyncClient) -> None:
     """
     A multi-package repository renders a package selector, and a populated
     package-scoped page parses fully: counts with package_id-carrying header

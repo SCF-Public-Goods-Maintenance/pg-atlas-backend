@@ -2,7 +2,7 @@
 Reusable async query and upsert operations for the RepoVertex JTI hierarchy.
 
 All queries apply ``selectin_polymorphic`` so that subtype columns (from the
-``repos`` and ``external_repos`` child tables) are eagerly loaded in a single
+``repos``, ``external_repos``, and ``redirect_vertices`` child tables) are eagerly loaded in a single
 async round-trip.  Without this, accessing any subtype attribute in an
 ``AsyncSession`` would trigger a synchronous lazy load and raise
 ``MissingGreenlet``.
@@ -19,11 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectin_polymorphic
 
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 
 # Reusable loader option — tells SQLAlchemy to eagerly batch-load JTI child
 # tables so that Repo/ExternalRepo attributes are available without lazy loads.
-POLY_LOAD = selectin_polymorphic(RepoVertex, [Repo, ExternalRepo])
+POLY_LOAD = selectin_polymorphic(RepoVertex, [Repo, ExternalRepo, RedirectVertex])
 
 
 async def get_vertex(session: AsyncSession, canonical_id: str) -> RepoVertex | None:
@@ -50,20 +50,23 @@ async def upsert_external_repo(
     """
     Insert an ``ExternalRepo`` or update an existing vertex's mutable fields.
 
-    If the ``canonical_id`` already belongs to a ``Repo`` (within-ecosystem),
-    the existing row is returned unchanged — ``ExternalRepo`` never overwrites
-    a ``Repo``.
-    FIXME: scrutinize this logic since Repo and ExternalRepo now use separate
-    canonical_id namespaces. We could need fancier merging logic here.
+    Does not check if the ``canonical_id`` exists as a Repo's release PURL,
+    so the upsert can inadvertently create "loose" vertices.
 
     Calls ``session.flush()`` so the returned object has its ``id`` populated.
     """
+    if canonical_id.startswith("pkg:github/"):
+        raise ValueError(f"Invalid ExternalRepo ID {canonical_id}: the 'pkg:github/' prefix is reserved for Repos")
+
     vertex = await get_vertex(session, canonical_id)
 
     if vertex is not None:
         if isinstance(vertex, ExternalRepo):
             vertex.display_name = display_name
             if latest_version:
+                # FIXME: this is the last seen version, not the latest
+                # suggested fix: remove the column and deduce latest on-demand from releases
+                # wontfix until there is a consumer of ExternalRepo.latest_version
                 vertex.latest_version = latest_version
             if repo_url:
                 vertex.repo_url = repo_url
@@ -72,7 +75,7 @@ async def upsert_external_repo(
 
             return vertex
 
-        raise ValueError(f"Cannot overwrite Repo {vertex.canonical_id} (id={vertex.id}) with ExternalRepo")
+        raise ValueError(f"Cannot overwrite {type(vertex).__name__} {vertex.canonical_id} with ExternalRepo")
 
     ext = ExternalRepo(
         canonical_id=canonical_id,

@@ -15,6 +15,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import replace
@@ -25,19 +26,21 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pg_atlas.db_models.base import SubmissionStatus
+from pg_atlas.db_models.base import SubmissionStatus, Visibility
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
 from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.ingestion.persist import (
     _plan_sbom_edges,
     canonical_id_for_github_repo,
-    canonical_id_for_spdx_package,
     handle_sbom_submission,
+    normalize_spdx_package_id,
     parse_sbom_and_persist_graph,
     strip_purl_version,
 )
 from pg_atlas.ingestion.spdx import compute_sbom_semantic_hash, parse_and_validate_spdx
+from pg_atlas.procrastinate.upserts import find_repo_by_release_purl
 from pg_atlas.storage.artifacts import read_artifact
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
@@ -105,8 +108,8 @@ def test_strip_purl_version_strips_at_suffix() -> None:
     assert strip_purl_version("pkg:npm/react") == "pkg:npm/react"  # no @ — unchanged
 
 
-def test_canonical_id_for_spdx_package_from_purl() -> None:
-    """canonical_id_for_spdx_package extracts and strips the PURL from externalRefs."""
+def test_normalize_spdx_package_id_from_purl() -> None:
+    """Package normalization returns a versionless ID and the original PURL."""
 
     class FakeRef:
         reference_type = "purl"
@@ -116,17 +119,20 @@ def test_canonical_id_for_spdx_package_from_purl() -> None:
         name = "requests"
         external_references = [FakeRef()]
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "pkg:pypi/requests"  # pyright: ignore[reportArgumentType]
+    assert normalize_spdx_package_id(FakePkg()) == (  # pyright: ignore[reportArgumentType]
+        "pkg:pypi/requests",
+        "pkg:pypi/requests@2.32.0",
+    )
 
 
-def test_canonical_id_for_spdx_package_fallback() -> None:
-    """canonical_id_for_spdx_package falls back to lowercase name when no PURL."""
+def test_normalize_spdx_package_id_fallback() -> None:
+    """Package normalization falls back to the lower-cased name when no PURL exists."""
 
     class FakePkg:
         name = "MyPackage"
         external_references: list[Any] = []
 
-    assert canonical_id_for_spdx_package(FakePkg()) == "mypackage"  # pyright: ignore[reportArgumentType]
+    assert normalize_spdx_package_id(FakePkg()) == ("mypackage", None)  # pyright: ignore[reportArgumentType]
 
 
 def test_plan_sbom_edges_deduplicates_repeated_nested_relationships() -> None:
@@ -224,15 +230,16 @@ async def test_handle_sbom_submission_github_dep_graph(
     db_session: AsyncSession,
     cleanup_db_rows_for_db_tests: None,
     mocker: Any,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     A GitHub Dependency Graph SBOM (with PURL externalRefs and a DESCRIBES
-    relationship for the subject package) is processed without duplicating the
-    submitting repo as an ExternalRepo.
+    relationship for the subject package) resolves existing GitHub Repos while
+    warning about missing ones, without duplicating the submitting repo as an
+    ExternalRepo.
 
     The claims ``repository`` matches the subject package's PURL so the
-    self-reference check fires correctly.  The test is idempotent — the
-    SELECT-then-upsert pattern is safe to re-run.
+    self-reference check fires correctly.
     """
     # Use the exact owner/repo that appears in the SPDX fixture's PURL so that
     # the submitting_canonical_id check correctly identifies the subject package.
@@ -240,14 +247,30 @@ async def test_handle_sbom_submission_github_dep_graph(
         "repository": "SCF-Public-Goods-Maintenance/pg-atlas-sbom-action",
         "actor": "test-user",
     }
+    internal_repo = Repo(
+        canonical_id="pkg:github/SCF-Public-Goods-Maintenance/internal-tool",
+        display_name="internal-tool",
+        visibility=Visibility.public,
+        latest_version="main",
+    )
+    db_session.add(internal_repo)
+    await db_session.flush()
+
     defer_mock = mocker.AsyncMock()
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
+    caplog.set_level(logging.WARNING, logger="pg_atlas.ingestion.persist")
     raw = (FIXTURES / "github_dep_graph.spdx.json").read_bytes()
     result = await handle_sbom_submission(db_session, raw, claims)
     assert result.repository == claims["repository"]
     submission = await _submission_for_payload(db_session, raw, claims)
     await parse_sbom_and_persist_graph(db_session, submission.id)
     defer_mock.assert_awaited_once_with(submission.id, repository_claim=claims["repository"])
+    assert (
+        "pg_atlas.ingestion.persist",
+        logging.WARNING,
+        "SBOM for pkg:github/SCF-Public-Goods-Maintenance/pg-atlas-sbom-action references "
+        "pkg:github/other-org/some-lib but that Repo vertex has not yet been created",
+    ) in caplog.record_tuples
 
     # Submitting repo → Repo vertex, NOT ExternalRepo
     repo_cid = canonical_id_for_github_repo(claims["repository"])
@@ -261,9 +284,97 @@ async def test_handle_sbom_submission_github_dep_graph(
     dep = (await db_session.execute(select(ExternalRepo).where(ExternalRepo.canonical_id == dep_cid))).scalar_one_or_none()
     assert dep is not None and dep.display_name == "actions/checkout"
 
-    # DependsOn edge exists
+    # Existing and missing GitHub-namespace dependencies both resolve as expected.
     edges = (await db_session.execute(select(DependsOn).where(DependsOn.in_vertex_id == repo.id))).scalars().all()
-    assert any(e.out_vertex_id == dep.id for e in edges)
+    assert len(edges) == 2
+    assert {edge.out_vertex_id for edge in edges} == {dep.id, internal_repo.id}
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
+@pytest.mark.parametrize(
+    ("system", "base_package_name", "base_purl"),
+    [
+        ("CARGO", "stellar-xdr", "pkg:cargo/stellar-xdr"),
+        ("NPM", "@stellar/stellar-sdk", "pkg:npm/%40stellar/stellar-sdk"),
+        ("MAVEN", "network.lightsail:stellar-sdk", "pkg:maven/network.lightsail/stellar-sdk"),
+        ("PYPI", "stellar-sdk", "pkg:pypi/stellar-sdk"),
+    ],
+    ids=["cargo", "scoped-npm", "maven", "pypi"],
+)
+async def test_parse_sbom_links_package_purl_to_repo_release(
+    db_session: AsyncSession,
+    cleanup_db_rows_for_db_tests: None,
+    mocker: Any,
+    caplog: pytest.LogCaptureFixture,
+    system: str,
+    base_package_name: str,
+    base_purl: str,
+) -> None:
+    """SBOM packages with a registered release PURL link to that Repo, not an ExternalRepo."""
+    package_version = "1.0.0"
+    registered_repo_canonical_id = f"pkg:github/test-org/sbom-release-purl-{system.lower()}"
+    registered_repo = Repo(
+        canonical_id=registered_repo_canonical_id,
+        display_name=f"sbom-release-purl-{system.lower()}",
+        visibility=Visibility.public,
+        latest_version=package_version,
+        repo_url=f"https://github.com/test-org/sbom-release-purl-{system.lower()}",
+        releases=[Release(version=package_version, release_date="", purl=base_purl)],
+    )
+    db_session.add(registered_repo)
+    await db_session.commit()
+    matching_repo = await find_repo_by_release_purl(base_purl, session=db_session)
+    assert matching_repo is not None
+
+    duplicate_repo = Repo(
+        canonical_id=f"pkg:github/test-org/sbom-release-purl-duplicate-{system.lower()}",
+        display_name=f"sbom-release-purl-duplicate-{system.lower()}",
+        visibility=Visibility.public,
+        latest_version=package_version,
+        releases=[Release(version=package_version, release_date="", purl=base_purl)],
+    )
+    db_session.add(duplicate_repo)
+    await db_session.commit()
+    caplog.set_level(logging.WARNING, logger="pg_atlas.procrastinate.upserts")
+    caplog.clear()
+
+    sbom_document: dict[str, Any] = json.loads((FIXTURES / "valid.spdx.json").read_bytes())
+    sbom_package = next(package for package in sbom_document["packages"] if package["name"] == "requests")
+    sbom_package["name"] = base_package_name
+    sbom_package["versionInfo"] = package_version
+    sbom_package["externalRefs"] = [
+        {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": f"{base_purl}@{package_version}",
+        }
+    ]
+    raw = json.dumps(sbom_document).encode()
+    claims = _unique_claims()
+    mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=mocker.AsyncMock())
+
+    await handle_sbom_submission(db_session, raw, claims)
+    submission = await _submission_for_payload(db_session, raw, claims)
+    await parse_sbom_and_persist_graph(db_session, submission.id)
+    assert any(
+        record.message == f"find_repo_by_release_purl: multiple Repos match purl={base_purl}, using first"
+        for record in caplog.records
+    )
+
+    submitting_repo = await db_session.scalar(
+        select(Repo).where(Repo.canonical_id == canonical_id_for_github_repo(claims["repository"]))
+    )
+    assert submitting_repo is not None
+    linked_edge = await db_session.scalar(
+        select(DependsOn).where(
+            DependsOn.in_vertex_id == submitting_repo.id,
+            DependsOn.out_vertex_id == matching_repo[0],
+        )
+    )
+    assert linked_edge is not None
+    assert linked_edge.version_range == package_version
+    external_repo = await db_session.scalar(select(ExternalRepo).where(ExternalRepo.canonical_id == base_purl))
+    assert external_repo is None, "A package linked to a Repo release must not also be created as an ExternalRepo"
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")

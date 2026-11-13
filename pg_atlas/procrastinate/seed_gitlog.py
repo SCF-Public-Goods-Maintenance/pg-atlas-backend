@@ -127,14 +127,14 @@ async def _load_last_successful_seed_runs(session: AsyncSession, repo_ids: Seque
         return {}
 
     stmt = (
-        select(GitLogArtifact.repo_id, func.max(GitLogArtifact.seed_run_ordinal))
-        .where(GitLogArtifact.repo_id.in_(repo_ids))
+        select(GitLogArtifact.repo_vertex_id, func.max(GitLogArtifact.seed_run_ordinal))
+        .where(GitLogArtifact.repo_vertex_id.in_(repo_ids))
         .where(GitLogArtifact.status == SubmissionStatus.processed)
-        .group_by(GitLogArtifact.repo_id)
+        .group_by(GitLogArtifact.repo_vertex_id)
     )
     rows = list((await session.execute(stmt)).all())
 
-    return {int(repo_id): int(max_ordinal) for repo_id, max_ordinal in rows if max_ordinal is not None}
+    return {int(repo_id): int(max_ordinal) for repo_id, max_ordinal in rows}
 
 
 def _due_dormant_repo_ids(

@@ -19,11 +19,11 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
+from collections.abc import Collection, Sequence
 from typing import Any
 
-from sqlalchemy import DateTime, and_, case, delete, literal, or_, select, update
+from sqlalchemy import DateTime, String, and_, case, column, delete, literal, or_, select, update, values
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,12 +31,15 @@ from pg_atlas.db_models.base import (
     ActivityStatus,
     EdgeConfidence,
     ProjectType,
+    RedirectPredicate,
+    RepoVertexType,
     Visibility,
 )
+from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release, merge_releases, sorted_releases_desc
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.session import get_session_factory
 from pg_atlas.db_models.vertex_ops import get_vertex
 from pg_atlas.db_models.vertex_ops import upsert_external_repo as _upsert_ext
@@ -163,7 +166,10 @@ async def upsert_repo(
     try:
         vertex = await get_vertex(session, canonical_id)
 
-        if vertex is not None and isinstance(vertex, ExternalRepo):
+        if isinstance(vertex, RedirectVertex):
+            raise ValueError(f"RedirectVertex {canonical_id} -> {vertex.target_vertex_id} cannot be reinstated automatically.")
+
+        if isinstance(vertex, ExternalRepo):
             merged_releases = merge_releases(vertex.releases, releases)
 
             repo_id = await _promote_external_to_repo(
@@ -183,7 +189,7 @@ async def upsert_repo(
 
             return repo_id
 
-        if vertex is not None and isinstance(vertex, Repo):
+        if isinstance(vertex, Repo):
             # Already a Repo — update mutable columns.
             vertex.display_name = display_name
             if latest_version:
@@ -347,10 +353,6 @@ async def upsert_external_repo(
 ) -> int:
     """
     Insert an ``ExternalRepo`` vertex or update it if it already exists.
-
-    If a vertex with the same ``canonical_id`` already exists as a ``Repo``
-    (i.e. it was promoted earlier), the existing ``Repo`` id is returned
-    without modification.
     """
     try:
         vertex = await _upsert_ext(
@@ -401,12 +403,12 @@ async def _promote_external_to_repo(
     """
     from pg_atlas.db_models.base import RepoVertexType
 
-    # 1. Delete ExternalRepo child row.
+    # Delete ExternalRepo child row.
     await session.execute(
         delete(ExternalRepo.__table__).where(ExternalRepo.__table__.c.id == vertex_id)  # type: ignore[arg-type]
     )
 
-    # 2. Update discriminator on the base table.
+    # Update discriminator on the base table.
     await session.execute(
         update(RepoVertex.__table__)  # type: ignore[arg-type]
         .where(RepoVertex.__table__.c.id == vertex_id)
@@ -415,7 +417,7 @@ async def _promote_external_to_repo(
         )
     )
 
-    # 3. Insert Repo child row using Core (bypasses dataclass __init__ ordering).
+    # Insert Repo child row using Core (bypasses dataclass __init__ ordering).
     await session.execute(
         Repo.__table__.insert().values(  # type: ignore[attr-defined]
             id=vertex_id,
@@ -439,6 +441,155 @@ async def _promote_external_to_repo(
 
 
 # ---------------------------------------------------------------------------
+# Demote Repo to RedirectVertex
+# ---------------------------------------------------------------------------
+
+
+async def demote_repo_to_redirect(
+    session: AsyncSession,
+    *,
+    repo_id: int,
+    target_vertex_id: int,
+    predicate: RedirectPredicate,
+) -> None:
+    """Atomically demote a Repo vertex to a RedirectVertex pointing to target_vertex_id."""
+    if repo_id == target_vertex_id:
+        raise ValueError("A vertex cannot redirect to itself")
+
+    repo_vertex = (
+        await session.execute(select(RepoVertex).where(RepoVertex.id == repo_id).with_for_update())
+    ).scalar_one_or_none()
+    if repo_vertex is None:
+        raise ValueError(f"Repo vertex {repo_id} does not exist")
+
+    target_vertex = (
+        await session.execute(select(RepoVertex).where(RepoVertex.id == target_vertex_id).with_for_update())
+    ).scalar_one_or_none()
+    if target_vertex is None or isinstance(target_vertex, RedirectVertex):
+        raise ValueError(f"Target vertex {target_vertex_id} does not exist or is a redirect")
+
+    dependency_table = DependsOn.metadata.tables[DependsOn.__tablename__]
+    repo_table = Repo.metadata.tables[Repo.__tablename__]
+    base_table = RepoVertex.metadata.tables[RepoVertex.__tablename__]
+    redirect_table = RedirectVertex.metadata.tables[RedirectVertex.__tablename__]
+
+    if isinstance(repo_vertex, RedirectVertex):
+        await session.execute(
+            update(redirect_table)
+            .where(redirect_table.c.id == repo_id)
+            .values(target_vertex_id=target_vertex_id, predicate=predicate)
+        )
+        await session.execute(
+            delete(dependency_table).where(
+                or_(
+                    dependency_table.c.in_vertex_id == repo_id,
+                    dependency_table.c.out_vertex_id == repo_id,
+                )
+            )
+        )
+        await session.flush()
+
+        return
+
+    if not isinstance(repo_vertex, Repo):
+        raise ValueError(f"Vertex {repo_id} is not a Repo")
+
+    await session.execute(delete(ContributedTo).where(ContributedTo.repo_id == repo_id))
+
+    # Remove direct pairs that would become self-loops after endpoint replacement.
+    await session.execute(
+        delete(dependency_table).where(
+            or_(
+                and_(dependency_table.c.in_vertex_id == repo_id, dependency_table.c.out_vertex_id == target_vertex_id),
+                and_(dependency_table.c.in_vertex_id == target_vertex_id, dependency_table.c.out_vertex_id == repo_id),
+            )
+        )
+    )
+
+    # Preserve verified evidence when another vertex already depends on the target.
+    incoming_alias = dependency_table.alias("incoming_fork_edge")
+    await session.execute(
+        update(dependency_table)
+        .where(
+            dependency_table.c.out_vertex_id == target_vertex_id,
+            dependency_table.c.confidence != EdgeConfidence.verified_sbom,
+            incoming_alias.c.out_vertex_id == repo_id,
+            incoming_alias.c.in_vertex_id == dependency_table.c.in_vertex_id,
+            incoming_alias.c.confidence == EdgeConfidence.verified_sbom,
+        )
+        .values(
+            confidence=EdgeConfidence.verified_sbom,
+            version_range=incoming_alias.c.version_range,
+        )
+    )
+    incoming_conflicts = select(dependency_table.c.in_vertex_id).where(
+        dependency_table.c.out_vertex_id == repo_id,
+        dependency_table.c.in_vertex_id.in_(
+            select(dependency_table.c.in_vertex_id).where(dependency_table.c.out_vertex_id == target_vertex_id)
+        ),
+    )
+    await session.execute(
+        delete(dependency_table).where(
+            dependency_table.c.out_vertex_id == repo_id,
+            dependency_table.c.in_vertex_id.in_(select(incoming_conflicts.subquery().c.in_vertex_id)),
+        )
+    )
+    await session.execute(
+        update(dependency_table).where(dependency_table.c.out_vertex_id == repo_id).values(out_vertex_id=target_vertex_id)
+    )
+
+    # Preserve verified evidence when the target already depends on the same vertex.
+    outgoing_alias = dependency_table.alias("outgoing_fork_edge")
+    await session.execute(
+        update(dependency_table)
+        .where(
+            dependency_table.c.in_vertex_id == target_vertex_id,
+            dependency_table.c.confidence != EdgeConfidence.verified_sbom,
+            outgoing_alias.c.in_vertex_id == repo_id,
+            outgoing_alias.c.out_vertex_id == dependency_table.c.out_vertex_id,
+            outgoing_alias.c.confidence == EdgeConfidence.verified_sbom,
+        )
+        .values(
+            confidence=EdgeConfidence.verified_sbom,
+            version_range=outgoing_alias.c.version_range,
+        )
+    )
+    outgoing_conflicts = select(dependency_table.c.out_vertex_id).where(
+        dependency_table.c.in_vertex_id == repo_id,
+        dependency_table.c.out_vertex_id.in_(
+            select(dependency_table.c.out_vertex_id).where(dependency_table.c.in_vertex_id == target_vertex_id)
+        ),
+    )
+    await session.execute(
+        delete(dependency_table).where(
+            dependency_table.c.in_vertex_id == repo_id,
+            dependency_table.c.out_vertex_id.in_(select(outgoing_conflicts.subquery().c.out_vertex_id)),
+        )
+    )
+    await session.execute(
+        update(dependency_table).where(dependency_table.c.in_vertex_id == repo_id).values(in_vertex_id=target_vertex_id)
+    )
+
+    await session.execute(delete(dependency_table).where(dependency_table.c.in_vertex_id == dependency_table.c.out_vertex_id))
+    await session.execute(
+        update(redirect_table).where(redirect_table.c.target_vertex_id == repo_id).values(target_vertex_id=target_vertex_id)
+    )
+
+    await session.execute(delete(repo_table).where(repo_table.c.id == repo_id))
+    await session.execute(
+        update(base_table).where(base_table.c.id == repo_id).values(vertex_type=RepoVertexType.redirect.value)
+    )
+    await session.execute(
+        redirect_table.insert().values(
+            id=repo_id,
+            target_vertex_id=target_vertex_id,
+            predicate=predicate,
+        )
+    )
+    await session.flush()
+
+
+# ---------------------------------------------------------------------------
 # Absorb ExternalRepo into existing Repo
 # ---------------------------------------------------------------------------
 
@@ -453,8 +604,11 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
     1. Looks up the ``ExternalRepo`` by *external_canonical_id*.
     2. Deletes self-loop edges that would result from the merge.
-    3. Deletes conflicting edges where the target pair already exists
-       (composite PK ``(in_vertex_id, out_vertex_id)`` enforces uniqueness).
+    3. When the conflicting ``ExternalRepo`` edge is verified-sbom and the
+       target edge is not, upgrades the target edge to verified-sbom with the
+       ``ExternalRepo`` edge's version range; a verified target edge keeps its
+       values. Then deletes the conflicting ``ExternalRepo`` edges (composite
+       PK ``(in_vertex_id, out_vertex_id)`` enforces uniqueness).
     4. Re-points all remaining ``depends_on`` edges from the old vertex to
        *target_vertex_id*.
     5. Deletes the ``ExternalRepo`` child row and ``RepoVertex`` base row.
@@ -465,12 +619,13 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
     All operations happen within a single transaction via SQLAlchemy Core.
     """
     session = await _session()
-    dep = DependsOn.__table__
-    ext_table = ExternalRepo.__table__
-    base_table = RepoVertex.__table__
+    dep = DependsOn.metadata.tables[DependsOn.__tablename__]
+    external_dep = dep.alias("external_dep")
+    ext_table = ExternalRepo.metadata.tables[ExternalRepo.__tablename__]
+    base_table = RepoVertex.metadata.tables[RepoVertex.__tablename__]
 
     try:
-        # 1. Look up ExternalRepo.
+        # Look up ExternalRepo.
         vertex = await get_vertex(session, external_canonical_id)
 
         if vertex is None:
@@ -490,59 +645,77 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 
             return False
 
-        # 2. Delete self-loops that would result from the merge.
+        # Delete self-loops that would result from the merge.
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == target_vertex_id,
                 dep.c.out_vertex_id == ext_id,
             )
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == ext_id,
                 dep.c.out_vertex_id == target_vertex_id,
             )
         )
 
-        # 3. Delete conflicting edges (out_vertex_id direction):
-        #    edges where something depends on ext_id, but already depends on target.
+        # Preserve verified evidence, then delete conflicts (out_vertex_id direction):
+        # edges where something depends on ext_id, but already depends on target.
+        await session.execute(
+            update(dep)
+            .where(
+                dep.c.out_vertex_id == target_vertex_id,
+                dep.c.confidence != EdgeConfidence.verified_sbom,
+                external_dep.c.out_vertex_id == ext_id,
+                external_dep.c.in_vertex_id == dep.c.in_vertex_id,
+                external_dep.c.confidence == EdgeConfidence.verified_sbom,
+            )
+            .values(confidence=EdgeConfidence.verified_sbom, version_range=external_dep.c.version_range)
+        )
         conflict_out = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
             dep.c.out_vertex_id == ext_id,
             dep.c.in_vertex_id.in_(select(dep.c.in_vertex_id).where(dep.c.out_vertex_id == target_vertex_id)),
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.out_vertex_id == ext_id,
                 dep.c.in_vertex_id.in_(select(conflict_out.subquery().c.in_vertex_id)),
             )
         )
 
-        # 4a. Re-point remaining out_vertex_id edges.
-        await session.execute(
-            dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
-        )
+        # Re-point remaining out_vertex_id edges.
+        await session.execute(dep.update().where(dep.c.out_vertex_id == ext_id).values(out_vertex_id=target_vertex_id))
 
-        # 3b. Delete conflicting edges (in_vertex_id direction):
-        #     edges where ext_id depends on something, but target already depends on it.
+        # Preserve verified evidence, then delete conflicts (in_vertex_id direction):
+        # edges where ext_id depends on something, but target already depends on it.
+        await session.execute(
+            update(dep)
+            .where(
+                dep.c.in_vertex_id == target_vertex_id,
+                dep.c.confidence != EdgeConfidence.verified_sbom,
+                external_dep.c.in_vertex_id == ext_id,
+                external_dep.c.out_vertex_id == dep.c.out_vertex_id,
+                external_dep.c.confidence == EdgeConfidence.verified_sbom,
+            )
+            .values(confidence=EdgeConfidence.verified_sbom, version_range=external_dep.c.version_range)
+        )
         conflict_in = select(dep.c.in_vertex_id, dep.c.out_vertex_id).where(
             dep.c.in_vertex_id == ext_id,
             dep.c.out_vertex_id.in_(select(dep.c.out_vertex_id).where(dep.c.in_vertex_id == target_vertex_id)),
         )
         await session.execute(
-            delete(dep).where(  # type: ignore[arg-type]
+            delete(dep).where(
                 dep.c.in_vertex_id == ext_id,
                 dep.c.out_vertex_id.in_(select(conflict_in.subquery().c.out_vertex_id)),
             )
         )
 
-        # 4b. Re-point remaining in_vertex_id edges.
-        await session.execute(
-            dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id)  # type: ignore[attr-defined]
-        )
+        # Re-point remaining in_vertex_id edges.
+        await session.execute(dep.update().where(dep.c.in_vertex_id == ext_id).values(in_vertex_id=target_vertex_id))
 
-        # 5. Delete ExternalRepo child row, then RepoVertex base row.
-        await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))  # type: ignore[arg-type]
-        await session.execute(delete(base_table).where(base_table.c.id == ext_id))  # type: ignore[arg-type]
+        # Delete ExternalRepo child row, then RepoVertex base row.
+        await session.execute(delete(ext_table).where(ext_table.c.id == ext_id))
+        await session.execute(delete(base_table).where(base_table.c.id == ext_id))
 
         await session.commit()
 
@@ -564,7 +737,68 @@ async def absorb_external_repo(external_canonical_id: str, target_vertex_id: int
 # ---------------------------------------------------------------------------
 
 
-async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | None:
+async def find_repos_by_release_purls(
+    purls: Sequence[str],
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, tuple[int, str, int | None]]:
+    """
+    Find Repos whose releases contain any requested PURL in one database query.
+
+    Returns a PURL-to-Repo mapping and warns when multiple Repos match a PURL.
+    If a session is supplied, it is used without being closed.
+    """
+    if not purls:
+        return {}
+
+    owns_session = session is None
+    if session is None:
+        session = await _session()
+
+    try:
+        from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
+        # Keep VALUES unique so repeated inputs cannot duplicate Repo matches or warnings.
+        requested_purls = tuple(dict.fromkeys(purls))
+        purl_lookup = values(
+            column("purl", String()),
+            column("pattern", PG_JSONB),
+            name="requested_purls",
+        ).data([(purl, [{"purl": purl}]) for purl in requested_purls])
+        statement = (
+            select(purl_lookup.c.purl, Repo.id, Repo.canonical_id, Repo.project_id)
+            .select_from(purl_lookup.join(Repo, Repo.releases.op("@>")(purl_lookup.c.pattern)))
+            .order_by(Repo.id, purl_lookup.c.purl)
+        )
+        result = await session.execute(statement)
+        matches: dict[str, list[tuple[int, str, int | None]]] = {}
+
+        for purl, repo_id, canonical_id, project_id in result:
+            matches.setdefault(purl, []).append((repo_id, canonical_id, project_id))
+
+        resolved: dict[str, tuple[int, str, int | None]] = {}
+        for purl in requested_purls:
+            purl_matches = matches.get(purl, [])
+            if not purl_matches:
+                continue
+
+            if len(purl_matches) > 1:
+                logger.warning(f"find_repo_by_release_purl: multiple Repos match purl={purl}, using first")
+
+            resolved[purl] = purl_matches[0]
+
+        return resolved
+
+    finally:
+        if owns_session:
+            await session.close()
+
+
+async def find_repo_by_release_purl(
+    purl: str,
+    *,
+    session: AsyncSession | None = None,
+) -> tuple[int, str, int | None] | None:
     """
     Find a ``Repo`` whose ``releases`` JSONB contains a matching PURL.
 
@@ -572,31 +806,11 @@ async def find_repo_by_release_purl(purl: str) -> tuple[int, str, int | None] | 
 
     Uses PostgreSQL JSONB containment (``@>``) which is GIN-indexable with
     ``jsonb_path_ops``.
+    If a session is supplied, it is used without being closed.
     """
-    from sqlalchemy import cast
-    from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+    matches = await find_repos_by_release_purls([purl], session=session)
 
-    session = await _session()
-
-    try:
-        pattern = cast(literal(json.dumps([{"purl": purl}])), PG_JSONB)
-        result = await session.execute(
-            select(Repo.id, Repo.canonical_id, Repo.project_id).where(Repo.releases.op("@>")(pattern))
-        )
-        rows = result.all()
-
-        if not rows:
-            return None
-
-        if len(rows) > 1:
-            logger.warning(f"find_repo_by_release_purl: multiple Repos match purl={purl}, using first")
-
-        row = rows[0]
-
-        return (row[0], row[1], row[2])
-
-    finally:
-        await session.close()
+    return matches.get(purl)
 
 
 # ---------------------------------------------------------------------------
@@ -653,22 +867,43 @@ async def upsert_depends_on(
 # ---------------------------------------------------------------------------
 
 
-async def associate_repo_with_project(repo_canonical_id: str, project_id: int) -> None:
-    """Set ``project_id`` on a ``Repo`` row identified by its canonical ID."""
+async def clear_project_repo_associations(project_id: int, keep_canonical_ids: Collection[str]) -> None:
+    """Clear this project's association from repos not in the current keep-set."""
     session = await _session()
 
     try:
-        result = await session.execute(select(Repo).where(Repo.canonical_id == repo_canonical_id))
-        repo = result.scalar_one_or_none()
-
-        if repo is not None:
-            repo.project_id = project_id
-            await session.commit()
-
+        await session.execute(
+            update(Repo)
+            .where(
+                Repo.id == RepoVertex.id,
+                Repo.project_id == project_id,
+                RepoVertex.canonical_id.not_in(keep_canonical_ids),
+            )
+            .values(project_id=None)
+        )
+        await session.commit()
     except Exception:
         await session.rollback()
-
         raise
+    finally:
+        await session.close()
 
+
+async def associate_repos_with_project(repo_canonical_ids: Sequence[str], project_id: int) -> None:
+    """Set ``project_id`` on all ``Repo`` rows matching the canonical IDs."""
+    if not repo_canonical_ids:
+        return
+
+    session = await _session()
+    try:
+        await session.execute(
+            update(Repo)
+            .where(Repo.id == RepoVertex.id, RepoVertex.canonical_id.in_(repo_canonical_ids))
+            .values(project_id=project_id)
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     finally:
         await session.close()

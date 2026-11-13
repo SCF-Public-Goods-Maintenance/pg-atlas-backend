@@ -203,11 +203,13 @@ async def run_gitlog_pipeline(
     clone_dir.mkdir(parents=True, exist_ok=True)
 
     for index, repo in enumerate(repos, 1):
-        if not repo.repo_url:
+        repo_vertex_id = repo.id
+        repo_url = repo.repo_url
+        if not repo_url:
             continue
 
         result, raw_output = await _parse_repo_with_backoff(
-            repo.repo_url,
+            repo_url,
             clone_dir,
             since_months,
             clone_timeout,
@@ -228,7 +230,7 @@ async def run_gitlog_pipeline(
 
         if raw_output is not None:
             try:
-                artifact_key = _artifact_key_for_repo(repo.repo_url)
+                artifact_key = _artifact_key_for_repo(repo_url)
                 artifact_filename = f"git-logs/{artifact_key}.gitlog"
                 artifact_path, artifact_content_hash = await store_artifact(raw_output, artifact_filename)
                 should_null_previous_artifact_paths = True
@@ -237,28 +239,29 @@ async def run_gitlog_pipeline(
                 result.errors.append(detail)
 
         async with session_factory() as session:
-            db_repo = await session.get(Repo, repo.id)
+            db_repo = await session.get(Repo, repo_vertex_id)
             if db_repo is None:
-                raise ValueError(f"Repo {repo.id} no longer exists")
+                result.errors.append(f"Repo {repo_vertex_id} no longer exists")
 
-            try:
-                if not result.errors:
-                    persist_result = await persist_repo_result(session, db_repo, result)
+            else:
+                try:
+                    if not result.errors:
+                        persist_result = await persist_repo_result(session, db_repo, result)
 
-                await session.commit()
-            except SQLAlchemyError as exc:
-                detail = f"DB persistence failed for {repo.repo_url}: {type(exc).__name__}: {exc}"
-                logger.exception(detail)
-                result.errors.append(detail)
-                # do not try to persist the repo result again
-                await session.rollback()
+                    await session.commit()
+                except SQLAlchemyError as exc:
+                    detail = f"DB persistence failed for {repo_url}: {type(exc).__name__}: {exc}"
+                    logger.exception(detail)
+                    result.errors.append(detail)
+                    # do not try to persist the repo result again
+                    await session.rollback()
 
             attempt_status = SubmissionStatus.processed if not result.errors else SubmissionStatus.failed
             error_detail = "; ".join(result.errors) if result.errors else None
             try:
                 await record_gitlog_attempt(
                     session,
-                    db_repo.id,
+                    repo_vertex_id,
                     GitLogAttemptAudit(
                         since_months=since_months,
                         seed_run_ordinal=seed_run_ordinal,
@@ -272,16 +275,16 @@ async def run_gitlog_pipeline(
                 )
                 await session.commit()
             except SQLAlchemyError as audit_exc:
-                logger.exception(f"DB audit persistence failed for {repo.repo_url}: {type(audit_exc).__name__}: {audit_exc}")
+                logger.exception(f"DB audit persistence failed for {repo_url}: {type(audit_exc).__name__}: {audit_exc}")
                 logger.error(f"After previous errors: {error_detail}")
 
         if result.errors:
             summary.repos_with_errors += 1
-            summary.error_urls.append(repo.repo_url)
+            summary.error_urls.append(repo_url)
 
         if result.terminal_git_failure:
-            summary.terminal_failure_repo_ids.add(repo.id)
-            summary.terminal_failure_urls.append(repo.repo_url)
+            summary.terminal_failure_repo_ids.add(repo_vertex_id)
+            summary.terminal_failure_urls.append(repo_url)
 
         _log_repo_summary(result, persist_result, index, len(repos), since_months)
 

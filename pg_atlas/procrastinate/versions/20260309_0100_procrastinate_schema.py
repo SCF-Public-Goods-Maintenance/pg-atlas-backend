@@ -23,6 +23,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from alembic import op
 from sqlalchemy import Connection
+from sqlalchemy.engine.interfaces import AdaptedConnection
 from sqlalchemy.pool.base import PoolProxiedConnection
 
 # revision identifiers, used by Alembic.
@@ -677,21 +678,21 @@ def upgrade() -> None:
 
     # access the PoolProxiedConnection (the adapter)
     adapter: PoolProxiedConnection = conn.connection
-    # and the raw 'asyncpg.Connection' (the driver_connection)
-    asyncpg_conn = adapter.driver_connection
-    assert asyncpg_conn
+    dbapi_connection = adapter.dbapi_connection
+    if not isinstance(dbapi_connection, AdaptedConnection):
+        raise TypeError("Expected SQLAlchemy's adapted async DBAPI connection")
 
-    # use the adapter's .await_() method to run the driver's .execute()
     raw_upgrade = PROCRASTINATE_SCHEMA.replace("%%", "%")
-    adapter.await_(asyncpg_conn.execute(raw_upgrade))
+    dbapi_connection.run_async(lambda driver_connection: driver_connection.execute(raw_upgrade))
 
 
 def downgrade() -> None:
     """Remove the Procrastinate task queue schema."""
     conn: Connection = op.get_bind()
     adapter: PoolProxiedConnection = conn.connection
-    raw_asyncpg_conn = adapter.driver_connection
-    assert raw_asyncpg_conn
+    dbapi_connection = adapter.dbapi_connection
+    if not isinstance(dbapi_connection, AdaptedConnection):
+        raise TypeError("Expected SQLAlchemy's adapted async DBAPI connection")
 
     raw_downgrade = PROCRASTINATE_DOWNGRADE.replace("%%", "%")
-    adapter.await_(raw_asyncpg_conn.execute(raw_downgrade))
+    dbapi_connection.run_async(lambda driver_connection: driver_connection.execute(raw_downgrade))

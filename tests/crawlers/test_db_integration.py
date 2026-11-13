@@ -25,7 +25,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -1095,7 +1095,7 @@ async def test_github_concurrent_same_source_crawls_serialize(
     fast_applied = asyncio.Event()
     slow_pages = iter([github_dependents_page1_html, github_dependents_page2_html])
 
-    async def slow_get(url: str) -> httpx.Response:
+    async def slow_get(url: str) -> httpx2.Response:
         page = next(slow_pages)
         if page is github_dependents_page2_html:
             await fast_applied.wait()

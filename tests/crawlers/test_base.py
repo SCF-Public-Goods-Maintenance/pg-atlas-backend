@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 
 from pg_atlas.crawlers.base import (
@@ -39,12 +39,12 @@ class StubCrawler(RegistryCrawler):
         raise NotImplementedError
 
 
-def _mock_response(status_code: int = 200, headers: dict[str, str] | None = None) -> httpx.Response:
-    return httpx.Response(
+def _mock_response(status_code: int = 200, headers: dict[str, str] | None = None) -> httpx2.Response:
+    return httpx2.Response(
         status_code=status_code,
         json={},
         headers=headers or {},
-        request=httpx.Request("GET", "https://example.com/test"),
+        request=httpx2.Request("GET", "https://example.com/test"),
     )
 
 
@@ -89,7 +89,7 @@ async def test_request_with_retry_5xx(mock_http_client: AsyncMock) -> None:
     )
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=3)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 3
 
@@ -99,7 +99,7 @@ async def test_request_with_retry_404(mock_http_client: AsyncMock) -> None:
     mock_http_client.get = AsyncMock(return_value=_mock_response(404))
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=3)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 1
 
@@ -108,13 +108,13 @@ async def test_request_with_retry_timeout(mock_http_client: AsyncMock) -> None:
     """Retries once on timeout, then raises."""
     mock_http_client.get = AsyncMock(
         side_effect=[
-            httpx.TimeoutException("timeout"),
-            httpx.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
+            httpx2.TimeoutException("timeout"),
         ]
     )
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=2)
 
-    with pytest.raises(httpx.TimeoutException):
+    with pytest.raises(httpx2.TimeoutException):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 2
 
@@ -138,7 +138,7 @@ async def test_request_with_retry_unexpected_status(mock_http_client: AsyncMock)
     mock_http_client.get = AsyncMock(return_value=_mock_response(403))
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=3)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 1
 
@@ -170,7 +170,7 @@ async def test_request_with_retry_5xx_then_429_exhausted(mock_http_client: Async
     )
     crawler = StubCrawler(mock_http_client, rate_limit=0.0, max_retries=3)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         await crawler._request_with_retry("https://example.com/test")
     assert mock_http_client.get.call_count == 3
 

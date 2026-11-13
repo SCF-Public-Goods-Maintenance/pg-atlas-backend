@@ -14,7 +14,7 @@ These conventions emerged during A3 and apply to all future write-path work.
   `reference_type` contains `"purl"`, with the version suffix stripped
   (`pkg:cargo/foo@1.2.3` → `pkg:cargo/foo`). Falls back to `package.name.lower()`.
 - The helper functions live in `pg_atlas/ingestion/persist.py`:
-  `canonical_id_for_github_repo()` and `canonical_id_for_spdx_package()`.
+  `canonical_id_for_github_repo()` and `normalize_spdx_package_id()`.
 
 ### JTI upsert safety
 

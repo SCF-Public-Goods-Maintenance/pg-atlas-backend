@@ -12,20 +12,32 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from pg_atlas.db_models.base import EdgeConfidence, Visibility
+from pg_atlas.db_models.base import ActivityStatus, EdgeConfidence, ProjectType, RedirectPredicate, Visibility
+from pg_atlas.db_models.contributed_to import ContributedTo
+from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
+from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release
-from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo, RepoVertex
-from pg_atlas.procrastinate.upserts import absorb_external_repo, find_repo_by_release_purl, upsert_depends_on
+from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
+from pg_atlas.db_models.vertex_ops import get_vertex
+from pg_atlas.procrastinate.upserts import (
+    absorb_external_repo,
+    associate_repos_with_project,
+    clear_project_repo_associations,
+    demote_repo_to_redirect,
+    find_repo_by_release_purl,
+    upsert_depends_on,
+)
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
 
@@ -205,6 +217,348 @@ async def test_absorb_external_repo_deduplicates_conflicts(
     assert edges[0].out_vertex_id == repo.id
 
 
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+@pytest.mark.parametrize("out_direction", [True, False], ids=["out", "in"])
+@pytest.mark.parametrize(
+    ("target_confidence", "target_range", "external_confidence", "external_range", "expected_range"),
+    [
+        (EdgeConfidence.inferred_shadow, None, EdgeConfidence.verified_sbom, "1.2.3", "1.2.3"),
+        (EdgeConfidence.verified_sbom, "2.0.0", EdgeConfidence.inferred_shadow, "1.2.3", "2.0.0"),
+        (EdgeConfidence.verified_sbom, "2.0.0", EdgeConfidence.verified_sbom, "1.2.3", "2.0.0"),
+        (EdgeConfidence.inferred_shadow, ">=1", EdgeConfidence.verified_sbom, None, None),
+        (EdgeConfidence.verified_sbom, None, EdgeConfidence.verified_sbom, "1.2.3", None),
+    ],
+    ids=["upgrade", "preserve-verified", "both-verified", "copy-null-range", "preserve-verified-null-range"],
+)
+async def test_absorb_external_repo_preserves_verified_conflicts(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+    out_direction: bool,
+    target_confidence: EdgeConfidence,
+    target_range: str | None,
+    external_confidence: EdgeConfidence,
+    external_range: str | None,
+    expected_range: str | None,
+) -> None:
+    """Verified evidence survives conflicts in either direction without changing unrelated edges."""
+    factory, session = upsert_test_env
+    repo = Repo(
+        canonical_id="pkg:github/test-org/test-repo-verified-conflict",
+        display_name="test-repo",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    ext = ExternalRepo(
+        canonical_id="pkg:cargo/test-pkg-verified-conflict",
+        display_name="test-pkg",
+        latest_version="1.0.0",
+    )
+    other = ExternalRepo(
+        canonical_id="pkg:npm/other-verified-conflict",
+        display_name="other",
+        latest_version="1.0.0",
+    )
+    unrelated = ExternalRepo(
+        canonical_id="pkg:npm/unrelated-verified-conflict",
+        display_name="unrelated",
+        latest_version="1.0.0",
+    )
+    session.add_all([repo, ext, other, unrelated])
+    await session.commit()
+
+    target_pair = (other.id, repo.id) if out_direction else (repo.id, other.id)
+    external_pair = (other.id, ext.id) if out_direction else (ext.id, other.id)
+    unrelated_pair = (unrelated.id, repo.id) if out_direction else (repo.id, unrelated.id)
+    session.add_all(
+        [
+            DependsOn(
+                in_vertex_id=target_pair[0],
+                out_vertex_id=target_pair[1],
+                confidence=target_confidence,
+                version_range=target_range,
+            ),
+            DependsOn(
+                in_vertex_id=external_pair[0],
+                out_vertex_id=external_pair[1],
+                confidence=external_confidence,
+                version_range=external_range,
+            ),
+            DependsOn(
+                in_vertex_id=unrelated_pair[0],
+                out_vertex_id=unrelated_pair[1],
+                confidence=EdgeConfidence.inferred_shadow,
+                version_range=">=3",
+            ),
+        ]
+    )
+    await session.commit()
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        result = await absorb_external_repo(ext.canonical_id, repo.id)
+
+    assert result is True
+    await session.reset()
+
+    gone = (await session.execute(select(RepoVertex).where(RepoVertex.id == ext.id))).scalar_one_or_none()
+    assert gone is None
+    target_edges = (
+        (
+            await session.execute(
+                select(DependsOn).where(
+                    DependsOn.in_vertex_id == target_pair[0],
+                    DependsOn.out_vertex_id == target_pair[1],
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(target_edges) == 1
+    assert target_edges[0].confidence == EdgeConfidence.verified_sbom
+    assert target_edges[0].version_range == expected_range
+    unrelated_edge = (
+        await session.execute(
+            select(DependsOn).where(
+                DependsOn.in_vertex_id == unrelated_pair[0],
+                DependsOn.out_vertex_id == unrelated_pair[1],
+            )
+        )
+    ).scalar_one()
+    assert unrelated_edge.confidence == EdgeConfidence.inferred_shadow
+    assert unrelated_edge.version_range == ">=3"
+
+
+# ---------------------------------------------------------------------------
+# demote_repo_to_redirect
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+@pytest.mark.parametrize("target_is_external", [False, True], ids=["repo-target", "external-target"])
+async def test_demote_repo_to_redirect_repoints_edges_and_preserves_verified_evidence(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+    target_is_external: bool,
+) -> None:
+    """Demotion removes contributions, redirects edges, and preserves verified conflicts."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    source = Repo(
+        canonical_id=f"pkg:github/test-org/source-{token}",
+        display_name="source",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    if target_is_external:
+        target: RepoVertex = ExternalRepo(
+            canonical_id=f"pkg:npm/target-{token}",
+            display_name="target",
+            latest_version="1.0.0",
+        )
+    else:
+        target = Repo(
+            canonical_id=f"pkg:github/test-org/target-{token}",
+            display_name="target",
+            visibility=Visibility.public,
+            latest_version="1.0.0",
+        )
+    incoming = Repo(
+        canonical_id=f"pkg:github/test-org/incoming-{token}",
+        display_name="incoming",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    dependency = ExternalRepo(
+        canonical_id=f"pkg:npm/dependency-{token}",
+        display_name="dependency",
+        latest_version="1.0.0",
+    )
+    unrelated_dependency = ExternalRepo(
+        canonical_id=f"pkg:npm/unrelated-dependency-{token}",
+        display_name="unrelated dependency",
+        latest_version="1.0.0",
+    )
+    contributor = Contributor(email_hash=token, name="test contributor")
+    session.add_all([source, target, incoming, dependency, unrelated_dependency, contributor])
+    await session.flush()
+    existing_redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/old-alias-{token}",
+        target_vertex_id=source.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add_all(
+        [
+            existing_redirect,
+            DependsOn(
+                in_vertex_id=incoming.id,
+                out_vertex_id=source.id,
+                confidence=EdgeConfidence.verified_sbom,
+                version_range="^1.2",
+            ),
+            DependsOn(
+                in_vertex_id=incoming.id,
+                out_vertex_id=target.id,
+                confidence=EdgeConfidence.inferred_shadow,
+            ),
+            DependsOn(
+                in_vertex_id=source.id,
+                out_vertex_id=dependency.id,
+                confidence=EdgeConfidence.verified_sbom,
+                version_range="<2",
+            ),
+            DependsOn(
+                in_vertex_id=target.id,
+                out_vertex_id=dependency.id,
+                confidence=EdgeConfidence.inferred_shadow,
+            ),
+            DependsOn(in_vertex_id=source.id, out_vertex_id=unrelated_dependency.id),
+            ContributedTo(
+                contributor_id=contributor.id,
+                repo_id=source.id,
+                number_of_commits=1,
+                first_commit_date=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                last_commit_date=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+            ),
+        ]
+    )
+    await session.commit()
+
+    await demote_repo_to_redirect(
+        session,
+        repo_id=source.id,
+        target_vertex_id=target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    await session.commit()
+    await session.reset()
+
+    redirected = await get_vertex(session, source.canonical_id)
+    assert isinstance(redirected, RedirectVertex)
+    assert redirected.target_vertex_id == target.id
+    assert redirected.predicate == RedirectPredicate.fork_of
+    assert (await session.execute(select(ContributedTo).where(ContributedTo.repo_id == source.id))).scalars().all() == []
+    assert (
+        await session.execute(select(RedirectVertex).where(RedirectVertex.id == existing_redirect.id))
+    ).scalar_one().target_vertex_id == target.id
+
+    incoming_edges = (await session.execute(select(DependsOn).where(DependsOn.in_vertex_id == incoming.id))).scalars().all()
+    assert len(incoming_edges) == 1
+    assert incoming_edges[0].out_vertex_id == target.id
+    assert incoming_edges[0].confidence == EdgeConfidence.verified_sbom
+    assert incoming_edges[0].version_range == "^1.2"
+
+    outgoing_edges = (await session.execute(select(DependsOn).where(DependsOn.in_vertex_id == target.id))).scalars().all()
+    assert len(outgoing_edges) == 2
+    by_target = {edge.out_vertex_id: edge for edge in outgoing_edges}
+    assert by_target[dependency.id].confidence == EdgeConfidence.verified_sbom
+    assert by_target[unrelated_dependency.id].confidence == EdgeConfidence.inferred_shadow
+    source_edges = await session.execute(
+        select(DependsOn).where(or_(DependsOn.in_vertex_id == source.id, DependsOn.out_vertex_id == source.id))
+    )
+    assert source_edges.scalars().all() == []
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_demote_repo_to_redirect_updates_existing_redirect_and_removes_edges(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Repeated demotion retargets existing redirects and removes attached dependencies."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    old_target = Repo(
+        canonical_id=f"pkg:github/test-org/old-target-{token}",
+        display_name="old target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    new_target = ExternalRepo(
+        canonical_id=f"pkg:npm/new-target-{token}",
+        display_name="new target",
+        latest_version="1.0.0",
+    )
+    peer = Repo(
+        canonical_id=f"pkg:github/test-org/peer-{token}",
+        display_name="peer",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([old_target, new_target, peer])
+    await session.flush()
+    redirect = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/alias-{token}",
+        target_vertex_id=old_target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add(redirect)
+    await session.flush()
+    redirect_id = redirect.id
+    session.add_all(
+        [
+            DependsOn(in_vertex_id=redirect_id, out_vertex_id=peer.id),
+            DependsOn(in_vertex_id=peer.id, out_vertex_id=redirect_id),
+        ]
+    )
+    await session.commit()
+
+    await demote_repo_to_redirect(
+        session,
+        repo_id=redirect_id,
+        target_vertex_id=new_target.id,
+        predicate=RedirectPredicate.package_of,
+    )
+    await session.commit()
+    await session.reset()
+
+    updated_redirect = await get_vertex(session, redirect.canonical_id)
+    assert isinstance(updated_redirect, RedirectVertex)
+    assert updated_redirect.target_vertex_id == new_target.id
+    assert updated_redirect.predicate == RedirectPredicate.package_of
+    attached_edges = await session.execute(
+        select(DependsOn).where(or_(DependsOn.in_vertex_id == redirect_id, DependsOn.out_vertex_id == redirect_id))
+    )
+    assert attached_edges.scalars().all() == []
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_demote_repo_to_redirect_rejects_invalid_targets(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Demotion rejects self-redirects, missing targets, and redirect targets."""
+    _, session = upsert_test_env
+    token = uuid.uuid4().hex
+    source = Repo(
+        canonical_id=f"pkg:github/test-org/source-invalid-{token}",
+        display_name="source",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    valid_target = Repo(
+        canonical_id=f"pkg:github/test-org/valid-target-{token}",
+        display_name="target",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([source, valid_target])
+    await session.flush()
+    redirect_target = RedirectVertex(
+        canonical_id=f"pkg:github/test-org/redirect-target-{token}",
+        target_vertex_id=valid_target.id,
+        predicate=RedirectPredicate.fork_of,
+    )
+    session.add(redirect_target)
+    await session.commit()
+
+    source_id = source.id
+    redirect_target_id = redirect_target.id
+    for target_vertex_id in (source_id, -1, redirect_target_id):
+        with pytest.raises(ValueError):
+            await demote_repo_to_redirect(
+                session,
+                repo_id=source_id,
+                target_vertex_id=target_vertex_id,
+                predicate=RedirectPredicate.fork_of,
+            )
+        await session.rollback()
+
+
 # ---------------------------------------------------------------------------
 # find_repo_by_release_purl
 # ---------------------------------------------------------------------------
@@ -255,6 +609,86 @@ async def test_find_repo_by_release_purl_not_found(
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_clear_project_repo_associations_is_scoped(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Cleanup clears stale membership without affecting retained or other-project repos."""
+    factory, session = upsert_test_env
+    unique_suffix = uuid.uuid4().hex
+
+    project = Project(
+        canonical_id=f"test:reconcile-project-{unique_suffix}",
+        display_name="Reconcile Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    other_project = Project(
+        canonical_id=f"test:reconcile-other-project-{unique_suffix}",
+        display_name="Other Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    session.add_all([project, other_project])
+    await session.commit()
+    await session.refresh(project)
+    await session.refresh(other_project)
+
+    retained_repo = Repo(
+        canonical_id=f"pkg:github/test-org/retained-{unique_suffix}",
+        display_name="retained",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+    )
+    stale_repo = Repo(
+        canonical_id=f"pkg:github/test-org/stale-{unique_suffix}",
+        display_name="stale",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=project.id,
+    )
+    unavailable_repo = Repo(
+        canonical_id=f"pkg:github/test-org/unavailable-{unique_suffix}",
+        display_name="unavailable",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    other_project_repo = Repo(
+        canonical_id=f"pkg:github/test-org/other-{unique_suffix}",
+        display_name="other",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+        project_id=other_project.id,
+    )
+    session.add_all([retained_repo, stale_repo, unavailable_repo, other_project_repo])
+    await session.commit()
+    await session.refresh(retained_repo)
+    await session.refresh(stale_repo)
+    await session.refresh(unavailable_repo)
+    await session.refresh(other_project_repo)
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        await clear_project_repo_associations(project.id, [retained_repo.canonical_id, unavailable_repo.canonical_id])
+
+    await session.reset()
+    repos = (
+        (
+            await session.execute(
+                select(Repo).where(Repo.id.in_([retained_repo.id, stale_repo.id, unavailable_repo.id, other_project_repo.id]))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    repos_by_id = {repo.id: repo for repo in repos}
+
+    assert repos_by_id[retained_repo.id].project_id == project.id
+    assert repos_by_id[stale_repo.id].project_id is None
+    assert repos_by_id[unavailable_repo.id].project_id is None
+    assert repos_by_id[other_project_repo.id].project_id == other_project.id
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
 async def test_upsert_repo_union_merges_releases(
     upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
 ) -> None:
@@ -283,6 +717,49 @@ async def test_upsert_repo_union_merges_releases(
     repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
     assert repo.releases is not None
     assert [release.version for release in repo.releases] == ["1.1.0", "1.0.0"]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_associate_repos_with_project_updates_matching_rows(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Bulk association updates matching Repo rows and leaves others unchanged."""
+    factory, session = upsert_test_env
+    unique_suffix = uuid.uuid4().hex
+
+    project = Project(
+        canonical_id=f"test:bulk-associate-project-{unique_suffix}",
+        display_name="Bulk Association Project",
+        project_type=ProjectType.scf_project,
+        activity_status=ActivityStatus.live,
+    )
+    matched_repo = Repo(
+        canonical_id=f"pkg:github/test-org/bulk-associate-match-{unique_suffix}",
+        display_name="matched",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    unmatched_repo = Repo(
+        canonical_id=f"pkg:github/test-org/bulk-associate-unmatched-{unique_suffix}",
+        display_name="unmatched",
+        visibility=Visibility.public,
+        latest_version="1.0.0",
+    )
+    session.add_all([project, matched_repo, unmatched_repo])
+    await session.commit()
+    await session.refresh(project)
+    await session.refresh(matched_repo)
+    await session.refresh(unmatched_repo)
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        await associate_repos_with_project([matched_repo.canonical_id], project.id)
+
+    await session.reset()
+    matched = (await session.execute(select(Repo).where(Repo.id == matched_repo.id))).scalar_one()
+    unmatched = (await session.execute(select(Repo).where(Repo.id == unmatched_repo.id))).scalar_one()
+
+    assert matched.project_id == project.id
+    assert unmatched.project_id is None
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")

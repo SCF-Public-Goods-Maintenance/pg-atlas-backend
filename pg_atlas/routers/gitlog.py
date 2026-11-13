@@ -41,7 +41,7 @@ async def list_gitlog_artifacts(
 ) -> PaginatedResponse[GitLogArtifactSummary]:
     """Paginated list of gitlog processing attempts with optional repo filter."""
 
-    base = select(GitLogArtifact, Repo).join(Repo, Repo.id == GitLogArtifact.repo_id)
+    base = select(GitLogArtifact, Repo).join(Repo, Repo.id == GitLogArtifact.repo_vertex_id)
     if repo is not None:
         base = base.where(Repo.canonical_id == repo)
 
@@ -55,7 +55,7 @@ async def list_gitlog_artifacts(
         items.append(
             GitLogArtifactSummary(
                 id=artifact.id,
-                repo_id=artifact.repo_id,
+                repo_id=artifact.repo_vertex_id,
                 repo_canonical_id=repo_row.canonical_id,
                 repo_display_name=repo_row.display_name,
                 artifact_path=artifact.artifact_path,
@@ -90,7 +90,9 @@ async def get_gitlog_artifact(
 
     row = (
         await db.execute(
-            select(GitLogArtifact, Repo).join(Repo, Repo.id == GitLogArtifact.repo_id).where(GitLogArtifact.id == artifact_id)
+            select(GitLogArtifact, Repo)
+            .join(Repo, Repo.id == GitLogArtifact.repo_vertex_id)
+            .where(GitLogArtifact.id == artifact_id)
         )
     ).one_or_none()
 
@@ -112,7 +114,7 @@ async def get_gitlog_artifact(
 
     return GitLogArtifactDetailResponse(
         id=artifact.id,
-        repo_id=artifact.repo_id,
+        repo_id=artifact.repo_vertex_id,
         repo_canonical_id=repo_row.canonical_id,
         repo_display_name=repo_row.display_name,
         artifact_path=artifact.artifact_path,

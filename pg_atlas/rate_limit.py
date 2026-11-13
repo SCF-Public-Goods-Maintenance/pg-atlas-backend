@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import math
-from collections.abc import Callable, Mapping
-from typing import Protocol, cast
+from collections.abc import Callable, Iterable, Mapping
+from re import Pattern
+from typing import Protocol, cast, runtime_checkable
 
 from pyrate_limiter import Duration, Limiter, Rate
 from starlette.responses import JSONResponse
@@ -46,6 +47,24 @@ class AsyncLimiterLike(Protocol):
 
 
 type LimiterFactory = Callable[[int, tuple[str, str]], AsyncLimiterLike]
+
+
+class EffectiveRouteCandidate(Protocol):
+    """Route metadata needed to identify an included-router endpoint."""
+
+    path: str
+    path_regex: Pattern[str]
+    methods: set[str] | None
+
+
+@runtime_checkable
+class IncludedRouterCandidates(Protocol):
+    """FastAPI included routers that expose their effective route candidates."""
+
+    def effective_candidates(self) -> Iterable[EffectiveRouteCandidate]:
+        """Return the routes after include prefixes have been applied."""
+
+        ...
 
 
 def _default_limiter_factory(limit_per_minute: int, policy_key: tuple[str, str]) -> Limiter:
@@ -110,11 +129,13 @@ class ApiRateLimitMiddleware:
     ) -> AsyncLimiterLike:
         """Return the limiter instance for one method-and-endpoint policy."""
 
+        # Reuse an initialized bucket on the common path without taking the lock.
         limiter = self._limiters.get(policy_key)
         if limiter is not None:
             return limiter
 
         async with self._limiter_lock:
+            # Another request may have initialized this policy while we waited.
             limiter = self._limiters.get(policy_key)
             if limiter is not None:
                 return limiter
@@ -162,11 +183,31 @@ def resolve_endpoint_key(scope: Scope) -> str:
     if router is not None:
         for route in router.routes:
             match, _ = route.matches(scope)
-            if match is Match.FULL:
-                route_path = getattr(route, "path", None)
-                if isinstance(route_path, str):
-                    return route_path
+            if match is not Match.FULL:
+                continue
 
+            # Direct Starlette routes expose their normalized path template.
+            route_path = getattr(route, "path", None)
+            if isinstance(route_path, str):
+                return route_path
+
+            # Lazy included routers expose prefixed leaf routes as candidates.
+            request_path = scope.get("path")
+            request_method = scope.get("method")
+            if (
+                not isinstance(route, IncludedRouterCandidates)
+                or not isinstance(request_path, str)
+                or not isinstance(request_method, str)
+            ):
+                continue
+
+            for candidate in route.effective_candidates():
+                if candidate.methods is not None and request_method.upper() not in candidate.methods:
+                    continue
+                if candidate.path_regex.match(request_path) is not None:
+                    return candidate.path
+
+    # Unmatched requests share the fallback policy for their HTTP method.
     return "__unmatched__"
 
 

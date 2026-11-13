@@ -17,7 +17,7 @@ import math
 import time
 from typing import Any
 
-import httpx
+import httpx2
 import msgspec
 
 from pg_atlas.crawlers.base import (
@@ -141,7 +141,7 @@ class CargoCrawler(RegistryCrawler):
 
     def __init__(
         self,
-        client: httpx.AsyncClient,
+        client: httpx2.AsyncClient,
         session_factory: Any,
         rate_limit: float = 1.0,
         max_retries: int = 3,
@@ -180,7 +180,7 @@ class CargoCrawler(RegistryCrawler):
                 resp = await self._request_with_rate_limit(
                     f"{self.BASE_URL}/{package_name}/reverse_dependencies?page={page}&per_page={self.DEPENDENTS_PER_PAGE}"
                 )
-            except (httpx.HTTPStatusError, httpx.TimeoutException, ExhaustedRetries) as exc:
+            except (httpx2.HTTPStatusError, httpx2.TimeoutException, ExhaustedRetries) as exc:
                 logger.warning(f"Failed to fetch crates.io dependents for {package_name}: {exc}")
 
                 return list(dependents_by_canonical_id.values())
@@ -221,7 +221,7 @@ class CargoCrawler(RegistryCrawler):
 
         return list(dependents_by_canonical_id.values())
 
-    async def _request_with_rate_limit(self, url: str) -> httpx.Response:
+    async def _request_with_rate_limit(self, url: str) -> httpx2.Response:
         """Apply per-request pacing before delegating to shared retry logic."""
 
         if self.rate_limit > 0:

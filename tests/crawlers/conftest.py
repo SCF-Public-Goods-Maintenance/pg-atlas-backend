@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 
 FIXTURES = Path(__file__).parent / "data_fixtures"
@@ -168,8 +168,8 @@ def github_dependents_pkg_scoped_html() -> str:
 
 @pytest.fixture
 def mock_http_client() -> AsyncMock:
-    """Mock httpx.AsyncClient for unit tests."""
-    return AsyncMock(spec=httpx.AsyncClient)
+    """Mock httpx2.AsyncClient for unit tests."""
+    return AsyncMock(spec=httpx2.AsyncClient)
 
 
 # ---------------------------------------------------------------------------
@@ -226,11 +226,11 @@ def gh_selector_page(package_ids: list[str]) -> str:
     )
 
 
-def gh_response(text_body: str, status_code: int = 200, headers: dict[str, str] | None = None) -> httpx.Response:
-    """Build a mock HTML httpx.Response."""
-    return httpx.Response(
+def gh_response(text_body: str, status_code: int = 200, headers: dict[str, str] | None = None) -> httpx2.Response:
+    """Build a mock HTML httpx2.Response."""
+    return httpx2.Response(
         status_code=status_code,
         text=text_body,
         headers=headers,
-        request=httpx.Request("GET", "https://github.com"),
+        request=httpx2.Request("GET", "https://github.com"),
     )

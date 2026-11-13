@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
+import httpx2
 
 from pg_atlas.config import settings
 from pg_atlas.db_models.base import ActivityStatus
@@ -121,7 +121,7 @@ def _auth_headers() -> dict[str, str]:
     return {}
 
 
-def _retry_delay_from_headers(headers: httpx.Headers, fallback: float) -> float:
+def _retry_delay_from_headers(headers: httpx2.Headers, fallback: float) -> float:
     """
     Compute the retry delay from rate-limit response headers.
 
@@ -146,10 +146,10 @@ def _retry_delay_from_headers(headers: httpx.Headers, fallback: float) -> float:
 
 
 async def _get_with_retry(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     url: str,
     params: dict[str, str | int],
-) -> httpx.Response:
+) -> httpx2.Response:
     """
     Perform a GET request with exponential back-off on transient errors.
 
@@ -159,7 +159,7 @@ async def _get_with_retry(
     starting from ``INITIAL_BACKOFF_S``.
 
     Raises:
-        httpx.HTTPStatusError: After all retries are exhausted, or on any
+        httpx2.HTTPStatusError: After all retries are exhausted, or on any
             non-retryable HTTP error (4xx other than 429).
     """
     backoff = INITIAL_BACKOFF_S
@@ -186,7 +186,7 @@ async def _get_with_retry(
 
 
 async def _paginated_get(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     url: str,
     params: dict[str, str | int],
 ) -> list[dict[str, Any]]:
@@ -197,7 +197,7 @@ async def _paginated_get(
     items from every page.
 
     Args:
-        client: An ``httpx.AsyncClient`` instance.
+        client: An ``httpx2.AsyncClient`` instance.
         url: The full endpoint URL (without query params).
         params: Base query parameters (e.g. ``system``, ``sortOrder``).
 
@@ -230,7 +230,7 @@ async def _paginated_get(
 # ---------------------------------------------------------------------------
 
 
-async def fetch_grant_pools(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+async def fetch_grant_pools(client: httpx2.AsyncClient) -> list[dict[str, Any]]:
     """
     Fetch all SCF grant pools (rounds) from the OpenGrants API.
 
@@ -250,14 +250,14 @@ async def fetch_grant_pools(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 
 
 async def fetch_grant_applications(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     pool_id: str,
 ) -> list[dict[str, Any]]:
     """
     Fetch all grant applications for a specific pool from the OpenGrants API.
 
     Args:
-        client: An ``httpx.AsyncClient`` instance.
+        client: An ``httpx2.AsyncClient`` instance.
         pool_id: The DAOIP-5 pool identifier
             (e.g. ``"daoip-5:scf:grantPool:scf_#39"``).
 
@@ -277,7 +277,7 @@ async def fetch_grant_applications(
     return applications
 
 
-async def fetch_opengrants_projects(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+async def fetch_opengrants_projects(client: httpx2.AsyncClient) -> list[dict[str, Any]]:
     """
     Fetch all SCF projects from the ``/projects`` endpoint.
 
@@ -609,7 +609,7 @@ def _merge_project_and_applications(
 # ---------------------------------------------------------------------------
 
 
-async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
+async def fetch_scf_projects(client: httpx2.AsyncClient) -> list[ScfProject]:
     """
     Fetch all SCF projects from OpenGrants and return ``ScfProject`` instances.
 
@@ -625,7 +625,7 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
         5. Log warnings for projects without applications and vice versa.
 
     Args:
-        client: A pre-configured ``httpx.AsyncClient``.
+        client: A pre-configured ``httpx2.AsyncClient``.
 
     Returns:
         A list of ``ScfProject`` dataclasses ready for ``Project`` upsert.
@@ -649,7 +649,7 @@ async def fetch_scf_projects(client: httpx.AsyncClient) -> list[ScfProject]:
 
         try:
             apps = await fetch_grant_applications(client, pool_id)
-        except httpx.HTTPStatusError as exc:
+        except httpx2.HTTPStatusError as exc:
             logger.error(f"Failed to fetch applications for pool {pool_id} ({pool_name}): {exc}")
 
             continue

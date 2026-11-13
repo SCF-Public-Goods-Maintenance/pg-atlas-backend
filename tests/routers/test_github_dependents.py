@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
