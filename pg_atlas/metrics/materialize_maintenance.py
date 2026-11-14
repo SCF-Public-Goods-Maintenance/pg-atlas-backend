@@ -1,10 +1,10 @@
 """
 Maintenance profile materialization from stored signals.
 
-Reads the eligible population (repos associated with a registered project),
-computes release cadence from stored releases, commit activity from the
-latest git-log artifact, and the collected issue/PR signals from
-``repo_metadata["maintenance_signals"]``, percentile-ranks every scalar over
+Reads the eligible population (repos of PG Award projects, flagged by
+``Project.pg_award``), computes release cadence from stored releases, commit
+activity from the latest git-log artifact, and the collected issue/PR signals
+from ``repo_metadata["maintenance_signals"]``, percentile-ranks every scalar over
 its non-NULL pool, and writes the inspectable profile to
 ``repo_metadata["maintenance_profile"]``. There is no combined score: the
 profile is per-signal raw values, percentile ranks, and coverage states.
@@ -12,8 +12,9 @@ profile is per-signal raw values, percentile ranks, and coverage states.
 Percentile direction is normalized: lower-is-better scalars (gaps, ages,
 counts, days-since) are inverted before ranking, so a higher percentile
 always means better upkeep. Percentile pools deliberately cover only the
-eligible population — funded public goods compare against each other — and
-every ranked scalar carries its pool size; the profile carries its as-of.
+eligible population, so the repos of PG Award projects compare against each
+other, and every ranked scalar carries its pool size; the profile carries its
+as-of.
 
 Collected values and the stored push time (judged by when it was observed)
 rank only while fresh (``MAINTENANCE_SIGNALS_MAX_AGE_DAYS``), and git-log
@@ -61,6 +62,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.config import settings
 from pg_atlas.db_models.base import SubmissionStatus
 from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
+from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_metadata import repo_metadata_merge_expression
 from pg_atlas.db_models.repo_vertex import Repo
@@ -102,6 +104,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+#: Correlated eligibility predicate: the repo belongs to a ``pg_award`` project.
+#: ``EXISTS`` keeps the negation true for repos without a project.
+_REPO_OF_PG_AWARD_PROJECT = select(Project.id).where(Project.id == Repo.project_id, Project.pg_award.is_(True)).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -731,12 +737,13 @@ async def _write_profiles_and_clear_stale(
 
     ``profile_payloads`` maps eligible repo ids to their profile documents;
     ``stale_ids`` are removal candidates selected before this pass. An id in
-    both is written as a profile: the eligible-population read saw it linked
-    to a project; if it stays unlinked, the next run removes the profile. A
-    removal re-checks its predicates in the UPDATE itself
-    (still unlinked, still carrying a profile), so a repo reassociated with
-    a project after the candidate read keeps its profile, and only rows the
-    UPDATE actually changed are counted. Returns
+    both is written as a profile: the eligible-population read saw it in a
+    ``pg_award`` project; if it stays outside one, the next run removes the
+    profile. A removal re-checks its predicates in the UPDATE itself (still
+    not in a ``pg_award`` project, still carrying a profile), so a repo whose
+    project becomes ``pg_award`` or that joins a ``pg_award`` project after
+    the candidate read keeps its profile, and only rows the UPDATE actually
+    changed are counted. Returns
     ``(profiles_written, stale_profiles_cleared)``.
     """
 
@@ -758,7 +765,7 @@ async def _write_profiles_and_clear_stale(
         result = await session.execute(
             update(Repo)
             .where(Repo.id == repo_id)
-            .where(Repo.project_id.is_(None))
+            .where(~_REPO_OF_PG_AWARD_PROJECT)
             .where(Repo.repo_metadata.has_key(MAINTENANCE_PROFILE_KEY))
             .values(repo_metadata=Repo.repo_metadata.op("-")(literal(MAINTENANCE_PROFILE_KEY)))
             .execution_options(synchronize_session=False)
@@ -822,7 +829,7 @@ async def materialize_maintenance_profiles(
                 Repo.pushed_at,
                 Repo.pushed_at_observed_at,
             )
-            .where(Repo.project_id.is_not(None))
+            .where(_REPO_OF_PG_AWARD_PROJECT)
             .order_by(Repo.id)
         )
     ).all()
@@ -902,7 +909,7 @@ async def materialize_maintenance_profiles(
             (
                 await session.execute(
                     select(Repo.id)
-                    .where(Repo.project_id.is_(None))
+                    .where(~_REPO_OF_PG_AWARD_PROJECT)
                     .where(Repo.repo_metadata.has_key(MAINTENANCE_PROFILE_KEY))
                     .order_by(Repo.id)
                 )

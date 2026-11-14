@@ -20,7 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.config import settings
@@ -91,6 +91,7 @@ async def _seed_maintenance_fixture(
     # the percentile pools are deterministic for this test.
     await session.execute(update(Repo).values(releases=None, repo_metadata=None, pushed_at=None, pushed_at_observed_at=None))
     await session.execute(update(GitLogArtifact).values(status=SubmissionStatus.failed))
+    await session.execute(update(Project).values(pg_award=False))
     await session.flush()
 
     project = Project(
@@ -98,6 +99,7 @@ async def _seed_maintenance_fixture(
         display_name=f"Maintenance {suffix}",
         project_type=ProjectType.public_good,
         activity_status=ActivityStatus.live,
+        pg_award=True,
     )
     session.add(project)
     await session.flush()
@@ -355,6 +357,30 @@ class TestMaterializeMaintenanceProfiles:
         assert payloads
         assert await _load_profile(session, fixture.repo_full_id) is None
 
+    async def test_opted_out_projects_lose_their_profiles(
+        self,
+        rollback_db_session: AsyncSession,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Repos of a project with pg_award false get no profile; with every project opted out, all profiles go."""
+
+        session = rollback_db_session
+        fixture = await _seed_maintenance_fixture(session, tmp_path_factory, monkeypatch)
+        first_stats, _ = await materialize_maintenance_profiles(session, now=fixture.now)
+        assert first_stats.profiles_written == 3
+        assert await _load_profile(session, fixture.repo_full_id) is not None
+
+        await session.execute(update(Project).values(pg_award=False))
+        stats, payloads = await materialize_maintenance_profiles(session, now=fixture.now)
+
+        assert stats.repos_eligible == 0
+        assert stats.profiles_written == 0
+        assert stats.stale_profiles_cleared == 3
+        assert payloads == {}
+        profiled_repos = select(func.count()).select_from(Repo).where(Repo.repo_metadata.has_key(MAINTENANCE_PROFILE_KEY))
+        assert (await session.execute(profiled_repos)).scalar_one() == 0
+
 
 async def _seed_host_candidate(
     session: AsyncSession,
@@ -376,6 +402,7 @@ async def _seed_host_candidate(
         display_name=f"Host {suffix}",
         project_type=ProjectType.public_good,
         activity_status=ActivityStatus.live,
+        pg_award=True,
     )
     session.add(project)
     await session.flush()
@@ -1314,8 +1341,8 @@ class TestWriteProfilesAndClearStale:
         assert session.updated_ids == [10, 20, 30, 40]
         assert (written, cleared) == (2, 2)
         # Removals carry their eligibility predicates; profile writes do not.
-        assert "project_id IS NULL" in session.statements[0]
-        assert "project_id IS NULL" not in session.statements[1]
+        assert "pg_award" in session.statements[0]
+        assert "pg_award" not in session.statements[1]
 
     async def test_id_in_both_sets_is_written_as_a_profile(self) -> None:
         from pg_atlas.metrics.materialize_maintenance import _write_profiles_and_clear_stale
@@ -1329,7 +1356,7 @@ class TestWriteProfilesAndClearStale:
         )
 
         assert session.updated_ids == [15]
-        assert "project_id IS NULL" not in session.statements[0]
+        assert "pg_award" not in session.statements[0]
         assert (written, cleared) == (1, 0)
 
     async def test_removal_counts_only_affected_rows(self) -> None:
@@ -1379,6 +1406,7 @@ class TestStaleRemovalRecheck:
             display_name="Reassociated",
             project_type=ProjectType.public_good,
             activity_status=ActivityStatus.live,
+            pg_award=True,
         )
         session.add(project)
         await session.flush()

@@ -11,10 +11,13 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx2
 import pytest
+import yaml
 from procrastinate.exceptions import AlreadyEnqueued
 from pytest_mock import MockerFixture
 
@@ -30,9 +33,9 @@ from pg_atlas.procrastinate.opengrants import ScfProject
 
 try:
     from pg_atlas.procrastinate.tasks import (
+        _PROJECT_OVERRIDE_DIR,
         GitHubRepoMetadata,
         PackageReference,
-        _load_project_overrides,
         _purl_type_for_system,
         collect_maintenance_signals,
         crawl_github_repo,
@@ -40,6 +43,7 @@ try:
         crawl_package_registry,
         defer_with_lock,
         demote_fork_repo_to_redirect,
+        load_project_overrides,
         process_gitlog_batch,
         process_project,
         sync_opengrants,
@@ -79,9 +83,83 @@ def test_purl_type_for_system() -> None:
 
 
 def test_load_project_overrides() -> None:
-    mapping = _load_project_overrides()
+    mapping = load_project_overrides()
     assert "daoip-5:scf:project:stellar_sdf" in mapping
     assert "daoip-5:scf:project:kalepail" in mapping
+    assert all(isinstance(entry["pg_award"], bool) for entry in mapping.values())
+
+    project_override_keys = set(yaml.safe_load((_PROJECT_OVERRIDE_DIR / "project-overrides.yml").read_text())) - {"$schema"}
+    assert project_override_keys
+    assert all(mapping[key]["pg_award"] is False for key in project_override_keys)
+
+
+def _write_override_file(directory: Path, name: str, entries: dict[str, dict[str, Any]]) -> None:
+    """Write one override file with the ``$schema`` key the loader expects."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(yaml.safe_dump({"$schema": "../schema-override-project.yml", **entries}))
+
+
+def test_load_project_overrides_resolves_pg_award(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proposal entries default to true and may opt out; entries of other files are false."""
+
+    _write_override_file(
+        tmp_path,
+        "pg-proposal-overrides.yml",
+        {
+            "daoip-5:scf:project:proposal_default": {},
+            "daoip-5:scf:project:proposal_opt_out": {"pg_award": False},
+        },
+    )
+    _write_override_file(tmp_path, "project-overrides.yml", {"daoip-5:scf:project:curated": {}})
+    monkeypatch.setattr("pg_atlas.procrastinate.tasks._PROJECT_OVERRIDE_DIR", tmp_path)
+
+    mapping = load_project_overrides()
+
+    assert {key: entry["pg_award"] for key, entry in mapping.items()} == {
+        "daoip-5:scf:project:proposal_default": True,
+        "daoip-5:scf:project:proposal_opt_out": False,
+        "daoip-5:scf:project:curated": False,
+    }
+
+
+def test_load_project_overrides_rejects_pg_award_outside_the_proposal_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_override_file(tmp_path, "pg-proposal-overrides.yml", {"daoip-5:scf:project:proposal": {}})
+    _write_override_file(tmp_path, "project-overrides.yml", {"daoip-5:scf:project:curated": {"pg_award": True}})
+    monkeypatch.setattr("pg_atlas.procrastinate.tasks._PROJECT_OVERRIDE_DIR", tmp_path)
+
+    with pytest.raises(ValueError) as exc_info:
+        load_project_overrides()
+
+    assert "project-overrides.yml" in str(exc_info.value)
+    assert "pg_award" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("value", ["false", 1])
+def test_load_project_overrides_rejects_non_boolean_pg_award(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    _write_override_file(tmp_path, "pg-proposal-overrides.yml", {"daoip-5:scf:project:proposal": {"pg_award": value}})
+    monkeypatch.setattr("pg_atlas.procrastinate.tasks._PROJECT_OVERRIDE_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="non-boolean 'pg_award'"):
+        load_project_overrides()
+
+
+@pytest.mark.parametrize("create_directory", [True, False], ids=["missing-proposal-file", "missing-directory"])
+def test_load_project_overrides_requires_the_proposal_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create_directory: bool
+) -> None:
+    override_dir = tmp_path / "projects"
+    if create_directory:
+        _write_override_file(override_dir, "project-overrides.yml", {"daoip-5:scf:project:curated": {}})
+
+    monkeypatch.setattr("pg_atlas.procrastinate.tasks._PROJECT_OVERRIDE_DIR", override_dir)
+
+    with pytest.raises(ValueError, match="pg-proposal-overrides.yml"):
+        load_project_overrides()
 
 
 async def test_defer_with_lock_handles_already_enqueued(mocker: Any) -> None:
@@ -117,12 +195,13 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
     mocker.patch(
-        "pg_atlas.procrastinate.tasks._load_project_overrides",
+        "pg_atlas.procrastinate.tasks.load_project_overrides",
         return_value={
             "proj:to-be-inserted": {
                 "display_name": "To be inserted",
                 "activity_status": "non-responsive",
                 "git_owner_url": "https://github.com/sloth",
+                "pg_award": True,
             },
             "proj:no-code": {
                 "category": "Visibility",
@@ -131,32 +210,39 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
                     "https://github.com/enriched/repo",
                     "https://github.com/upstream/opera",
                 ],
+                "pg_award": True,
             },
             "proj:with-code": {
                 "activity_status": "live",
                 "metadata": {"description": "Contracts launched on mainnet!"},
+                "pg_award": False,
             },
         },
     )
+    reconcile_mock = mocker.patch("pg_atlas.procrastinate.tasks.reconcile_pg_award", new=mocker.AsyncMock(return_value=(0, 0)))
     defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants()
 
+    reconcile_mock.assert_awaited_once_with({"proj:to-be-inserted", "proj:no-code"})
     defer_mock.assert_awaited_once()
     defer_data: tuple[dict[str, Any], ...] = defer_mock.call_args_list[0].args
     assert len(defer_data) == 3
     assert defer_data[0]["git_owner_url"] == "https://github.com/enriched"
     assert defer_data[0]["git_repo_urls"] == ["https://github.com/enriched/repo", "https://github.com/upstream/opera"]
     assert defer_data[0]["category"] == "Visibility"
+    assert defer_data[0]["pg_award"] is True
     assert defer_data[1]["activity_status"] == ActivityStatus.live
     assert defer_data[1]["git_repo_urls"] == ["https://github.com/a/b"]
     assert defer_data[1]["category"] == "Smart Contracts"
     assert defer_data[1]["project_metadata"]["description"] == "Contracts launched on mainnet!"
+    assert defer_data[1]["pg_award"] is False
     assert defer_data[2]["canonical_id"] == "proj:to-be-inserted"
     assert defer_data[2]["display_name"] == "To be inserted"
     assert defer_data[2]["activity_status"] == "non-responsive"
     assert defer_data[2]["git_owner_url"] == "https://github.com/sloth"
     assert defer_data[2]["git_repo_urls"] == []
+    assert defer_data[2]["pg_award"] is True
 
 
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
@@ -180,7 +266,8 @@ async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> 
     ]
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
-    mocker.patch("pg_atlas.procrastinate.tasks._load_project_overrides", return_value={})
+    mocker.patch("pg_atlas.procrastinate.tasks.load_project_overrides", return_value={})
+    mocker.patch("pg_atlas.procrastinate.tasks.reconcile_pg_award", new=mocker.AsyncMock(return_value=(0, 0)))
     defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
 
     await sync_opengrants(canonical_ids=["daoip-5:scf:project:python_stellar_sdk"])
@@ -202,10 +289,11 @@ async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> 
             category="Developer Tooling",
         )
     ]
-    overrides = {"daoip-5:scf:project:need_to_insert": dict[str, str]()}
+    overrides = {"daoip-5:scf:project:need_to_insert": {"pg_award": True}}
 
     mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=projects))
-    mocker.patch("pg_atlas.procrastinate.tasks._load_project_overrides", return_value=overrides)
+    mocker.patch("pg_atlas.procrastinate.tasks.load_project_overrides", return_value=overrides)
+    mocker.patch("pg_atlas.procrastinate.tasks.reconcile_pg_award", new=mocker.AsyncMock(return_value=(0, 0)))
     defer_mock = mocker.patch.object(process_project, "defer_async", new=mocker.AsyncMock())
 
     with pytest.raises(ValueError, match="not found") as exc_info:
@@ -222,6 +310,29 @@ async def test_sync_opengrants_raises_for_unknown_canonical_ids(mocker: Any) -> 
     assert "daoip-5:scf:project:missing_two" in str(exc_info.value)
     assert "daoip-5:scf:project:python_stellar_sdk" not in str(exc_info.value)
     assert "daoip-5:scf:project:need_to_insert" not in str(exc_info.value)
+    defer_mock.assert_not_awaited()
+
+
+async def test_sync_opengrants_targeted_run_reconciles_all_pg_award_keys_before_the_fetch(mocker: Any) -> None:
+    """A targeted run reconciles every pg_award key, even when the OpenGrants fetch fails."""
+
+    overrides = {
+        "daoip-5:scf:project:targeted": {"pg_award": True},
+        "daoip-5:scf:project:other_proposal": {"pg_award": True},
+        "daoip-5:scf:project:opted_out": {"pg_award": False},
+    }
+    mocker.patch("pg_atlas.procrastinate.tasks.load_project_overrides", return_value=overrides)
+    reconcile_mock = mocker.patch("pg_atlas.procrastinate.tasks.reconcile_pg_award", new=mocker.AsyncMock(return_value=(0, 0)))
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks.fetch_scf_projects",
+        new=mocker.AsyncMock(side_effect=httpx2.ConnectError("OpenGrants unreachable")),
+    )
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
+
+    with pytest.raises(httpx2.ConnectError):
+        await sync_opengrants(canonical_ids=["daoip-5:scf:project:targeted"])
+
+    reconcile_mock.assert_awaited_once_with({"daoip-5:scf:project:targeted", "daoip-5:scf:project:other_proposal"})
     defer_mock.assert_not_awaited()
 
 
@@ -278,9 +389,11 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
         git_repo_urls=[],
         project_metadata={"k": "v"},
         category="Developer Tooling",
+        pg_award=True,
     )
 
     assert upsert_project_mock.call_args.kwargs["project_type"] == ProjectType.public_good
+    assert upsert_project_mock.call_args.kwargs["pg_award"] is True
     crawl_defer_mock.assert_awaited_once()
     defer_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args_list[0].args
     assert len(defer_data) == 1
@@ -999,10 +1112,12 @@ async def test_process_project_edu_community_skips_crawl(mocker: Any) -> None:
         git_repo_urls=[],
         project_metadata={"k": "v"},
         category="Education & Community",
+        pg_award=True,
     )
 
     upsert_mock.assert_called_once()
     assert upsert_mock.call_args.kwargs["category"] == "Education & Community"
+    assert upsert_mock.call_args.kwargs["pg_award"] is True
     list_repos_mock.assert_not_called()
     crawl_mock.assert_not_called()
 

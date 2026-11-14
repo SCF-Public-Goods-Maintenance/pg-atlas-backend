@@ -78,12 +78,15 @@ async def upsert_project(
     git_owner_url: str | None = None,
     category: str | None = None,
     project_metadata: dict[str, Any] | None = None,
+    pg_award: bool = False,
 ) -> int:
     """
     Insert or update a ``Project`` row and return its ``id``.
 
     On conflict (same ``canonical_id`` already present), the mutable columns
-    are overwritten with the new values.
+    are overwritten with the new values. ``pg_award`` is stored only when the
+    row is inserted: the reconciliation (``reconcile_pg_award``) owns the flag
+    on existing rows, so an update leaves it untouched.
     """
     session = await _session()
 
@@ -100,6 +103,7 @@ async def upsert_project(
                 git_owner_url=git_owner_url,
                 category=category,
                 project_metadata=project_metadata,
+                pg_award=pg_award,
             )
             session.add(project)
         else:
@@ -121,6 +125,65 @@ async def upsert_project(
         logger.info(f"Upserted Project {canonical_id} (id={project_id})")
 
         return project_id
+
+    except Exception:
+        await session.rollback()
+
+        raise
+
+    finally:
+        await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Project pg_award reconciliation
+# ---------------------------------------------------------------------------
+
+
+async def reconcile_pg_award_in_session(session: AsyncSession, pg_award_canonical_ids: Collection[str]) -> tuple[int, int]:
+    """
+    Set ``Project.pg_award`` to membership in ``pg_award_canonical_ids`` inside the caller's transaction.
+
+    One select locks the rows whose stored flag differs from their target, in
+    ascending ``id`` order (the ``Project`` lock order), and only those rows are
+    updated, so a reconciliation without differences writes nothing. An empty
+    set clears every flag. Does not commit. Returns
+    ``(rows_set_true, rows_set_false)``.
+    """
+
+    is_pg_award = Project.canonical_id.in_(sorted(pg_award_canonical_ids))
+    differing_rows = (
+        await session.execute(
+            select(Project.id, Project.pg_award).where(Project.pg_award != is_pg_award).order_by(Project.id).with_for_update()
+        )
+    ).all()
+
+    if differing_rows:
+        await session.execute(
+            update(Project)
+            .where(Project.id.in_([project_id for project_id, _ in differing_rows]))
+            .values(pg_award=is_pg_award)
+            .execution_options(synchronize_session=False)
+        )
+
+    rows_set_true = sum(1 for _, stored_pg_award in differing_rows if not stored_pg_award)
+
+    return rows_set_true, len(differing_rows) - rows_set_true
+
+
+async def reconcile_pg_award(pg_award_canonical_ids: Collection[str]) -> tuple[int, int]:
+    """
+    Run ``reconcile_pg_award_in_session`` in its own session and commit.
+
+    Returns ``(rows_set_true, rows_set_false)``.
+    """
+    session = await _session()
+
+    try:
+        counts = await reconcile_pg_award_in_session(session, pg_award_canonical_ids)
+        await session.commit()
+
+        return counts
 
     except Exception:
         await session.rollback()

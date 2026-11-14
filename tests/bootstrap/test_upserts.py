@@ -37,6 +37,7 @@ from pg_atlas.procrastinate.upserts import (
     demote_repo_to_redirect,
     find_repo_by_release_purl,
     upsert_depends_on,
+    upsert_project,
 )
 from tests.conftest import get_test_database_url
 from tests.db_cleanup import SBOM_DB_TABLE_SPECS, capture_snapshot, cleanup_created_rows
@@ -49,9 +50,11 @@ async def upsert_test_env() -> AsyncGenerator[tuple[async_sessionmaker[AsyncSess
     """
     Provide a session factory for upserts and a separate session for assertions.
 
-    The factory is patched into ``upserts.get_session_factory`` so the upsert
+    The fixture patches nothing: each test patches the yielded factory into
+    ``pg_atlas.procrastinate.upserts.get_session_factory`` itself, so the upsert
     functions create their own sessions (with normal commit/close lifecycle).
-    A separate assertion session is yielded for test setup and verification.
+    The assertion session serves test setup and verification. Rows created in
+    the tables of ``SBOM_DB_TABLE_SPECS`` are removed afterwards.
     """
     database_url = get_test_database_url()
     if not database_url:
@@ -686,6 +689,39 @@ async def test_clear_project_repo_associations_is_scoped(
     assert repos_by_id[stale_repo.id].project_id is None
     assert repos_by_id[unavailable_repo.id].project_id is None
     assert repos_by_id[other_project_repo.id].project_id == other_project.id
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_upsert_project_stores_pg_award_only_on_insert(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """An insert stores pg_award; an update of the same project leaves it to the reconciliation."""
+    factory, session = upsert_test_env
+    canonical_id = f"test:pg-award-lifecycle-{uuid.uuid4().hex}"
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        project_id = await upsert_project(
+            canonical_id=canonical_id,
+            display_name="PG Award Lifecycle",
+            project_type=ProjectType.scf_project,
+            activity_status=ActivityStatus.live,
+            pg_award=True,
+        )
+        updated_id = await upsert_project(
+            canonical_id=canonical_id,
+            display_name="PG Award Lifecycle Renamed",
+            project_type=ProjectType.scf_project,
+            activity_status=ActivityStatus.live,
+            pg_award=False,
+        )
+
+    assert updated_id == project_id
+    await session.reset()
+    display_name, pg_award = (
+        await session.execute(select(Project.display_name, Project.pg_award).where(Project.id == project_id))
+    ).one()
+    assert display_name == "PG Award Lifecycle Renamed"
+    assert pg_award is True
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")

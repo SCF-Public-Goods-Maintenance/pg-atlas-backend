@@ -80,6 +80,7 @@ from pg_atlas.procrastinate.upserts import (
     demote_repo_to_redirect,
     find_repo_by_release_purl,
     persist_pushed_at,
+    reconcile_pg_award,
     upsert_depends_on,
     upsert_external_repo,
     upsert_project,
@@ -98,6 +99,9 @@ DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "R
 # ---------------------------------------------------------------------------
 
 _PROJECT_OVERRIDE_DIR = Path(__file__).parent.parent / "data" / "projects"
+
+#: The only override file whose entries may set ``pg_award``; its entries default to ``True``.
+_PG_PROPOSAL_OVERRIDE_FILE = "pg-proposal-overrides.yml"
 
 _MAX_RELEASE_ENTRIES = 555
 
@@ -219,12 +223,18 @@ async def sync_opengrants(
     """
     Root bootstrap task: fetch all SCF projects and fan out.
 
-    Fetches every SCF round from OpenGrants, deduplicates by
-    ``projectId``, patches project data with their overrides, and
-    defers one ``process_project`` task per project.
+    Loads the project overrides and reconciles ``Project.pg_award`` with
+    the ``pg_award`` entries of all overrides, in every run (full and
+    targeted) and before any OpenGrants request. Then fetches every SCF
+    round from OpenGrants, deduplicates by ``projectId``, patches project
+    data with their overrides, and defers one ``process_project`` task per
+    project.
     """
     logger.info("sync_opengrants: starting")
-    project_overrides = _load_project_overrides()
+    project_overrides = load_project_overrides()
+    pg_award_canonical_ids = {key for key, entry in project_overrides.items() if entry["pg_award"]}
+    pg_award_set_true, pg_award_set_false = await reconcile_pg_award(pg_award_canonical_ids)
+    logger.info(f"sync_opengrants: pg_award reconciled: set_true={pg_award_set_true} set_false={pg_award_set_false}")
 
     async with httpx2.AsyncClient(timeout=60.0) as client:
         projects: list[ScfProject] = await fetch_scf_projects(client)
@@ -291,11 +301,13 @@ async def process_project(
     project_metadata: dict[str, Any] | None,
     category: str | None = None,
     extended_universe: bool = False,
+    pg_award: bool = False,
 ) -> None:
     """
     Process a single SCF project.
 
-    1. Upsert a ``Project`` row.
+    1. Upsert a ``Project`` row. ``pg_award`` is stored only when the row is
+       inserted; on existing rows ``sync_opengrants`` reconciles the flag.
     2. If category is "Education & Community", skip GitHub/deps.dev crawling.
     3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
 
@@ -321,6 +333,7 @@ async def process_project(
             git_owner_url=git_owner_url,
             category=category,
             project_metadata=project_metadata,
+            pg_award=pg_award,
         )
         logger.info(f"process_project: skipping crawl for Education & Community project {canonical_id}")
 
@@ -389,6 +402,7 @@ async def process_project(
         git_owner_url=git_owner_url,
         category=category,
         project_metadata=project_metadata,
+        pg_award=pg_award,
     )
 
     # ----- Reconcile Repo associations for the restricted crawl -----
@@ -1070,16 +1084,24 @@ def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[
 # ---------------------------------------------------------------------------
 
 
-def _load_project_overrides() -> dict[str, dict[str, Any]]:
+def load_project_overrides() -> dict[str, dict[str, Any]]:
     """
     Load all YAML files containing project overrides.
 
     Returns a dict mapping ``canonical_id`` → override field dict (e.g. display_name,
-    activity_status, git_owner_url, git_repo_url, metadata).
-    Raises ValueError if a project key is encountered in multiple files.
+    activity_status, git_owner_url, git_repo_url, metadata, pg_award).
+
+    Every entry carries a resolved boolean ``pg_award``: entries of
+    ``pg-proposal-overrides.yml`` take their ``pg_award`` value and default to
+    ``True``; entries of every other file are ``False``.
+
+    Raises ValueError if a project key is encountered in multiple files, if a
+    file other than ``pg-proposal-overrides.yml`` sets ``pg_award``, if a
+    ``pg_award`` value is not a boolean, or if ``pg-proposal-overrides.yml`` is
+    not found in the override directory.
     """
-    if not _PROJECT_OVERRIDE_DIR.exists():
-        return {}
+    if not (_PROJECT_OVERRIDE_DIR / _PG_PROPOSAL_OVERRIDE_FILE).is_file():
+        raise ValueError(f"Project override file {_PG_PROPOSAL_OVERRIDE_FILE!r} not found in {str(_PROJECT_OVERRIDE_DIR)!r}")
 
     overrides: dict[str, dict[str, Any]] = {}
     override_sources: dict[str, str] = {}
@@ -1090,11 +1112,25 @@ def _load_project_overrides() -> dict[str, dict[str, Any]]:
                 schema_val = data.pop("$schema")
                 logger.info(f"loading overrides from {yml_file.name} with schema {schema_val}")
 
-        for key in data:
+        is_proposal_file = yml_file.name == _PG_PROPOSAL_OVERRIDE_FILE
+        for key, entry in data.items():
             if key in overrides:
                 raise ValueError(f"Duplicate project override key {key!r} in {override_sources[key]!r} and {yml_file.name!r}")
 
             override_sources[key] = yml_file.name
+            if "pg_award" in entry and not is_proposal_file:
+                raise ValueError(
+                    f"Project override key {key!r} in {yml_file.name!r} sets 'pg_award', "
+                    f"which only {_PG_PROPOSAL_OVERRIDE_FILE!r} may set"
+                )
+
+            pg_award = entry.get("pg_award", is_proposal_file)
+            if not isinstance(pg_award, bool):
+                raise ValueError(
+                    f"Project override key {key!r} in {yml_file.name!r} has a non-boolean 'pg_award': {pg_award!r}"
+                )
+
+            entry["pg_award"] = pg_award
 
         overrides |= data
 
