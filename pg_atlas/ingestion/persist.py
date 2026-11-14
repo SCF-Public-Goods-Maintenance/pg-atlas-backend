@@ -293,15 +293,15 @@ async def _upsert_depends_on_edges(
     await session.flush()
 
 
-def _swift_github_candidate(package_id: str) -> str | None:
+def _github_hosted_package_candidate(package_id: str) -> str | None:
     """
-    Derive a tracked GitHub lookup without changing the Swift package identity.
+    Derive a GitHub lookup for supported root Swift and Go package paths.
     """
 
-    if not package_id.startswith("pkg:swift/"):
+    if not package_id.startswith(("pkg:swift/", "pkg:golang/")):
         return None
 
-    parts = package_id.removeprefix("pkg:swift/").split("/")
+    parts = package_id.split("/", 1)[1].split("/")
     if len(parts) != 3 or parts[0].lower() != "github.com":
         return None
 
@@ -323,8 +323,8 @@ async def _upsert_sbom_vertices(
     GitHub-namespaced references link to an existing vertex by canonical ID;
     missing GitHub vertices are warned about and skipped. Other references with
     PURLs link to a Repo whose releases contain that PURL. Unmatched references
-    are upserted as ExternalRepos. GitHub-hosted Swift packages also resolve to
-    a tracked Repo case-insensitively, preserving their original Swift
+    are upserted as ExternalRepos. GitHub-hosted Swift and Go packages also resolve to
+    a tracked Repo case-insensitively, preserving their original ecosystem
     identity when no match exists. References without a PURL are warned about
     before using their normalized package ID for that fallback.
 
@@ -340,7 +340,7 @@ async def _upsert_sbom_vertices(
     normalized_spdx_ids: dict[str, list[str]] = {}
     github_canonical_ids: set[str] = set()
     release_purl_lookups: set[str] = set()
-    swift_candidates: dict[str, str] = {}
+    github_package_candidates: dict[str, str] = {}
 
     for pkg in sbom.document.packages:
         normalized_package_id, pkg_purl = normalize_spdx_package_id(pkg)
@@ -351,8 +351,8 @@ async def _upsert_sbom_vertices(
 
         if normalized_package_id.startswith("pkg:github/"):
             github_canonical_ids.add(normalized_package_id)
-        elif candidate := _swift_github_candidate(normalized_package_id):
-            swift_candidates[normalized_package_id] = candidate
+        elif candidate := _github_hosted_package_candidate(normalized_package_id):
+            github_package_candidates[normalized_package_id] = candidate
         elif pkg_purl:
             release_purl_lookups.add(normalized_package_id)
         else:
@@ -374,10 +374,10 @@ async def _upsert_sbom_vertices(
             ).all()
         }
 
-    matched_swift_repos: dict[str, Repo] = {}
-    if swift_candidates:
-        candidates = sorted(set(swift_candidates.values()))
-        matched_swift_repos = {
+    matched_github_package_repos: dict[str, Repo] = {}
+    if github_package_candidates:
+        candidates = sorted(set(github_package_candidates.values()))
+        matched_github_package_repos = {
             repo.canonical_id.lower(): repo
             for repo in (await session.scalars(select(Repo).where(func.lower(Repo.canonical_id).in_(candidates)))).all()
         }
@@ -400,8 +400,8 @@ async def _upsert_sbom_vertices(
             dep_vertex_id = dep_vertex.id
         elif matching_repo := matching_repos_by_purl.get(normalized_package_id):
             dep_vertex_id = matching_repo[0]
-        elif swift_repo := matched_swift_repos.get(swift_candidates.get(normalized_package_id, "")):
-            dep_vertex_id = swift_repo.id
+        elif github_package_repo := matched_github_package_repos.get(github_package_candidates.get(normalized_package_id, "")):
+            dep_vertex_id = github_package_repo.id
         else:
             try:
                 dep_vertex = await upsert_external_repo(
