@@ -35,6 +35,16 @@ def _ns(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
+_GO_PSEUDO_VERSIONS = [
+    "v0.0.0-20260801093000-3f2a1b4c5d6e",
+    "v2.0.0-20260801093000-3f2a1b4c5d6e+incompatible",
+    "v1.4.2-rc.1.0.20260801093000-3f2a1b4c5d6e",
+    "v2.4.2-rc.1.0.20260801093000-3f2a1b4c5d6e+incompatible",
+    "v1.4.3-0.20260801093000-3f2a1b4c5d6e",
+    "v2.4.3-0.20260801093000-3f2a1b4c5d6e+incompatible",
+]
+
+
 def test_system_for_purl() -> None:
     assert system_for_purl("pkg:pypi/stellar-sdk@1.0.0") == "PYPI"
     assert system_for_purl("pkg:cargo/serde") == "CARGO"
@@ -82,6 +92,77 @@ async def test_get_package_success(mocker: Any) -> None:
 
     assert isinstance(info, DepsDevPackageInfo)
     assert info.default_version == "11.1.0"
+
+
+@pytest.mark.parametrize("pseudo_version", _GO_PSEUDO_VERSIONS)
+async def test_get_package_filters_go_pseudo_versions_and_preserves_default(mocker: Any, pseudo_version: str) -> None:
+    mock_pkg = _ns(
+        package_key=_ns(name="github.com/org/module"),
+        purl="pkg:golang/github.com/org/module",
+        versions=[
+            _ns(
+                version_key=_ns(version=pseudo_version),
+                purl=f"pkg:golang/github.com/org/module@{pseudo_version}",
+                published_at=None,
+                is_default=True,
+            ),
+            _ns(
+                version_key=_ns(version="v1.2.3"),
+                purl="pkg:golang/github.com/org/module@v1.2.3",
+                published_at=None,
+                is_default=False,
+            ),
+        ],
+    )
+    mocker.patch("pg_atlas.procrastinate.depsdev._get_package_message", new=mocker.AsyncMock(return_value=mock_pkg))
+
+    info = await get_package("GO", "github.com/org/module")
+
+    assert info.default_version == pseudo_version
+    assert [version.version for version in info.versions] == ["v1.2.3"]
+
+
+async def test_get_package_returns_no_versions_when_all_go_versions_are_pseudo(mocker: Any) -> None:
+    pseudo_version = _GO_PSEUDO_VERSIONS[0]
+    mock_pkg = _ns(
+        package_key=_ns(name="github.com/org/module"),
+        purl="pkg:golang/github.com/org/module",
+        versions=[
+            _ns(
+                version_key=_ns(version=pseudo_version),
+                purl=f"pkg:golang/github.com/org/module@{pseudo_version}",
+                published_at=None,
+                is_default=True,
+            )
+        ],
+    )
+    mocker.patch("pg_atlas.procrastinate.depsdev._get_package_message", new=mocker.AsyncMock(return_value=mock_pkg))
+
+    info = await get_package("GO", "github.com/org/module")
+
+    assert info.default_version == pseudo_version
+    assert info.versions == []
+
+
+async def test_get_package_does_not_filter_same_version_for_non_go_system(mocker: Any) -> None:
+    pseudo_version = _GO_PSEUDO_VERSIONS[0]
+    mock_pkg = _ns(
+        package_key=_ns(name="module"),
+        purl="pkg:cargo/module",
+        versions=[
+            _ns(
+                version_key=_ns(version=pseudo_version),
+                purl=f"pkg:cargo/module@{pseudo_version}",
+                published_at=None,
+                is_default=True,
+            )
+        ],
+    )
+    mocker.patch("pg_atlas.procrastinate.depsdev._get_package_message", new=mocker.AsyncMock(return_value=mock_pkg))
+
+    info = await get_package("CARGO", "module")
+
+    assert [version.version for version in info.versions] == [pseudo_version]
 
 
 async def test_get_package_not_found(mocker: Any) -> None:

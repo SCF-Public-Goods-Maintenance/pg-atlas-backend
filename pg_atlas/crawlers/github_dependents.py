@@ -89,40 +89,6 @@ REASON_COUNTS_PARTIAL = "counts-partial"
 _ADVISORY_LOCK_NAMESPACE = "github-dependents"
 
 
-def github_dependents_scheduling_allowed(owner: str, repo: str) -> bool:
-    """
-    Fail-closed scheduling gate for the GitHub dependents crawl.
-
-    Requires the enable flag AND an allowlist match: a comma-separated
-    ``owner/repo`` list (case-insensitive), or the explicit value ``"*"`` for
-    all repositories. An empty allowlist schedules nothing. Malformed entries
-    are rejected with a warning. Explicit CLI runs bypass this gate. Lives in
-    this module (not the task layer) so it stays importable without a
-    database.
-    """
-    if not settings.GITHUB_DEPENDENTS_ENABLED:
-        return False
-
-    raw = settings.GITHUB_DEPENDENTS_ALLOWLIST.strip()
-    if raw == "*":
-        return True
-
-    allowed: set[str] = set()
-    for item in raw.split(","):
-        entry = item.strip().lower()
-        if not entry:
-            continue
-
-        parts = entry.split("/")
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            logger.warning(f"github-dependents allowlist entry rejected: {item.strip()!r}")
-            continue
-
-        allowed.add(entry)
-
-    return f"{owner}/{repo}".lower() in allowed
-
-
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------

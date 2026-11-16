@@ -53,6 +53,30 @@ def test_bot_detected_by_email_fallback() -> None:
     assert is_bot("SomeBot", "12345+somebot[bot]@users.noreply.github.com") is True
 
 
+def test_added_bot_names() -> None:
+    """Recognize the requested bot names and the Stellar Light namespace."""
+    for name in (
+        "directory-sync-bot",
+        "Claude",
+        "Copilot",
+        "trezor-ci",
+        "stellarlight-bot",
+        "stellarlight-task-lane",
+        "stellarlight-repair-lane",
+        "stellarlight-quality-bot",
+    ):
+        assert is_bot(name, "person@example.com") is True
+
+
+def test_stellarlight_bot_emails() -> None:
+    """Recognize Stellar Light bot and task-lane email addresses only."""
+    for email in ("bot@stellarlight.xyz", "task-lane@stellarlight.xyz", "repair-lane@stellarlight.xyz"):
+        assert is_bot("Human", email) is True
+
+    assert is_bot("Human", "person@stellarlight.xyz") is False
+    assert is_bot("Human", "bot@other.example") is False
+
+
 # ---------------------------------------------------------------------------
 # Bot detection — False cases (humans)
 # ---------------------------------------------------------------------------

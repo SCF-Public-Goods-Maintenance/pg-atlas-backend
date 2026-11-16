@@ -149,3 +149,58 @@ def test_parse_adoption_log(tmp_path: Path) -> None:
     assert "adoption_projects_seen=611" in stdout
     assert "adoption_projects_scored=26" in stdout
     assert "adoption_duration_seconds=0.158" in stdout
+
+
+def _run_maintenance_parser(tmp_path: Path, log_content: str) -> str:
+    log_file = tmp_path / "maintenance.log"
+    log_file.write_text(log_content)
+
+    script_path = Path(__file__).parent.parent.parent / ".github" / "scripts" / "parse-materialize-maintenance-log.py"
+
+    env = os.environ.copy()
+    env.pop("GITHUB_OUTPUT", None)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), str(log_file)],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+
+    return result.stdout
+
+
+def test_parse_maintenance_log(tmp_path: Path) -> None:
+    stdout = _run_maintenance_parser(
+        tmp_path,
+        "2026-09-25 10:05:00,123 INFO     __main__: materialize_maintenance_profiles: "
+        "repos_eligible=31 profiles_written=31 stale_profiles_cleared=2 artifacts_read=24 "
+        "duration_seconds=4.512 pools: activity_recency.days_since_push=25\n"
+        "2026-09-25 10:05:00,456 INFO     __main__: maintenance materialization finished: "
+        "gate_skipped=False repos_eligible=31 profiles_written=31 stale_profiles_cleared=2 "
+        "duration_seconds=4.512\n",
+    )
+
+    assert "maintenance_gate_skipped=False" in stdout
+    assert "maintenance_repos_eligible=31" in stdout
+    assert "maintenance_profiles_written=31" in stdout
+    assert "maintenance_stale_profiles_cleared=2" in stdout
+    assert "maintenance_duration_seconds=4.512" in stdout
+
+
+def test_parse_maintenance_log_gate_skipped(tmp_path: Path) -> None:
+    """A gated run with the metric disabled still reports that it skipped."""
+
+    stdout = _run_maintenance_parser(
+        tmp_path,
+        "2026-09-25 10:05:00,100 INFO     __main__: materialize_maintenance_profiles: "
+        "MAINTENANCE_METRIC_ENABLED is false, skipping gated run\n"
+        "2026-09-25 10:05:00,101 INFO     __main__: maintenance materialization finished: "
+        "gate_skipped=True repos_eligible=0 profiles_written=0 stale_profiles_cleared=0 "
+        "duration_seconds=0.001\n",
+    )
+
+    assert "maintenance_gate_skipped=True" in stdout
+    assert "maintenance_repos_eligible=0" in stdout
+    assert "maintenance_profiles_written=0" in stdout

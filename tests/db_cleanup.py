@@ -125,6 +125,7 @@ SBOM_DB_TABLE_SPECS: list[TableSpec] = [
     TableSpec("external_repos", ("id",)),
     TableSpec("repos", ("id",)),
     TableSpec("repo_vertices", ("id",)),
+    TableSpec("projects", ("id",)),
 ]
 
 

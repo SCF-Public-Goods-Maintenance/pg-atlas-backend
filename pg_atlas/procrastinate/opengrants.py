@@ -71,6 +71,7 @@ class ScfProject:
     git_repo_urls: list[str] = field(default_factory=list[str])
     category: str | None = None
     project_metadata: dict[str, Any] = field(default_factory=lambda: {})
+    pg_award: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,8 @@ additionalProperties:
       items:
         type: string
         format: uri
+    pg_award:
+      type: boolean
 
     metadata:
       type: object

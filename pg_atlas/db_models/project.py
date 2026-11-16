@@ -16,7 +16,7 @@ import datetime as dt
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, Numeric, String, func
+from sqlalchemy import DateTime, Enum, Numeric, String, false, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -62,6 +62,11 @@ class Project(PgBase):
     )
     category: Mapped[str | None] = mapped_column(String(128), default=None)
     git_owner_url: Mapped[str | None] = mapped_column(String(512), default=None)
+
+    # --- PG Award population ---
+    # Membership in the PG Award population. The bootstrap reconciliation sets it
+    # from ``pg-proposal-overrides.yml``; maintenance materialization reads it.
+    pg_award: Mapped[bool] = mapped_column(default=False, server_default=false())
 
     # --- materialized metrics (computed by background pipeline, null until first run) ---
     pony_factor: Mapped[int | None] = mapped_column(default=None)
