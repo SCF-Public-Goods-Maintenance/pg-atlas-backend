@@ -183,44 +183,7 @@ async def list_projects(
 
 
 @router.get(
-    "/projects/{canonical_id}",
-    response_model=ProjectDetailResponse,
-    summary="Project detail",
-    tags=[Graph.projects, Source.opengrants, Source.pg_atlas],
-)
-async def get_project(
-    canonical_id: str,
-    db: DbSession,
-) -> ProjectDetailResponse:
-    """
-    Full detail for a single project, including validated metadata.
-
-    The ``metadata`` field is the normalised form of the raw JSONB column —
-    unknown keys from the crawler are passed through via ``extra="allow"``.
-    """
-    project = await _get_project_or_404(db, canonical_id)
-    active_30d, active_90d = await _active_contributors_for_project(db, project.id)
-
-    return ProjectDetailResponse(
-        canonical_id=project.canonical_id,
-        display_name=project.display_name,
-        project_type=project.project_type,
-        activity_status=project.activity_status,
-        category=project.category,
-        git_owner_url=project.git_owner_url,
-        pony_factor=project.pony_factor,
-        criticality_score=project.criticality_score,
-        adoption_score=project.adoption_score,
-        updated_at=project.updated_at,
-        project_id=project.id,
-        active_contributors_30d=active_30d,
-        active_contributors_90d=active_90d,
-        metadata=ProjectMetadata.model_validate(project.project_metadata or {}),
-    )
-
-
-@router.get(
-    "/projects/{canonical_id}/repos",
+    "/projects/{canonical_id:path}/repos",
     response_model=PaginatedResponse[RepoSummary],
     summary="Repos belonging to a project",
     tags=[Graph.projects, Source.github, Source.deps_dev],
@@ -254,7 +217,7 @@ async def get_project_repos(
 
 
 @router.get(
-    "/projects/{canonical_id}/contributors",
+    "/projects/{canonical_id:path}/contributors",
     response_model=PaginatedResponse[ProjectContributorSummary],
     summary="Contributors across a project's repos",
     tags=[Graph.projects, Graph.contributors, Graph.contributor_graph, Source.github],
@@ -311,7 +274,7 @@ async def get_project_contributors(
 
 
 @router.get(
-    "/projects/{canonical_id}/depends-on",
+    "/projects/{canonical_id:path}/depends-on",
     response_model=list[ProjectDependency],
     summary="Project-level dependencies",
     tags=[Graph.dependency_graph, Source.deps_dev],
@@ -334,7 +297,7 @@ async def get_project_depends_on(
 
 
 @router.get(
-    "/projects/{canonical_id}/has-dependents",
+    "/projects/{canonical_id:path}/has-dependents",
     response_model=list[ProjectDependency],
     summary="Projects that depend on this project",
     tags=[Graph.dependency_graph, Source.deps_dev],
@@ -352,6 +315,44 @@ async def get_project_has_dependents(
     project = await _get_project_or_404(db, canonical_id)
 
     return await _project_level_deps(db, project, direction="incoming")
+
+
+# The detail route is registered last: {canonical_id:path} is greedy and also matches the sub-route paths.
+@router.get(
+    "/projects/{canonical_id:path}",
+    response_model=ProjectDetailResponse,
+    summary="Project detail",
+    tags=[Graph.projects, Source.opengrants, Source.pg_atlas],
+)
+async def get_project(
+    canonical_id: str,
+    db: DbSession,
+) -> ProjectDetailResponse:
+    """
+    Full detail for a single project, including validated metadata.
+
+    The ``metadata`` field is the normalised form of the raw JSONB column —
+    unknown keys from the crawler are passed through via ``extra="allow"``.
+    """
+    project = await _get_project_or_404(db, canonical_id)
+    active_30d, active_90d = await _active_contributors_for_project(db, project.id)
+
+    return ProjectDetailResponse(
+        canonical_id=project.canonical_id,
+        display_name=project.display_name,
+        project_type=project.project_type,
+        activity_status=project.activity_status,
+        category=project.category,
+        git_owner_url=project.git_owner_url,
+        pony_factor=project.pony_factor,
+        criticality_score=project.criticality_score,
+        adoption_score=project.adoption_score,
+        updated_at=project.updated_at,
+        project_id=project.id,
+        active_contributors_30d=active_30d,
+        active_contributors_90d=active_90d,
+        metadata=ProjectMetadata.model_validate(project.project_metadata or {}),
+    )
 
 
 # ---------------------------------------------------------------------------

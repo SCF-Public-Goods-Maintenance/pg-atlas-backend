@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from fastapi import Request
 from httpx2 import AsyncClient
+
+from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.main import app
 
 # ---------------------------------------------------------------------------
 # No-DB tests (always run)
@@ -22,6 +27,24 @@ async def test_projects_db_unavailable_returns_503(no_db_client: AsyncClient) ->
     for path in ["/projects", "/projects/foo", "/projects/foo/repos", "/projects/foo/contributors"]:
         resp = await no_db_client.get(path)
         assert resp.status_code == 503, f"{path} should return 503"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["", "/repos", "/contributors", "/depends-on", "/has-dependents"],
+    ids=["detail", "repos", "contributors", "depends-on", "has-dependents"],
+)
+async def test_project_routes_accept_canonical_id_with_slash(no_db_client: AsyncClient, suffix: str) -> None:
+    """Each project route receives the complete canonical id when it contains a slash."""
+
+    async def _no_db_checking_canonical_id(request: Request) -> None:
+        """Check the routed canonical id, then report no database."""
+
+        assert request.path_params["canonical_id"] == "daoip-5:scf:project:greep_pos/_greep_pay"
+
+    app.dependency_overrides[maybe_db_session] = _no_db_checking_canonical_id
+    resp = await no_db_client.get(f"/projects/daoip-5:scf:project:greep_pos%2F_greep_pay{suffix}")
+    assert resp.status_code == 503
 
 
 # ---------------------------------------------------------------------------
