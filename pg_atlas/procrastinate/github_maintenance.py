@@ -67,6 +67,7 @@ import msgspec
 from github import Auth, Github, GithubException
 
 from pg_atlas.config import settings
+from pg_atlas.db_models.base import Visibility
 from pg_atlas.gitlog.filters import DEFAULT_BOT_NAME_PATTERNS
 from pg_atlas.metrics.maintenance import (
     MAINTENANCE_SIGNALS_SCHEMA_VERSION,
@@ -1214,6 +1215,7 @@ async def run_maintenance_collection(owner: str, repo: str) -> None:
     """
     Collect and persist maintenance signals for one repository.
 
+    Private repositories are skipped before any collection or persistence.
     Resolution and persistence run in short separate sessions around the
     network phase, so no transaction spans GitHub calls.
     """
@@ -1223,6 +1225,10 @@ async def run_maintenance_collection(owner: str, repo: str) -> None:
     factory = get_session_factory()
     async with factory() as session:
         resolved = await resolve_repo(session, owner, repo)
+
+    if resolved.visibility is Visibility.private:
+        logger.info(f"maintenance-collect: repo={owner}/{repo} skipped because visibility=private")
+        return
 
     depsdev_date_count = len(distinct_release_dates(resolved.releases))
     need_release_fallback = depsdev_date_count < settings.MAINTENANCE_CADENCE_MIN_EVENTS

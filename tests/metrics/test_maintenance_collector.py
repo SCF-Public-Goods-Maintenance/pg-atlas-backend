@@ -10,6 +10,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +21,7 @@ from github import GithubException
 import pg_atlas.procrastinate.github_maintenance as gm
 import pg_atlas.procrastinate.github_maintenance_schema as gms
 from pg_atlas.config import settings
+from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.release import Release
 from pg_atlas.metrics.maintenance import (
     STATE_INCOMPLETE,
@@ -670,7 +672,12 @@ class TestReleaseFallbackDecision:
         requested: list[bool] = []
 
         async def _resolve(session: object, owner: str, repo: str) -> ResolvedRepo:
-            return ResolvedRepo(repo_id=1, canonical_id=f"pkg:github/{owner}/{repo}", releases=releases)
+            return ResolvedRepo(
+                repo_id=1,
+                canonical_id=f"pkg:github/{owner}/{repo}",
+                visibility=Visibility.public,
+                releases=releases,
+            )
 
         async def _collect(
             owner: str, repo: str, *, need_release_fallback: bool, now: dt.datetime | None = None
@@ -711,6 +718,50 @@ class TestReleaseFallbackDecision:
         ]
 
         assert await self._fallback_flag(monkeypatch, releases) is False
+
+    async def test_private_repo_skips_collection_and_persistence(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Private repositories return before collecting signals or persisting them."""
+
+        import pg_atlas.db_models.session as session_module
+        from pg_atlas.procrastinate.github_maintenance_persistence import ResolvedRepo
+
+        calls: list[str] = []
+
+        async def _resolve(session: object, owner: str, repo: str) -> ResolvedRepo:
+            return ResolvedRepo(
+                repo_id=1,
+                canonical_id=f"pkg:github/{owner}/{repo}",
+                visibility=Visibility.private,
+                releases=None,
+            )
+
+        async def _collect(
+            owner: str, repo: str, *, need_release_fallback: bool, now: dt.datetime | None = None
+        ) -> gm.CollectedMaintenance:
+            calls.append("collect")
+            raise AssertionError("private repositories must not be collected")
+
+        async def _persist(
+            session: object,
+            resolved: ResolvedRepo,
+            collected: gm.MaintenanceSignals,
+            pushed_at: dt.datetime | None,
+        ) -> gm.MaintenanceSignals:
+            calls.append("persist")
+            raise AssertionError("private repositories must not be persisted")
+
+        monkeypatch.setattr(session_module, "get_session_factory", lambda: _FakeSession)
+        monkeypatch.setattr(gm, "resolve_repo", _resolve)
+        monkeypatch.setattr(gm, "collect_maintenance_for_repo", _collect)
+        monkeypatch.setattr(gm, "persist_collected", _persist)
+
+        with caplog.at_level(logging.INFO, logger=gm.__name__):
+            await gm.run_maintenance_collection("owner", "private-repo")
+
+        assert calls == []
+        assert "maintenance-collect: repo=owner/private-repo skipped because visibility=private" in caplog.text
 
     async def test_tagged_golang_releases_are_dated_coverage(
         self, monkeypatch: pytest.MonkeyPatch, default_parameters: None

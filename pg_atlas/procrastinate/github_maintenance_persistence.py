@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.release import Release
 from pg_atlas.db_models.repo_metadata import repo_metadata_merge_expression
 from pg_atlas.db_models.repo_vertex import Repo
@@ -144,6 +145,7 @@ class ResolvedRepo:
 
     repo_id: int
     canonical_id: str
+    visibility: Visibility
     releases: list[Release] | None
 
 
@@ -158,7 +160,9 @@ async def resolve_repo(session: AsyncSession, owner: str, repo: str) -> Resolved
 
     wanted = f"pkg:github/{owner}/{repo}".lower()
     rows = (
-        await session.execute(select(Repo.id, Repo.canonical_id, Repo.releases).where(func.lower(Repo.canonical_id) == wanted))
+        await session.execute(
+            select(Repo.id, Repo.canonical_id, Repo.visibility, Repo.releases).where(func.lower(Repo.canonical_id) == wanted)
+        )
     ).all()
 
     if not rows:
@@ -167,9 +171,9 @@ async def resolve_repo(session: AsyncSession, owner: str, repo: str) -> Resolved
         logger.warning(f"maintenance-collect ambiguous source identity: repo={owner}/{repo} matches={len(rows)}")
         raise AmbiguousMaintenanceSourceRepo(f"{len(rows)} tracked repos match {owner}/{repo}")
 
-    repo_id, canonical_id, releases = rows[0]
+    repo_id, canonical_id, visibility, releases = rows[0]
 
-    return ResolvedRepo(repo_id=repo_id, canonical_id=canonical_id, releases=releases)
+    return ResolvedRepo(repo_id=repo_id, canonical_id=canonical_id, visibility=visibility, releases=releases)
 
 
 async def persist_collected(

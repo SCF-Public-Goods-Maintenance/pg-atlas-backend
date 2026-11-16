@@ -165,6 +165,7 @@ class TestPersistCollected:
 
         resolved = await resolve_repo(session, "test", f"PERSIST-{suffix}")
         assert resolved.repo_id == repo.id
+        assert resolved.visibility is Visibility.public
         await persist_collected(session, resolved, new, pushed_at)
 
         row = (

@@ -534,6 +534,8 @@ async def crawl_github_repo(
     4. Defer ``crawl_package_deps`` for deps.dev-supported packages.
     5. Group registry-crawl packages by registry system and defer one
         ``crawl_package_registry`` task per supported system.
+    6. Defer GitHub dependents crawl for PG Award repos
+    7. Defer maintenance signal collection for PG Award repos
 
     ``pushed_at_isodt`` feeds both ``latest_commit_date`` and, together with
     ``observed_at_isodt`` (when the GitHub listing was fetched), the
