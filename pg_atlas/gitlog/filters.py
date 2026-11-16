@@ -19,6 +19,11 @@ DEFAULT_BOT_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^dependabot$", re.IGNORECASE),  # dependabot without [bot]
     re.compile(r"^greenkeeper$", re.IGNORECASE),  # Greenkeeper (deprecated)
     re.compile(r"^(bitnami|upptime) bot$", re.IGNORECASE),  # ecosystem bots
+    re.compile(r"^directory-sync-bot$", re.IGNORECASE),  # Lumen Loop DB
+    re.compile(r"^claude$", re.IGNORECASE),  # Claude Cloud
+    re.compile(r"^copilot$", re.IGNORECASE),  # Copilot Cloud
+    re.compile(r"^trezor-ci$", re.IGNORECASE),  # Hardware Wallet Support
+    re.compile(r"^stellarlight-.+$", re.IGNORECASE),  # Various Stellar Light bots
 )
 
 # Patterns matched against author_email (case-insensitive)
@@ -27,6 +32,7 @@ DEFAULT_BOT_EMAIL_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"^\d+\+.+\[bot\]@users\.noreply\.github\.com$",
         re.IGNORECASE,
     ),  # GitHub App bot noreply format
+    re.compile(r"^(?:bot|[^@]+-lane)@stellarlight\.xyz$", re.IGNORECASE),  # Various Stellar Light bots
 )
 
 
