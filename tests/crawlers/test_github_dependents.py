@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock
 import httpx2
 import pytest
 
-from pg_atlas.config import settings
 from pg_atlas.crawlers.github_dependents import (
     REASON_COUNTS_PARTIAL,
     REASON_CURSOR_CYCLE,
@@ -37,7 +36,6 @@ from pg_atlas.crawlers.github_dependents import (
     parse_dependent_entries,
     parse_package_selector,
 )
-from pg_atlas.crawlers.github_dependents import github_dependents_scheduling_allowed as _scheduling_allowed
 from tests.crawlers.conftest import GH_HEADERS as _HEADERS
 from tests.crawlers.conftest import gh_entry_row as _entry_row
 from tests.crawlers.conftest import gh_page, gh_selector_page
@@ -767,51 +765,6 @@ def test_crawler_rejects_non_positive_caps() -> None:
     for cap_kwargs in ({"pages_cap": 0}, {"entry_cap": 0}, {"packages_cap": -1}):
         with pytest.raises(ValueError):
             _make_crawler(client, **cap_kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Scheduling gate (fail-closed allowlist)
-# ---------------------------------------------------------------------------
-
-
-def test_scheduling_disabled_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ENABLED=false schedules nothing regardless of the allowlist."""
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", False)
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ALLOWLIST", "*")
-    assert not _scheduling_allowed("Soneso", "stellar_flutter_sdk")
-
-
-def test_scheduling_empty_allowlist_schedules_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ENABLED=true with an empty allowlist fails closed."""
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ALLOWLIST", "")
-    assert not _scheduling_allowed("Soneso", "stellar_flutter_sdk")
-
-
-def test_scheduling_allowlist_match_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A listed repository schedules, matched case-insensitively; others do not."""
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ALLOWLIST", "soneso/STELLAR_flutter_sdk, Other/repo")
-    assert _scheduling_allowed("Soneso", "stellar_flutter_sdk")
-    assert _scheduling_allowed("other", "REPO")
-    assert not _scheduling_allowed("Soneso", "stellar-php-sdk")
-
-
-def test_scheduling_star_schedules_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The explicit value '*' schedules all repositories."""
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ALLOWLIST", "*")
-    assert _scheduling_allowed("any", "repo")
-
-
-def test_scheduling_rejects_malformed_entries(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Malformed allowlist entries are rejected with a warning and never match."""
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ALLOWLIST", "no-slash, /lead, trail/, good/entry")
-    with caplog.at_level(logging.WARNING):
-        assert _scheduling_allowed("good", "entry")
-        assert not _scheduling_allowed("no-slash", "x")
-    assert sum("allowlist entry rejected" in r.message for r in caplog.records) >= 3
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ try:
         PackageReference,
         _purl_type_for_system,
         collect_maintenance_signals,
+        crawl_github_dependents,
         crawl_github_repo,
         crawl_package_deps,
         crawl_package_registry,
@@ -245,6 +246,28 @@ async def test_sync_opengrants_defers_each_project_with_overrides(mocker: Any) -
     assert defer_data[2]["pg_award"] is True
 
 
+async def test_sync_opengrants_defaults_pg_award_false_without_an_override(mocker: Any) -> None:
+    """OpenGrants projects without overrides carry the ScfProject default into the task payload."""
+
+    project = ScfProject(
+        canonical_id="proj:not-awarded",
+        display_name="Not Awarded",
+        activity_status=ActivityStatus.live,
+        git_owner_url=None,
+        git_repo_urls=[],
+        category="Developer Tooling",
+    )
+    mocker.patch("pg_atlas.procrastinate.tasks.fetch_scf_projects", new=mocker.AsyncMock(return_value=[project]))
+    mocker.patch("pg_atlas.procrastinate.tasks.load_project_overrides", return_value={})
+    mocker.patch("pg_atlas.procrastinate.tasks.reconcile_pg_award", new=mocker.AsyncMock(return_value=(0, 0)))
+    defer_mock = mocker.patch.object(process_project, "batch_defer_async", new=mocker.AsyncMock())
+
+    await sync_opengrants()
+
+    payload: dict[str, Any] = defer_mock.call_args.args[0]
+    assert payload["pg_award"] is False
+
+
 async def test_sync_opengrants_filters_projects_by_canonical_id(mocker: Any) -> None:
     projects = [
         ScfProject(
@@ -397,6 +420,7 @@ async def test_process_project_enriches_packages_from_depsdev(mocker: Any) -> No
     crawl_defer_mock.assert_awaited_once()
     defer_data: tuple[dict[str, Any], ...] = crawl_defer_mock.call_args_list[0].args
     assert len(defer_data) == 1
+    assert defer_data[0]["pg_award"] is True
     assert defer_data[0]["packages"] == [
         {
             "system": "PYPI",
@@ -1479,7 +1503,7 @@ class TestDeferredPayloadJsonSerializable:
 
 
 # ---------------------------------------------------------------------------
-# collect_maintenance_signals — execution-time gate re-check
+# PG Award collection gates
 # ---------------------------------------------------------------------------
 
 
@@ -1492,7 +1516,27 @@ async def test_collect_maintenance_signals_gate_recheck_skips_queued_work(
     from pg_atlas.config import settings
 
     monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", False)
-    monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "*")
+    pg_award_mock = mocker.patch("pg_atlas.procrastinate.tasks._repo_belongs_to_pg_award_project", new=mocker.AsyncMock())
+    run_mock = mocker.patch("pg_atlas.procrastinate.tasks.run_maintenance_collection", new=mocker.AsyncMock())
+
+    await collect_maintenance_signals(owner="Soneso", repo="stellar-php-sdk")
+
+    run_mock.assert_not_awaited()
+    pg_award_mock.assert_not_awaited()
+
+
+async def test_collect_maintenance_signals_skips_non_pg_award_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: Any,
+) -> None:
+    from pg_atlas.config import settings
+
+    monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
+    monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks._repo_belongs_to_pg_award_project",
+        new=mocker.AsyncMock(return_value=False),
+    )
     run_mock = mocker.patch("pg_atlas.procrastinate.tasks.run_maintenance_collection", new=mocker.AsyncMock())
 
     await collect_maintenance_signals(owner="Soneso", repo="stellar-php-sdk")
@@ -1500,14 +1544,18 @@ async def test_collect_maintenance_signals_gate_recheck_skips_queued_work(
     run_mock.assert_not_awaited()
 
 
-async def test_collect_maintenance_signals_runs_when_allowlisted(
+async def test_collect_maintenance_signals_runs_for_pg_award_repo(
     monkeypatch: pytest.MonkeyPatch,
     mocker: Any,
 ) -> None:
     from pg_atlas.config import settings
 
     monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-    monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "soneso/stellar-php-sdk")
+    monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
+    mocker.patch(
+        "pg_atlas.procrastinate.tasks._repo_belongs_to_pg_award_project",
+        new=mocker.AsyncMock(return_value=True),
+    )
     run_mock = mocker.patch("pg_atlas.procrastinate.tasks.run_maintenance_collection", new=mocker.AsyncMock())
 
     await collect_maintenance_signals(owner="Soneso", repo="stellar-php-sdk")
@@ -1515,17 +1563,40 @@ async def test_collect_maintenance_signals_runs_when_allowlisted(
     run_mock.assert_awaited_once_with("Soneso", "stellar-php-sdk")
 
 
-async def test_crawl_github_repo_defers_maintenance_when_allowlisted(
+async def test_crawl_github_dependents_skips_non_pg_award_repo(
     monkeypatch: pytest.MonkeyPatch,
     mocker: Any,
 ) -> None:
-    """The scheduling half of the maintenance gate defers the collector task."""
+    """Already-queued dependents work re-checks current project membership."""
+
+    from pg_atlas.config import settings
+
+    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
+    membership_mock = mocker.patch(
+        "pg_atlas.procrastinate.tasks._repo_belongs_to_pg_award_project",
+        new=mocker.AsyncMock(return_value=False),
+    )
+    crawler_mock = mocker.patch("pg_atlas.procrastinate.tasks.build_registry_crawler")
+
+    await crawl_github_dependents(owner="Soneso", repo="stellar-php-sdk")
+
+    membership_mock.assert_awaited_once_with("Soneso", "stellar-php-sdk")
+    crawler_mock.assert_not_called()
+
+
+async def test_crawl_github_repo_defers_collectors_for_pg_award_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: Any,
+) -> None:
+    """Bootstrap schedules both collectors for an enabled PG Award repo."""
 
     from pg_atlas.config import settings
     from pg_atlas.procrastinate.tasks import collect_maintenance_signals as maintenance_task
+    from pg_atlas.procrastinate.tasks import crawl_github_dependents as dependents_task
 
     monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-    monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "stellarcn/py-stellar-base")
+    monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
+    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
     mocker.patch(
         "pg_atlas.procrastinate.tasks.get_package",
         new=mocker.AsyncMock(return_value=_depsdev_package_info("11.1.0", versions=[])),
@@ -1543,30 +1614,45 @@ async def test_crawl_github_repo_defers_maintenance_when_allowlisted(
         packages=[{"system": "PYPI", "name": "stellar-sdk", "purl": "pkg:pypi/stellar-sdk"}],
         adoption_stars=123,
         adoption_forks=44,
+        pg_award=True,
     )
 
     maintenance_calls = [call for call in defer_mock.call_args_list if call.args[0] is maintenance_task]
+    dependents_calls = [call for call in defer_mock.call_args_list if call.args[0] is dependents_task]
     assert len(maintenance_calls) == 1
     assert maintenance_calls[0].kwargs["queueing_lock"] == "maintenance:StellarCN/py-stellar-base"
     assert maintenance_calls[0].kwargs["owner"] == "StellarCN"
     assert maintenance_calls[0].kwargs["repo"] == "py-stellar-base"
+    assert len(dependents_calls) == 1
 
 
-async def test_collect_maintenance_signals_skips_repo_removed_from_allowlist(
+async def test_crawl_github_repo_does_not_schedule_collectors_for_non_pg_award_repo(
     monkeypatch: pytest.MonkeyPatch,
     mocker: Any,
 ) -> None:
-    """Shrinking the allowlist stops already-queued work at execution time."""
+    """Enabled collection still excludes repositories outside the award population."""
 
     from pg_atlas.config import settings
+    from pg_atlas.procrastinate.tasks import collect_maintenance_signals as maintenance_task
+    from pg_atlas.procrastinate.tasks import crawl_github_dependents as dependents_task
 
     monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-    monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "soneso/stellar-ios-mac-sdk")
-    run_mock = mocker.patch("pg_atlas.procrastinate.tasks.run_maintenance_collection", new=mocker.AsyncMock())
+    monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
+    monkeypatch.setattr(settings, "GITHUB_DEPENDENTS_ENABLED", True)
+    _patch_crawl_github_repo_io(mocker)
+    defer_mock = mocker.patch("pg_atlas.procrastinate.tasks.defer_with_lock", new=mocker.AsyncMock(return_value=True))
 
-    await collect_maintenance_signals(owner="Soneso", repo="stellar-php-sdk")
+    await crawl_github_repo(
+        owner="Soneso",
+        repo="stellar-php-sdk",
+        project_id=1,
+        packages=[{"system": "PYPI", "name": "stellar-sdk"}],
+        adoption_stars=0,
+        adoption_forks=0,
+        pg_award=False,
+    )
 
-    run_mock.assert_not_awaited()
+    assert all(call.args[0] not in {maintenance_task, dependents_task} for call in defer_mock.call_args_list)
 
 
 # ---------------------------------------------------------------------------

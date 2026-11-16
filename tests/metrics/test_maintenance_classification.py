@@ -24,7 +24,6 @@ from pg_atlas.procrastinate.github_maintenance import (
     collect_maintenance_for_repo,
     external_tracker_declared,
     maintenance_host_repo,
-    maintenance_metric_allowed,
 )
 from tests.metrics.maintenance_support import (
     NOW,
@@ -36,41 +35,7 @@ from tests.metrics.maintenance_support import (
 )
 
 
-class TestGate:
-    def test_disabled_flag_allows_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", False)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "*")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
-        assert not maintenance_metric_allowed("Soneso", "stellar-php-sdk")
-
-    def test_empty_allowlist_allows_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
-        assert not maintenance_metric_allowed("Soneso", "stellar-php-sdk")
-
-    def test_allowlist_match_is_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "soneso/STELLAR-php-sdk, Other/repo")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
-        assert maintenance_metric_allowed("Soneso", "stellar-php-sdk")
-        assert maintenance_metric_allowed("other", "REPO")
-        assert not maintenance_metric_allowed("Soneso", "stellar_flutter_sdk")
-
-    def test_star_allows_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "*")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
-        assert maintenance_metric_allowed("any", "repo")
-
-    def test_malformed_entries_are_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "just-a-name, owner/, /repo, a/b/c")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "")
-        assert not maintenance_metric_allowed("just-a-name", "")
-        assert not maintenance_metric_allowed("owner", "")
-        assert not maintenance_metric_allowed("a", "b")
-
+class TestDeclaredOverrides:
     def test_external_tracker_declaration(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(settings, "MAINTENANCE_EXTERNAL_TRACKER_REPOS", "Soneso/stellar-php-sdk")
         assert external_tracker_declared("soneso", "STELLAR-PHP-SDK")
@@ -81,19 +46,6 @@ class TestGate:
         assert maintenance_host_repo("trezor", "TREZOR-FIRMWARE")
         assert maintenance_host_repo("ledgerhq", "ledger-live")
         assert not maintenance_host_repo("trezor", "other")
-
-    def test_host_repo_is_excluded_from_star_allowlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "*")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "trezor/trezor-firmware")
-        assert not maintenance_metric_allowed("Trezor", "trezor-firmware")
-        assert maintenance_metric_allowed("other", "repo")
-
-    def test_host_repo_is_excluded_despite_explicit_allowlist_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ENABLED", True)
-        monkeypatch.setattr(settings, "MAINTENANCE_METRIC_ALLOWLIST", "trezor/trezor-firmware")
-        monkeypatch.setattr(settings, "MAINTENANCE_HOST_REPOS", "trezor/trezor-firmware")
-        assert not maintenance_metric_allowed("trezor", "trezor-firmware")
 
     def test_malformed_host_entry_declares_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The lookup key for ("owner", "") equals a verbatim-kept "owner/"

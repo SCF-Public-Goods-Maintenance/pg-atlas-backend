@@ -35,13 +35,13 @@ from urllib.parse import urlsplit
 import httpx2
 import yaml
 from procrastinate.exceptions import AlreadyEnqueued
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from pg_atlas.config import settings
 from pg_atlas.crawlers.base import USER_AGENT, AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
-from pg_atlas.crawlers.github_dependents import github_dependents_scheduling_allowed
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, RedirectPredicate, SubmissionStatus
+from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
@@ -69,7 +69,7 @@ from pg_atlas.procrastinate.github import (
     list_org_repos,
 )
 from pg_atlas.procrastinate.github_maintenance import (
-    maintenance_metric_allowed,
+    maintenance_host_repo,
     run_maintenance_collection,
 )
 from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
@@ -306,8 +306,9 @@ async def process_project(
     """
     Process a single SCF project.
 
-    1. Upsert a ``Project`` row. ``pg_award`` is stored only when the row is
-       inserted; on existing rows ``sync_opengrants`` reconciles the flag.
+        1. Upsert a ``Project`` row. ``sync_opengrants`` passes the resolved
+             ``pg_award`` value on every job and bulk-reconciles existing rows before
+             fetching OpenGrants; the upsert uses the value only for new rows.
     2. If category is "Education & Community", skip GitHub/deps.dev crawling.
     3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
 
@@ -415,7 +416,9 @@ async def process_project(
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
     if repos_to_crawl:
-        crawl_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
+        crawl_batch_data = (
+            build_repo_defer_data(repo_info, project_id, depsdev_projects, pg_award=pg_award) for repo_info in repos_to_crawl
+        )
         await crawl_github_repo.batch_defer_async(*crawl_batch_data)
 
     logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {canonical_id}")
@@ -519,6 +522,7 @@ async def crawl_github_repo(
     adoption_forks: int,
     pushed_at_isodt: str | None = None,
     observed_at_isodt: str | None = None,
+    pg_award: bool = False,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -697,8 +701,8 @@ async def crawl_github_repo(
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
 
-    # ----- Defer GitHub dependents crawl if this repo is allowlisted -----
-    if defer_github_dependents := github_dependents_scheduling_allowed(owner, repo):
+    # ----- Defer GitHub dependents crawl for PG Award repos when enabled -----
+    if defer_github_dependents := pg_award and settings.GITHUB_DEPENDENTS_ENABLED:
         await defer_with_lock(
             crawl_github_dependents,
             queueing_lock=f"github-dependents:{owner}/{repo}",
@@ -706,8 +710,8 @@ async def crawl_github_repo(
             repo=repo,
         )
 
-    # ----- Defer maintenance-signal collection if this repo is allowlisted -----
-    if defer_maintenance := maintenance_metric_allowed(owner, repo):
+    # ----- Defer maintenance collection for eligible PG Award repos -----
+    if defer_maintenance := (pg_award and settings.MAINTENANCE_METRIC_ENABLED and not maintenance_host_repo(owner, repo)):
         await defer_with_lock(
             collect_maintenance_signals,
             queueing_lock=f"maintenance:{owner}/{repo}",
@@ -808,6 +812,11 @@ async def crawl_github_dependents(
     systemic layout change fails the task visibly.
     """
 
+    if not settings.GITHUB_DEPENDENTS_ENABLED or not await _repo_belongs_to_pg_award_project(owner, repo):
+        logger.info(f"crawl_github_dependents: gate disallows {owner}/{repo} at execution time, skipping")
+
+        return
+
     package_name = f"{owner}/{repo}"
 
     session_factory = get_session_factory()
@@ -856,11 +865,15 @@ async def collect_maintenance_signals(
     ``opengrants`` queue because it needs the authenticated ``GITHUB_TOKEN``
     that queue's worker carries.
 
-    Re-checks the fail-closed gate at execution time, so disabling the flag
-    or shrinking the allowlist stops already-queued work.
+    Re-checks the enable flag, PG Award project membership, and host-repository
+    exclusion at execution time, so already-queued work respects current state.
     """
 
-    if not maintenance_metric_allowed(owner, repo):
+    if (
+        not settings.MAINTENANCE_METRIC_ENABLED
+        or maintenance_host_repo(owner, repo)
+        or not await _repo_belongs_to_pg_award_project(owner, repo)
+    ):
         logger.info(f"collect_maintenance_signals: gate disallows {owner}/{repo} at execution time, skipping")
 
         return
@@ -868,6 +881,27 @@ async def collect_maintenance_signals(
     # The per-repo summary line (requests, signal states) is logged by
     # run_maintenance_collection, shared with the CLI path.
     await run_maintenance_collection(owner, repo)
+
+
+async def _repo_belongs_to_pg_award_project(owner: str, repo: str) -> bool:
+    """
+    Return whether the currently associated Project marks this GitHub repo as PG Award.
+
+    Repositories with no tracked Repo row, no Project association, or a false
+    ``Project.pg_award`` flag are ineligible.
+    """
+
+    canonical_id = f"pkg:github/{owner}/{repo}".lower()
+    factory = get_session_factory()
+    async with factory() as session:
+        project_id = await session.scalar(
+            select(Project.id)
+            .join(Repo, Repo.project_id == Project.id)
+            .where(func.lower(Repo.canonical_id) == canonical_id, Project.pg_award.is_(True))
+            .limit(1)
+        )
+
+    return project_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1152,8 +1186,14 @@ def _patched_project(project: ScfProject, patch: dict[str, Any]) -> ScfProject:
 
 
 def build_repo_defer_data(
-    repo_info: GitHubRepoMetadata, project_id: int, projects_info: dict[str, DepsDevProjectInfo]
+    repo_info: GitHubRepoMetadata,
+    project_id: int,
+    projects_info: dict[str, DepsDevProjectInfo],
+    *,
+    pg_award: bool = False,
 ) -> dict[str, Any]:
+    """Build serializable crawl task arguments, including resolved project eligibility."""
+
     repo_full = repo_info.full_name
     depsdev_key = f"github.com/{repo_full}".lower()
     depsdev_info = projects_info.get(depsdev_key)
@@ -1183,6 +1223,7 @@ def build_repo_defer_data(
         owner=repo_owner,
         repo=repo_name,
         project_id=project_id,
+        pg_award=pg_award,
         packages=[asdict(pkg) for pkg in packages],
         pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
         observed_at_isodt=observed_at_utc.isoformat() if observed_at_utc is not None else None,

@@ -88,28 +88,23 @@ class Settings(BaseSettings):
     CRAWLER_TIMEOUT: float = 30.0
 
     # --- GitHub dependents crawler ---
-    # Scheduling fails closed: ENABLED=false schedules nothing; ENABLED=true
-    # schedules only repositories on the allowlist (comma-separated owner/repo,
-    # case-insensitive); the explicit value "*" schedules all eligible repos.
-    # Changing either setting does not cancel already-queued jobs. Explicit
-    # CLI runs bypass both. Caps bound the scrape per repository: pages per
-    # listing, dependents overall, and packages walked for multi-package
-    # repositories.
+    # Scheduling requires ENABLED=true and a repo associated with a Project
+    # whose pg_award flag is true. Workers re-check both conditions before
+    # crawling. Explicit CLI runs bypass the gate. Caps bound the scrape per
+    # repository: pages per listing, dependents overall, and packages walked
+    # for multi-package repositories.
     GITHUB_DEPENDENTS_ENABLED: bool = False
-    GITHUB_DEPENDENTS_ALLOWLIST: str = ""
     GITHUB_DEPENDENTS_PAGES_CAP: int = Field(default=20, gt=0)
     GITHUB_DEPENDENTS_ENTRY_CAP: int = Field(default=500, gt=0)
     GITHUB_DEPENDENTS_PACKAGES_CAP: int = Field(default=25, gt=0)
 
     # --- Maintenance metric ---
-    # Scheduling fails closed: ENABLED=false schedules nothing; ENABLED=true
-    # schedules only repositories on the allowlist (comma-separated
-    # owner/repo, case-insensitive); the explicit value "*" schedules all
-    # eligible repos. The collector task re-checks both settings at execution
-    # time, so disabling stops already-queued work; gated materialization
-    # re-checks the enable flag. Explicit CLI runs bypass the gate.
+    # Scheduling requires ENABLED=true and a repo associated with a Project
+    # whose pg_award flag is true. Declared host repos remain excluded. The
+    # collector re-checks these conditions at execution time; materialization
+    # also re-checks the enable flag. Explicit CLI runs bypass the collection
+    # gate.
     MAINTENANCE_METRIC_ENABLED: bool = False
-    MAINTENANCE_METRIC_ALLOWLIST: str = ""
     #: Repos whose issue tracking is declared to live outside GitHub
     #: (comma-separated owner/repo). Issue signals become not-applicable.
     MAINTENANCE_EXTERNAL_TRACKER_REPOS: str = ""
@@ -150,9 +145,9 @@ class Settings(BaseSettings):
     #: Per-repo caps for the GitHub collection: listing pages per item type,
     #: total API requests, and wall-clock seconds. A capped repo is recorded
     #: incomplete for the affected signals, never silently mixed into results.
-    MAINTENANCE_ITEM_PAGE_CAP: int = Field(default=10, gt=0)
+    MAINTENANCE_ITEM_PAGE_CAP: int = Field(default=50, gt=0)
     MAINTENANCE_REQUEST_CAP: int = Field(default=120, gt=0)
-    MAINTENANCE_TIME_CAP_SECONDS: float = Field(default=180.0, gt=0)
+    MAINTENANCE_TIME_CAP_SECONDS: float = Field(default=300.0, gt=0)
     #: Longest single wait for an advertised rate-limit reset; a reset
     #: further away records the affected signals incomplete (rate-limited).
     MAINTENANCE_RATE_LIMIT_MAX_WAIT_SECONDS: float = Field(default=120.0, ge=0)

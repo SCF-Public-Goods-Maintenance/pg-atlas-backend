@@ -64,7 +64,6 @@ from pg_atlas.db_models.github_dependents_observation import (
     GithubDependentsCrawlRun,
 )
 from pg_atlas.db_models.repo_vertex import Repo
-from pg_atlas.repo_identity import parse_owner_repo_entries
 
 logger = logging.getLogger(__name__)
 
@@ -88,31 +87,6 @@ REASON_COUNTS_PARTIAL = "counts-partial"
 
 #: Advisory-lock namespace for per-source persistence serialization.
 _ADVISORY_LOCK_NAMESPACE = "github-dependents"
-
-
-def github_dependents_scheduling_allowed(owner: str, repo: str) -> bool:
-    """
-    Fail-closed scheduling gate for the GitHub dependents crawl.
-
-    Requires the enable flag AND an allowlist match: a comma-separated
-    ``owner/repo`` list (case-insensitive), or the explicit value ``"*"`` for
-    all repositories. An empty allowlist schedules nothing. Malformed entries
-    are rejected with a warning. Explicit CLI runs bypass this gate. Lives in
-    this module (not the task layer) so it stays importable without a
-    database.
-    """
-    if not settings.GITHUB_DEPENDENTS_ENABLED:
-        return False
-
-    raw = settings.GITHUB_DEPENDENTS_ALLOWLIST.strip()
-    if raw == "*":
-        return True
-
-    allowed, rejected = parse_owner_repo_entries(raw)
-    for item in rejected:
-        logger.warning(f"github-dependents allowlist entry rejected: {item!r}")
-
-    return f"{owner}/{repo}".lower() in allowed
 
 
 # ---------------------------------------------------------------------------

@@ -38,9 +38,10 @@ failed collection is recorded, never silently mixed into results. Persistence
 merges per signal: a newly incomplete signal never overwrites a previously
 complete one, whose own ``as_of`` keeps it honest at materialization time.
 
-Scheduling fails closed behind ``MAINTENANCE_METRIC_ENABLED`` plus
-``MAINTENANCE_METRIC_ALLOWLIST``; the task layer re-checks the same gate at
-execution time. Explicit CLI runs bypass the gate::
+Scheduling requires ``MAINTENANCE_METRIC_ENABLED`` and a repo associated with
+a ``Project`` whose ``pg_award`` flag is true; declared host repositories are
+excluded. The task layer re-checks these conditions at execution time.
+Explicit CLI runs bypass the gate::
 
     uv run python -m pg_atlas.procrastinate.github_maintenance Soneso/stellar-php-sdk
 
@@ -155,36 +156,6 @@ def _parse_owner_repo_set(raw: str, *, setting_name: str) -> frozenset[str]:
         logger.warning(f"{setting_name} entry rejected: {item!r}")
 
     return entries
-
-
-def maintenance_metric_allowed(owner: str, repo: str) -> bool:
-    """
-    Fail-closed gate for maintenance-signal collection.
-
-    Requires the enable flag AND an allowlist match: a comma-separated
-    ``owner/repo`` list (case-insensitive), or the explicit value ``"*"`` for
-    all repositories. An empty allowlist allows nothing. Declared host
-    repositories are excluded even when the allowlist matches: their
-    repo-level signals describe the hosting organization, so no collection
-    budget is spent on them. Checked at scheduling time AND re-checked by the
-    task at execution time, so disabling stops already-queued work. Explicit
-    CLI runs bypass this gate. Lives in this module (not the task layer) so
-    it stays importable without a database.
-    """
-
-    if not settings.MAINTENANCE_METRIC_ENABLED:
-        return False
-
-    if maintenance_host_repo(owner, repo):
-        return False
-
-    raw = settings.MAINTENANCE_METRIC_ALLOWLIST.strip()
-    if raw == "*":
-        return True
-
-    allowed = _parse_owner_repo_set(raw, setting_name="maintenance-metric allowlist")
-
-    return f"{owner}/{repo}".lower() in allowed
 
 
 def maintenance_host_repo(owner: str, repo: str) -> bool:
@@ -824,6 +795,8 @@ class _MaintenanceCollector:
                 if node.authorAssociation in MAINTAINER_ASSOCIATIONS or _is_declared_maintainer(
                     node.author, self._declared_maintainers
                 ):
+                    # perf refactor target: if maintainer-authored only needs an increment,
+                    # we can reduce the number of pages to process by getting a separate count
                     maintainer_authored += 1
                     continue
 
@@ -951,6 +924,8 @@ class _MaintenanceCollector:
                 if node.authorAssociation in MAINTAINER_ASSOCIATIONS or _is_declared_maintainer(
                     node.author, self._declared_maintainers
                 ):
+                    # perf refactor target: if maintainer-authored only needs an increment,
+                    # we can reduce the number of pages to process by getting a separate count
                     maintainer_authored += 1
                     continue
 
