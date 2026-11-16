@@ -38,7 +38,6 @@ from pg_atlas.metrics.maintenance import (
     compute_responsiveness,
     distinct_release_dates,
     has_package_registry_release,
-    is_go_pseudo_version,
     parse_declared_maintainers,
     purl_type,
     rank_scalar_values,
@@ -267,53 +266,29 @@ _GO_PSEUDO_VERSIONS = [
 
 class TestGoPseudoVersions:
     @pytest.mark.parametrize("version", _GO_PSEUDO_VERSIONS)
-    def test_pseudo_version_is_not_a_shipping_event(self, version: str) -> None:
-        """A pseudo-version is a commit reference; only the tagged npm release counts."""
+    def test_pseudo_version_dates_are_not_filtered_at_the_metric_layer(self, version: str) -> None:
+        """deps.dev filtering owns pseudo-version exclusion before releases are stored."""
 
         releases = [
             _release("2026-08-01T09:30:00Z", purl=_GO_PURL, version=version),
             _release("2026-07-01T09:00:00Z", purl="pkg:npm/a", version="1.0.0"),
         ]
 
-        assert is_go_pseudo_version(releases[0]) is True
-        assert distinct_release_dates(releases) == [dt.date(2026, 7, 1)]
+        assert distinct_release_dates(releases) == [dt.date(2026, 7, 1), dt.date(2026, 8, 1)]
 
     @pytest.mark.parametrize("version", ["v1.4.2", "v2.3.0+incompatible", "v1.5.0-rc.1"])
     def test_tagged_golang_release_counts(self, version: str) -> None:
         release = _release("2026-08-01T09:30:00Z", purl=_GO_PURL, version=version)
 
-        assert is_go_pseudo_version(release) is False
         assert distinct_release_dates([release]) == [dt.date(2026, 8, 1)]
 
-    def test_rule_is_scoped_to_the_golang_purl_type(self) -> None:
-        """The same string under another registry is that registry's own version."""
-
-        release = _release("2026-08-01T09:30:00Z", purl="pkg:cargo/some-crate", version=_GO_PSEUDO_VERSIONS[0])
-
-        assert is_go_pseudo_version(release) is False
-        assert distinct_release_dates([release]) == [dt.date(2026, 8, 1)]
-
-    def test_pseudo_versions_on_many_days_leave_no_dates(self) -> None:
+    def test_pseudo_version_dates_on_many_days_are_used_as_stored(self) -> None:
         releases = [
             _release(f"2026-08-{day:02d}T09:30:00Z", purl=_GO_PURL, version=f"v0.0.0-202608{day:02d}093000-3f2a1b4c5d6e")
             for day in range(1, 11)
         ]
 
-        assert distinct_release_dates(releases) == []
-
-    @pytest.mark.parametrize(
-        "version",
-        [
-            # 13-digit timestamp
-            "v0.0.0-2026080109300-3f2a1b4c5d6e",
-            # missing revision
-            "v0.0.0-20260801093000-",
-            # non-ASCII digits never match
-            "v0.0.0-\u0662\u0660\u0662\u0666\u0660\u0668\u0660\u0661\u0660\u0669\u0663\u0660\u0660\u0660-3f2a1b4c5d6e",
-        ],
-    )
-    def test_near_misses_are_not_pseudo_versions(self, version: str) -> None:
-        assert is_go_pseudo_version(_release("2026-08-01T09:30:00Z", purl=_GO_PURL, version=version)) is False
+        assert distinct_release_dates(releases) == [dt.date(2026, 8, day) for day in range(1, 11)]
 
 
 class TestPurlType:

@@ -174,6 +174,7 @@ class TestPersistCollected:
         ).one()
         metadata, stored_pushed_at, stored_observed_at = row
 
+        assert metadata
         assert metadata["adoption_downloads_by_purl"] == {"pkg:npm/a": 42}
         assert stored_pushed_at == pushed_at
         # The run's collected_at is the observation time of its pushed_at.

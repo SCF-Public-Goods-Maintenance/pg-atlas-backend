@@ -90,19 +90,6 @@ DAYS_PER_MONTH_LOWER_BOUND = 30
 CADENCE_SOURCE_DEPSDEV = "depsdev"
 CADENCE_SOURCE_GITHUB_RELEASES = "github-releases"
 
-#: purl type of Go module release records.
-PURL_TYPE_GOLANG = "golang"
-
-#: Go's own pseudo-version grammar (``golang.org/x/mod/module``). A
-#: pseudo-version names a commit (``vX.0.0-<timestamp>-<revision>``,
-#: ``vX.Y.Z-pre.0.<timestamp>-<revision>``, ``vX.Y.(Z+1)-0.<timestamp>-<revision>``,
-#: each optionally ``+incompatible``); the Go module proxy derives one for any
-#: commit of any repository. ASCII digits only, as in Go's ``\d``.
-_GO_PSEUDO_VERSION_PATTERN = re.compile(
-    r"^v[0-9]+\.(0\.0-|\d+\.\d+-([^+]*\.)?0\.)\d{14}-[A-Za-z0-9]+(\+[0-9A-Za-z-]+)?$",
-    re.ASCII,
-)
-
 #: purl types of package registries whose published package is how the code
 #: is consumed, so a release record there is the event that ships code.
 #: ``golang`` is absent: the Go module proxy mirrors the semver tags of any
@@ -472,38 +459,20 @@ def purl_type(purl: str) -> str | None:
     return type_component or None
 
 
-def is_go_pseudo_version(release: Release) -> bool:
-    """
-    Return whether a release record is a Go module pseudo-version.
-
-    Only ``golang`` records qualify; the same string under another purl type
-    is that registry's own version and is left alone.
-    """
-
-    return purl_type(release.purl) == PURL_TYPE_GOLANG and _GO_PSEUDO_VERSION_PATTERN.fullmatch(release.version) is not None
-
-
 def distinct_release_dates(releases: Sequence[Release] | None) -> list[dt.date]:
     """
-    Reduce stored release records to sorted distinct publication dates.
+    Reduce stored, ingestion-filtered release records to sorted distinct dates.
 
     A repo publishing several packages together must count one shipping event
     per date, not gap medians over interleaved per-package records. Records
     without a parseable date prefix are skipped: bare versions carry no
-    cadence information.
-
-    Invariant: Go module pseudo-versions never count as publications. A
-    pseudo-version is a commit reference that the Go module proxy derives for
-    any commit of any repository, so its date is a commit date, not a
-    shipping event. Tagged Go versions (including ``vX.Y.Z+incompatible``)
-    count like any other release.
+    cadence information. Go pseudo-versions are excluded by the deps.dev
+    ingestion boundary and removed from existing rows by a data migration;
+    this function does not apply a second version filter.
     """
 
     dates: set[dt.date] = set()
     for release in releases or []:
-        if is_go_pseudo_version(release):
-            continue
-
         prefix = release.release_date[:10]
         try:
             dates.add(dt.date.fromisoformat(prefix))

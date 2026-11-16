@@ -695,10 +695,10 @@ class TestReleaseFallbackDecision:
 
         return requested[0]
 
-    async def test_pseudo_versions_only_requests_the_github_releases_fallback(
+    async def test_collector_does_not_reapply_the_pseudo_version_filter(
         self, monkeypatch: pytest.MonkeyPatch, default_parameters: None
     ) -> None:
-        """Commit-day pseudo-versions are no dated coverage, however many days they span."""
+        """Release collection relies on deps.dev filtering before persistence."""
 
         monkeypatch.setattr(settings, "MAINTENANCE_CADENCE_MIN_EVENTS", 3)
         releases = [
@@ -710,7 +710,7 @@ class TestReleaseFallbackDecision:
             for day in range(1, 11)
         ]
 
-        assert await self._fallback_flag(monkeypatch, releases) is True
+        assert await self._fallback_flag(monkeypatch, releases) is False
 
     async def test_tagged_golang_releases_are_dated_coverage(
         self, monkeypatch: pytest.MonkeyPatch, default_parameters: None

@@ -1079,8 +1079,8 @@ class TestReleaseShipsCode:
 
 
 class TestGoPseudoVersionCadence:
-    def test_pseudo_versions_do_not_outvote_github_releases(self, pinned_settings: None) -> None:
-        """Commit-day pseudo-versions are not publications; the GitHub Releases dates carry the cadence."""
+    def test_materializer_uses_the_stored_release_dates_without_a_second_filter(self, pinned_settings: None) -> None:
+        """The deps.dev ingestion boundary and data migration exclude pseudo-versions."""
 
         from pg_atlas.metrics.maintenance import ReleaseFallback
 
@@ -1103,12 +1103,11 @@ class TestGoPseudoVersionCadence:
         profile = _cadence_profile(pseudo_versions, now, deploy_on_push=False, fallback=fallback)
         block = profile.signals["release_cadence"]
 
-        assert block["source"] == "github-releases"
-        assert block["shipping_events"] == 3
+        assert block["source"] == "depsdev"
+        assert block["shipping_events"] == 8
         assert block["days_since_last_release"]["state"] == STATE_OK
-        assert block["days_since_last_release"]["value"] == 20.0
-        assert block["days_since_last_release"]["as_of"] == now.isoformat()
-        assert block["median_gap_days"]["value"] == 30.0
+        assert block["days_since_last_release"]["value"] == 1.0
+        assert block["median_gap_days"]["value"] == 1.0
         assert block["release_ships_code"] is None
 
 
