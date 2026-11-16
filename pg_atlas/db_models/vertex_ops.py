@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectin_polymorphic
 
@@ -28,7 +28,9 @@ POLY_LOAD = selectin_polymorphic(RepoVertex, [Repo, ExternalRepo, RedirectVertex
 
 async def get_vertex(session: AsyncSession, canonical_id: str) -> RepoVertex | None:
     """Look up a single ``RepoVertex`` by ``canonical_id`` with eager subtype loading."""
-    result = await session.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(POLY_LOAD))
+    result = await session.execute(
+        select(RepoVertex).where(func.lower(RepoVertex.canonical_id) == func.lower(canonical_id)).options(POLY_LOAD)
+    )
 
     return result.scalar_one_or_none()
 

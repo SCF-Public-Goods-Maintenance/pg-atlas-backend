@@ -198,7 +198,7 @@ async def _upsert_repo(
     ``session.flush()`` is called so that the returned object has its ``id``
     populated before the caller uses it.
     """
-    result = await session.execute(select(Repo).where(Repo.canonical_id == canonical_id))
+    result = await session.execute(select(Repo).where(func.lower(Repo.canonical_id) == func.lower(canonical_id)))
     repo = result.scalar_one_or_none()
     if repo is None:
         repo = Repo(
@@ -324,8 +324,8 @@ async def _upsert_sbom_vertices(
     missing GitHub vertices are warned about and skipped. Other references with
     PURLs link to a Repo whose releases contain that PURL. Unmatched references
     are upserted as ExternalRepos. GitHub-hosted Swift packages also resolve to
-    a unique tracked Repo case-insensitively, preserving their original Swift
-    identity when no unique match exists. References without a PURL are warned about
+    a tracked Repo case-insensitively, preserving their original Swift
+    identity when no match exists. References without a PURL are warned about
     before using their normalized package ID for that fallback.
 
     Non-root package vertices are deduplicated by normalized package ID and
@@ -351,13 +351,12 @@ async def _upsert_sbom_vertices(
 
         if normalized_package_id.startswith("pkg:github/"):
             github_canonical_ids.add(normalized_package_id)
+        elif candidate := _swift_github_candidate(normalized_package_id):
+            swift_candidates[normalized_package_id] = candidate
         elif pkg_purl:
             release_purl_lookups.add(normalized_package_id)
         else:
             logger.warning(f"SBOM for {submitting_canonical_id} references {normalized_package_id} without a PURL")
-
-        if candidate := _swift_github_candidate(normalized_package_id):
-            swift_candidates[normalized_package_id] = candidate
 
         version = _version_for_spdx_package(pkg)
         repo_url = _repo_url_for_spdx_package(pkg)
@@ -374,20 +373,13 @@ async def _upsert_sbom_vertices(
             ).all()
         }
 
-    swift_repos: dict[str, list[Repo]] = {}
+    matched_swift_repos: dict[str, Repo] = {}
     if swift_candidates:
         candidates = sorted(set(swift_candidates.values()))
-        for repo in (await session.scalars(select(Repo).where(func.lower(Repo.canonical_id).in_(candidates)))).all():
-            swift_repos.setdefault(repo.canonical_id.lower(), []).append(repo)
-
-    matched_swift_repos: dict[str, Repo] = {}
-    for candidate, repos in swift_repos.items():
-        if len(repos) == 1:
-            matched_swift_repos[candidate] = repos[0]
-        else:
-            logger.warning(
-                f"Ambiguous tracked GitHub repositories for Swift candidate {candidate}; retaining package identity"
-            )
+        matched_swift_repos = {
+            repo.canonical_id.lower(): repo
+            for repo in (await session.scalars(select(Repo).where(func.lower(Repo.canonical_id).in_(candidates)))).all()
+        }
 
     for normalized_package_id in sorted(normalized_inputs):
         display_name, version, repo_url = normalized_inputs[normalized_package_id]

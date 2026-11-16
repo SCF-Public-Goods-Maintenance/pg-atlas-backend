@@ -65,7 +65,7 @@ async def test_swift_links_tracked_repo_and_preserves_external_control(
         return query_result
 
     session.scalars.side_effect = select_repos
-    mocker.patch("pg_atlas.ingestion.persist.find_repos_by_release_purls", return_value={})
+    release_lookup = mocker.patch("pg_atlas.ingestion.persist.find_repos_by_release_purls", return_value={})
     external = ExternalRepo(
         canonical_id="pkg:swift/github.com/apple/swift-collections",
         display_name="github.com/apple/swift-collections",
@@ -77,6 +77,7 @@ async def test_swift_links_tracked_repo_and_preserves_external_control(
 
     mapping, versions = await _upsert_sbom_vertices(session, sbom, root.canonical_id, root)
 
+    release_lookup.assert_awaited_once_with([], session=session)
     assert mapping == {"SPDXRef-root": 11, "SPDXRef-sdk": 22, "SPDXRef-collections": 33}
     assert versions == {22: "3.14.0", 33: "1.1.4"}
     upsert.assert_awaited_once_with(
@@ -92,23 +93,17 @@ async def test_swift_links_tracked_repo_and_preserves_external_control(
     assert nested == []
 
 
-@pytest.mark.parametrize("ambiguous", [False, True], ids=["untracked", "ambiguous-casing"])
 async def test_swift_unresolved_repository_retains_package_vertices(
     mocker: MockerFixture,
-    ambiguous: bool,
 ) -> None:
     """
-    Untracked or ambiguous GitHub candidates remain Swift ExternalRepos without guessing.
+    Untracked GitHub candidates remain Swift ExternalRepos.
     """
     sbom = parse_and_validate_spdx(FIXTURE.read_bytes())
     root = _repo("pkg:github/pgm-testing/sbom-demo-swift", 11)
     session = AsyncMock(spec=AsyncSession)
     query_result = Mock()
-    query_result.all.return_value = (
-        [_repo("pkg:github/Soneso/stellar-ios-mac-sdk", 22), _repo("pkg:github/soneso/stellar-ios-mac-sdk", 23)]
-        if ambiguous
-        else []
-    )
+    query_result.all.return_value = []
     session.scalars.return_value = query_result
     mocker.patch("pg_atlas.ingestion.persist.find_repos_by_release_purls", return_value={})
 
