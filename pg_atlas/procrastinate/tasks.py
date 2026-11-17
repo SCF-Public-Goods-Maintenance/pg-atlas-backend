@@ -12,7 +12,8 @@ Task hierarchy (queue names in brackets)::
            └─ crawl_github_repo  [opengrants]
                  ├─ crawl_package_deps  [package-deps]
                  ├─ crawl_package_registry  [registry-crawl]
-                 └─ crawl_github_dependents  [registry-crawl]
+                 ├─ crawl_github_dependents  [registry-crawl]
+                 └─ collect_maintenance_signals  [opengrants]
 
 The bootstrap workers run ``package-deps`` and ``registry-crawl`` after
 ``opengrants`` has drained so that all ``Repo`` vertices and ``Project``
@@ -34,13 +35,13 @@ from urllib.parse import urlsplit
 import httpx2
 import yaml
 from procrastinate.exceptions import AlreadyEnqueued
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from pg_atlas.config import settings
 from pg_atlas.crawlers.base import USER_AGENT, AllPackagesFailed
 from pg_atlas.crawlers.factory import build_registry_crawler, normalize_registry_system
-from pg_atlas.crawlers.github_dependents import github_dependents_scheduling_allowed
 from pg_atlas.db_models.base import ActivityStatus, ProjectType, RedirectPredicate, SubmissionStatus
+from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.release import Release, preferred_latest_version, sorted_releases_desc
 from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.sbom_submission import SbomSubmission
@@ -67,6 +68,10 @@ from pg_atlas.procrastinate.github import (
     latest_version_from_repo,
     list_org_repos,
 )
+from pg_atlas.procrastinate.github_maintenance import (
+    maintenance_host_repo,
+    run_maintenance_collection,
+)
 from pg_atlas.procrastinate.opengrants import ScfProject, fetch_scf_projects
 from pg_atlas.procrastinate.upserts import (
     absorb_external_repo,
@@ -74,6 +79,8 @@ from pg_atlas.procrastinate.upserts import (
     clear_project_repo_associations,
     demote_repo_to_redirect,
     find_repo_by_release_purl,
+    persist_pushed_at,
+    reconcile_pg_award,
     upsert_depends_on,
     upsert_external_repo,
     upsert_project,
@@ -92,6 +99,9 @@ DEPSDEV_SUPPORTED_SYSTEMS = frozenset({"PYPI", "NPM", "CARGO", "MAVEN", "GO", "R
 # ---------------------------------------------------------------------------
 
 _PROJECT_OVERRIDE_DIR = Path(__file__).parent.parent / "data" / "projects"
+
+#: The only override file whose entries may set ``pg_award``; its entries default to ``True``.
+_PG_PROPOSAL_OVERRIDE_FILE = "pg-proposal-overrides.yml"
 
 _MAX_RELEASE_ENTRIES = 555
 
@@ -213,12 +223,18 @@ async def sync_opengrants(
     """
     Root bootstrap task: fetch all SCF projects and fan out.
 
-    Fetches every SCF round from OpenGrants, deduplicates by
-    ``projectId``, patches project data with their overrides, and
-    defers one ``process_project`` task per project.
+    Loads the project overrides and reconciles ``Project.pg_award`` with
+    the ``pg_award`` entries of all overrides, in every run (full and
+    targeted) and before any OpenGrants request. Then fetches every SCF
+    round from OpenGrants, deduplicates by ``projectId``, patches project
+    data with their overrides, and defers one ``process_project`` task per
+    project.
     """
     logger.info("sync_opengrants: starting")
-    project_overrides = _load_project_overrides()
+    project_overrides = load_project_overrides()
+    pg_award_canonical_ids = {key for key, entry in project_overrides.items() if entry["pg_award"]}
+    pg_award_set_true, pg_award_set_false = await reconcile_pg_award(pg_award_canonical_ids)
+    logger.info(f"sync_opengrants: pg_award reconciled: set_true={pg_award_set_true} set_false={pg_award_set_false}")
 
     async with httpx2.AsyncClient(timeout=60.0) as client:
         projects: list[ScfProject] = await fetch_scf_projects(client)
@@ -285,11 +301,14 @@ async def process_project(
     project_metadata: dict[str, Any] | None,
     category: str | None = None,
     extended_universe: bool = False,
+    pg_award: bool = False,
 ) -> None:
     """
     Process a single SCF project.
 
-    1. Upsert a ``Project`` row.
+        1. Upsert a ``Project`` row. ``sync_opengrants`` passes the resolved
+             ``pg_award`` value on every job and bulk-reconciles existing rows before
+             fetching OpenGrants; the upsert uses the value only for new rows.
     2. If category is "Education & Community", skip GitHub/deps.dev crawling.
     3. Otherwise, list GitHub repos, call deps.dev, and defer ``crawl_github_repo``.
 
@@ -315,6 +334,7 @@ async def process_project(
             git_owner_url=git_owner_url,
             category=category,
             project_metadata=project_metadata,
+            pg_award=pg_award,
         )
         logger.info(f"process_project: skipping crawl for Education & Community project {canonical_id}")
 
@@ -383,6 +403,7 @@ async def process_project(
         git_owner_url=git_owner_url,
         category=category,
         project_metadata=project_metadata,
+        pg_award=pg_award,
     )
 
     # ----- Reconcile Repo associations for the restricted crawl -----
@@ -395,7 +416,9 @@ async def process_project(
 
     # ----- Defer crawl_github_repo for each repo to crawl -----
     if repos_to_crawl:
-        crawl_batch_data = (build_repo_defer_data(repo_info, project_id, depsdev_projects) for repo_info in repos_to_crawl)
+        crawl_batch_data = (
+            build_repo_defer_data(repo_info, project_id, depsdev_projects, pg_award=pg_award) for repo_info in repos_to_crawl
+        )
         await crawl_github_repo.batch_defer_async(*crawl_batch_data)
 
     logger.info(f"process_project: deferred {len(repos_to_crawl)} crawl_github_repo tasks for {canonical_id}")
@@ -498,6 +521,8 @@ async def crawl_github_repo(
     adoption_stars: int,
     adoption_forks: int,
     pushed_at_isodt: str | None = None,
+    observed_at_isodt: str | None = None,
+    pg_award: bool = False,
 ) -> None:
     """
     Crawl a single GitHub repository.
@@ -509,6 +534,12 @@ async def crawl_github_repo(
     4. Defer ``crawl_package_deps`` for deps.dev-supported packages.
     5. Group registry-crawl packages by registry system and defer one
         ``crawl_package_registry`` task per supported system.
+    6. Defer GitHub dependents crawl for PG Award repos
+    7. Defer maintenance signal collection for PG Award repos
+
+    ``pushed_at_isodt`` feeds both ``latest_commit_date`` and, together with
+    ``observed_at_isodt`` (when the GitHub listing was fetched), the
+    monotonic ``Repo.pushed_at`` writer ``persist_pushed_at``.
 
     Registry-supported ecosystems are crawled directly for adoption signals,
     even when they also flow through deps.dev for release and dependency data.
@@ -570,7 +601,7 @@ async def crawl_github_repo(
         try:
             parsed_commit_date = dt.datetime.fromisoformat(pushed_at_isodt)
         except ValueError:
-            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt:r}")
+            logger.warning(f"crawl_github_repo: unparseable latest_commit_date={pushed_at_isodt!r}")
 
     repo_vertex_id = await upsert_repo(
         canonical_id=repo_canonical_id,
@@ -583,6 +614,17 @@ async def crawl_github_repo(
         adoption_forks=adoption_forks,
         releases=releases if releases else None,
     )
+
+    # ----- Record the push observation (monotonic, with its observation time) -----
+    parsed_observed_at: dt.datetime | None = None
+    if observed_at_isodt is not None:
+        try:
+            parsed_observed_at = dt.datetime.fromisoformat(observed_at_isodt)
+        except ValueError:
+            logger.warning(f"crawl_github_repo: unparseable observed_at={observed_at_isodt!r}")
+
+    if parsed_commit_date is not None and parsed_observed_at is not None:
+        await persist_pushed_at(repo_vertex_id, parsed_commit_date, parsed_observed_at)
 
     # ----- For each package: absorb ExternalRepo if one exists -----
     # must happen for all packages regardless of system
@@ -661,11 +703,20 @@ async def crawl_github_repo(
         joined_purls = " ".join(sorted(purls))
         logger.warning(f"registry-crawl unsupported ecosystem: system={system} purls={joined_purls}")
 
-    # ----- Defer GitHub dependents crawl if this repo is allowlisted -----
-    if defer_github_dependents := github_dependents_scheduling_allowed(owner, repo):
+    # ----- Defer GitHub dependents crawl for PG Award repos when enabled -----
+    if defer_github_dependents := pg_award and settings.GITHUB_DEPENDENTS_ENABLED:
         await defer_with_lock(
             crawl_github_dependents,
             queueing_lock=f"github-dependents:{owner}/{repo}",
+            owner=owner,
+            repo=repo,
+        )
+
+    # ----- Defer maintenance collection for eligible PG Award repos -----
+    if defer_maintenance := (pg_award and settings.MAINTENANCE_METRIC_ENABLED and not maintenance_host_repo(owner, repo)):
+        await defer_with_lock(
+            collect_maintenance_signals,
+            queueing_lock=f"maintenance:{owner}/{repo}",
             owner=owner,
             repo=repo,
         )
@@ -677,6 +728,8 @@ async def crawl_github_repo(
     )
     if defer_github_dependents:
         summary_line += ", deferred crawl_github_dependents task"
+    if defer_maintenance:
+        summary_line += ", deferred collect_maintenance_signals task"
 
     logger.info(summary_line)
 
@@ -761,6 +814,11 @@ async def crawl_github_dependents(
     systemic layout change fails the task visibly.
     """
 
+    if not settings.GITHUB_DEPENDENTS_ENABLED or not await _repo_belongs_to_pg_award_project(owner, repo):
+        logger.info(f"crawl_github_dependents: gate disallows {owner}/{repo} at execution time, skipping")
+
+        return
+
     package_name = f"{owner}/{repo}"
 
     session_factory = get_session_factory()
@@ -787,6 +845,65 @@ async def crawl_github_dependents(
     logger.info(f"crawl_github_dependents: {package_name} processed={result.packages_processed} errors={len(result.errors)}")
     if result.packages_processed == 0:
         raise AllPackagesFailed([package_name])
+
+
+# ---------------------------------------------------------------------------
+# Task: collect_maintenance_signals
+# ---------------------------------------------------------------------------
+
+
+@app.task(queue="opengrants")
+async def collect_maintenance_signals(
+    owner: str,
+    repo: str,
+) -> None:
+    """
+    Collect GitHub maintenance signals for one tracked repository.
+
+    Persists issue/PR responsiveness cohorts, backlog snapshots, tracker
+    applicability, and the release-date fallback under
+    ``Repo.repo_metadata["maintenance_signals"]``, plus the ``Repo.pushed_at``
+    column. Ranking happens later in ``materialize_maintenance``. Runs on the
+    ``opengrants`` queue because it needs the authenticated ``GITHUB_TOKEN``
+    that queue's worker carries.
+
+    Re-checks the enable flag, PG Award project membership, and host-repository
+    exclusion at execution time, so already-queued work respects current state.
+    """
+
+    if (
+        not settings.MAINTENANCE_METRIC_ENABLED
+        or maintenance_host_repo(owner, repo)
+        or not await _repo_belongs_to_pg_award_project(owner, repo)
+    ):
+        logger.info(f"collect_maintenance_signals: gate disallows {owner}/{repo} at execution time, skipping")
+
+        return
+
+    # The per-repo summary line (requests, signal states) is logged by
+    # run_maintenance_collection, shared with the CLI path.
+    await run_maintenance_collection(owner, repo)
+
+
+async def _repo_belongs_to_pg_award_project(owner: str, repo: str) -> bool:
+    """
+    Return whether the currently associated Project marks this GitHub repo as PG Award.
+
+    Repositories with no tracked Repo row, no Project association, or a false
+    ``Project.pg_award`` flag are ineligible.
+    """
+
+    canonical_id = f"pkg:github/{owner}/{repo}".lower()
+    factory = get_session_factory()
+    async with factory() as session:
+        project_id = await session.scalar(
+            select(Project.id)
+            .join(Repo, Repo.project_id == Project.id)
+            .where(func.lower(Repo.canonical_id) == canonical_id, Project.pg_award.is_(True))
+            .limit(1)
+        )
+
+    return project_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1003,16 +1120,24 @@ def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[
 # ---------------------------------------------------------------------------
 
 
-def _load_project_overrides() -> dict[str, dict[str, Any]]:
+def load_project_overrides() -> dict[str, dict[str, Any]]:
     """
     Load all YAML files containing project overrides.
 
     Returns a dict mapping ``canonical_id`` → override field dict (e.g. display_name,
-    activity_status, git_owner_url, git_repo_url, metadata).
-    Raises ValueError if a project key is encountered in multiple files.
+    activity_status, git_owner_url, git_repo_url, metadata, pg_award).
+
+    Every entry carries a resolved boolean ``pg_award``: entries of
+    ``pg-proposal-overrides.yml`` take their ``pg_award`` value and default to
+    ``True``; entries of every other file are ``False``.
+
+    Raises ValueError if a project key is encountered in multiple files, if a
+    file other than ``pg-proposal-overrides.yml`` sets ``pg_award``, if a
+    ``pg_award`` value is not a boolean, or if ``pg-proposal-overrides.yml`` is
+    not found in the override directory.
     """
-    if not _PROJECT_OVERRIDE_DIR.exists():
-        return {}
+    if not (_PROJECT_OVERRIDE_DIR / _PG_PROPOSAL_OVERRIDE_FILE).is_file():
+        raise ValueError(f"Project override file {_PG_PROPOSAL_OVERRIDE_FILE!r} not found in {str(_PROJECT_OVERRIDE_DIR)!r}")
 
     overrides: dict[str, dict[str, Any]] = {}
     override_sources: dict[str, str] = {}
@@ -1023,11 +1148,25 @@ def _load_project_overrides() -> dict[str, dict[str, Any]]:
                 schema_val = data.pop("$schema")
                 logger.info(f"loading overrides from {yml_file.name} with schema {schema_val}")
 
-        for key in data:
+        is_proposal_file = yml_file.name == _PG_PROPOSAL_OVERRIDE_FILE
+        for key, entry in data.items():
             if key in overrides:
                 raise ValueError(f"Duplicate project override key {key!r} in {override_sources[key]!r} and {yml_file.name!r}")
 
             override_sources[key] = yml_file.name
+            if "pg_award" in entry and not is_proposal_file:
+                raise ValueError(
+                    f"Project override key {key!r} in {yml_file.name!r} sets 'pg_award', "
+                    f"which only {_PG_PROPOSAL_OVERRIDE_FILE!r} may set"
+                )
+
+            pg_award = entry.get("pg_award", is_proposal_file)
+            if not isinstance(pg_award, bool):
+                raise ValueError(
+                    f"Project override key {key!r} in {yml_file.name!r} has a non-boolean 'pg_award': {pg_award!r}"
+                )
+
+            entry["pg_award"] = pg_award
 
         overrides |= data
 
@@ -1049,8 +1188,14 @@ def _patched_project(project: ScfProject, patch: dict[str, Any]) -> ScfProject:
 
 
 def build_repo_defer_data(
-    repo_info: GitHubRepoMetadata, project_id: int, projects_info: dict[str, DepsDevProjectInfo]
+    repo_info: GitHubRepoMetadata,
+    project_id: int,
+    projects_info: dict[str, DepsDevProjectInfo],
+    *,
+    pg_award: bool = False,
 ) -> dict[str, Any]:
+    """Build serializable crawl task arguments, including resolved project eligibility."""
+
     repo_full = repo_info.full_name
     depsdev_key = f"github.com/{repo_full}".lower()
     depsdev_info = projects_info.get(depsdev_key)
@@ -1062,6 +1207,10 @@ def build_repo_defer_data(
     pushed_at_utc: dt.datetime | None = None
     if repo_info.pushed_at:
         pushed_at_utc = repo_info.pushed_at.astimezone(dt.UTC)
+
+    observed_at_utc: dt.datetime | None = None
+    if repo_info.observed_at:
+        observed_at_utc = repo_info.observed_at.astimezone(dt.UTC)
 
     if depsdev_info:
         packages = depsdev_info.packages
@@ -1076,8 +1225,10 @@ def build_repo_defer_data(
         owner=repo_owner,
         repo=repo_name,
         project_id=project_id,
+        pg_award=pg_award,
         packages=[asdict(pkg) for pkg in packages],
         pushed_at_isodt=pushed_at_utc.isoformat() if pushed_at_utc is not None else None,
+        observed_at_isodt=observed_at_utc.isoformat() if observed_at_utc is not None else None,
         adoption_stars=adoption_stars,
         adoption_forks=adoption_forks,
     )

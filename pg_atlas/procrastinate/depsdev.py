@@ -18,6 +18,7 @@ SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -65,6 +66,13 @@ _PURL_TYPE_TO_SYSTEM: dict[str, str] = {
     "nuget": "NUGET",
 }
 _SYSTEM_TO_PURL_TYPE: dict[str, str] = {v: k for k, v in _PURL_TYPE_TO_SYSTEM.items()}
+
+# Go's module proxy derives pseudo-versions from commits, so they are not
+# published releases and must not enter a repository's release list.
+_GO_PSEUDO_VERSION_PATTERN = re.compile(
+    r"^v[0-9]+\.(0\.0-|\d+\.\d+-([^+]*\.)?0\.)\d{14}-[A-Za-z0-9]+(\+[0-9A-Za-z-]+)?$",
+    re.ASCII,
+)
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -151,7 +159,7 @@ class DepsDevVersionInfo:
 
 @dataclass
 class DepsDevPackageInfo(_SystemNameBase):
-    """Info about a package from deps.dev GetPackage."""
+    """Info about a package from deps.dev GetPackage; Go pseudo-versions are omitted from ``versions``."""
 
     purl: str
     default_version: str
@@ -284,7 +292,9 @@ async def get_package(system: str, name: str, *, stub: InsightsStub | None = Non
         stub: Optional reusable ``InsightsStub`` from ``depsdev_session()``.
 
     Returns:
-        A ``DepsDevPackageInfo`` with version list and default version.
+        A ``DepsDevPackageInfo`` with publishable versions and the deps.dev
+        default version. Go pseudo-versions are omitted from ``versions`` but
+        may still be returned as ``default_version``.
 
     Raises:
         DepsDevError: On gRPC errors other than NOT_FOUND.
@@ -305,6 +315,13 @@ async def get_package(system: str, name: str, *, stub: InsightsStub | None = Non
     for v in pkg.versions:
         vk = v.version_key
         ver_str = vk.version if vk else ""
+
+        if v.is_default:
+            default_version = ver_str
+
+        if system == "GO" and _GO_PSEUDO_VERSION_PATTERN.fullmatch(ver_str) is not None:
+            continue
+
         version_entries.append(
             DepsDevVersionInfo(
                 version=ver_str,
@@ -313,9 +330,6 @@ async def get_package(system: str, name: str, *, stub: InsightsStub | None = Non
                 is_default=v.is_default,
             )
         )
-
-        if v.is_default:
-            default_version = ver_str
 
     return DepsDevPackageInfo(
         system=system,
