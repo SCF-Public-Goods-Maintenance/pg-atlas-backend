@@ -969,7 +969,7 @@ async def crawl_package_deps(
             dep_purl_type = _purl_type_for_system(req.system)
             dep_canonical_id = f"pkg:{dep_purl_type}/{req.name}" if dep_purl_type else req.name.lower()
 
-            if dep_canonical_id == source_repo_canonical_id:
+            if dep_canonical_id.lower() == source_repo_canonical_id.lower():
                 logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
                 continue
 

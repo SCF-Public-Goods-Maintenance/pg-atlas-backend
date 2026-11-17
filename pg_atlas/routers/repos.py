@@ -67,9 +67,8 @@ _REPO_SORT_FIELDS: dict[str, InstrumentedAttribute[Any]] = {
 # ---------------------------------------------------------------------------
 
 
-def _re_encode_purl(canonical_id: str) -> str:
+def _re_encode_purl(canonical_id: str) -> str:  # pyright: ignore[reportUnusedFunction]
     """
-
     Re-apply percent-encoding that Starlette strips from ``{path}`` params.
 
     PURL canonical IDs stored in the database retain percent-encoding from
@@ -77,8 +76,10 @@ def _re_encode_purl(canonical_id: str) -> str:
     auto-decodes path parameters (``%40`` → ``@``), which breaks DB lookups.
     Re-encoding with ``safe="/:"`` restores the original form while keeping
     PURL structural separators intact.
-    """
 
+    Maintainer note: I've removed the only callsite. If any ExternalRepo
+    routes are added, they will need to use this simple trick.
+    """
     return quote(canonical_id, safe="/:")
 
 
@@ -94,20 +95,13 @@ async def _get_repo_or_redirect(
     Redirect targets are followed only when they resolve to a ``Repo``;
     redirects to ExternalRepos and missing targets return 404.  The optional
     suffix preserves the requested subresource in the redirect location.
-    Tries the raw path parameter first, then the re-encoded form to handle
-    Starlette's automatic percent-decoding.
+    Canonical-ID matching is case-insensitive; returned URLs preserve the
+    stored canonical-ID spelling.
     """
-    # Try decoded value first (most canonical_ids have no percent-encoding).
-    result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == canonical_id).options(POLY_LOAD))
+    result = await db.execute(
+        select(RepoVertex).where(func.lower(RepoVertex.canonical_id) == canonical_id.lower()).options(POLY_LOAD)
+    )
     vertex = result.scalar_one_or_none()
-
-    # Fall back to re-encoded form for PURLs with percent-encoded chars (e.g. npm scoped packages).
-    if vertex is None:
-        encoded = _re_encode_purl(canonical_id)
-
-        if encoded != canonical_id:
-            result = await db.execute(select(RepoVertex).where(RepoVertex.canonical_id == encoded).options(POLY_LOAD))
-            vertex = result.scalar_one_or_none()
 
     if isinstance(vertex, RedirectVertex):
         target_result = await db.execute(select(RepoVertex).where(RepoVertex.id == vertex.target_vertex_id).options(POLY_LOAD))

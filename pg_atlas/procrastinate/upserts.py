@@ -23,7 +23,7 @@ import logging
 from collections.abc import Collection, Sequence
 from typing import Any
 
-from sqlalchemy import DateTime, String, and_, case, column, delete, literal, or_, select, update, values
+from sqlalchemy import DateTime, String, and_, case, column, delete, func, literal, or_, select, update, values
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -940,7 +940,7 @@ async def clear_project_repo_associations(project_id: int, keep_canonical_ids: C
             .where(
                 Repo.id == RepoVertex.id,
                 Repo.project_id == project_id,
-                RepoVertex.canonical_id.not_in(keep_canonical_ids),
+                func.lower(RepoVertex.canonical_id).not_in([canonical_id.lower() for canonical_id in keep_canonical_ids]),
             )
             .values(project_id=None)
         )
@@ -961,7 +961,10 @@ async def associate_repos_with_project(repo_canonical_ids: Sequence[str], projec
     try:
         await session.execute(
             update(Repo)
-            .where(Repo.id == RepoVertex.id, RepoVertex.canonical_id.in_(repo_canonical_ids))
+            .where(
+                Repo.id == RepoVertex.id,
+                func.lower(RepoVertex.canonical_id).in_([canonical_id.lower() for canonical_id in repo_canonical_ids]),
+            )
             .values(project_id=project_id)
         )
         await session.commit()

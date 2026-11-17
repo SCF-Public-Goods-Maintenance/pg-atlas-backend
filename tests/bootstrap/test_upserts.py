@@ -673,7 +673,10 @@ async def test_clear_project_repo_associations_is_scoped(
     await session.refresh(other_project_repo)
 
     with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
-        await clear_project_repo_associations(project.id, [retained_repo.canonical_id, unavailable_repo.canonical_id])
+        await clear_project_repo_associations(
+            project.id,
+            [retained_repo.canonical_id.swapcase(), unavailable_repo.canonical_id],
+        )
 
     await session.reset()
     repos = (
@@ -852,7 +855,7 @@ async def test_associate_repos_with_project_updates_matching_rows(
     await session.refresh(unmatched_repo)
 
     with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
-        await associate_repos_with_project([matched_repo.canonical_id], project.id)
+        await associate_repos_with_project([matched_repo.canonical_id.swapcase()], project.id)
 
     await session.reset()
     matched = (await session.execute(select(Repo).where(Repo.id == matched_repo.id))).scalar_one()

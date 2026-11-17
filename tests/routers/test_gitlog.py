@@ -41,11 +41,11 @@ async def test_list_gitlog_artifacts(
 async def test_list_gitlog_artifacts_filter_by_repo(
     seeded_client: tuple[AsyncClient, dict[str, Any]],
 ) -> None:
-    """GET /gitlog?repo filters by exact repo canonical ID."""
+    """GET /gitlog?repo filters by repo canonical ID case-insensitively."""
 
     client, seed = seeded_client
     repo_canonical_id = seed["repo_a1"].canonical_id
-    resp = await client.get("/gitlog", params={"repo": repo_canonical_id})
+    resp = await client.get("/gitlog", params={"repo": repo_canonical_id.swapcase()})
     assert resp.status_code == 200
 
     body = resp.json()

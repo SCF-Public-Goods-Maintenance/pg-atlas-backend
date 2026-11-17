@@ -37,13 +37,13 @@ router = APIRouter()
 async def list_gitlog_artifacts(
     db: DbSession,
     pagination: Annotated[PaginationParams, Depends()],
-    repo: Annotated[str | None, Query(description="Filter by repo canonical_id (exact match)")] = None,
+    repo: Annotated[str | None, Query(description="Filter by repo canonical_id (case-insensitive)")] = None,
 ) -> PaginatedResponse[GitLogArtifactSummary]:
     """Paginated list of gitlog processing attempts with optional repo filter."""
 
     base = select(GitLogArtifact, Repo).join(Repo, Repo.id == GitLogArtifact.repo_vertex_id)
     if repo is not None:
-        base = base.where(Repo.canonical_id == repo)
+        base = base.where(func.lower(Repo.canonical_id) == repo.lower())
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     rows = (
