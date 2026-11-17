@@ -11,6 +11,7 @@ SPDX-License-Identifier: MPL-2.0
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from collections.abc import AsyncGenerator
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -736,7 +738,7 @@ async def test_upsert_repo_union_merges_releases(
 
     with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
         repo_id = await upsert_repo(
-            canonical_id="pkg:github/test-org/release-merge",
+            canonical_id="pkg:github/Test-Org/Release-Merge",
             display_name="release-merge",
             latest_version="1.0.0",
             releases=[Release(version="1.0.0", release_date="2025-01-01T00:00:00Z", purl="pkg:pub/release-merge")],
@@ -751,8 +753,70 @@ async def test_upsert_repo_union_merges_releases(
 
     await session.reset()
     repo = (await session.execute(select(Repo).where(Repo.id == repo_id))).scalar_one()
+    assert repo.canonical_id == "pkg:github/Test-Org/Release-Merge"
     assert repo.releases is not None
     assert [release.version for release in repo.releases] == ["1.1.0", "1.0.0"]
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")
+async def test_concurrent_upsert_repo_unique_violation_then_retry(
+    upsert_test_env: tuple[async_sessionmaker[AsyncSession], AsyncSession],
+) -> None:
+    """Concurrent case variants race at the unique index; a later upsert reuses the winner."""
+
+    from pg_atlas.procrastinate import upserts as upserts_module
+    from pg_atlas.procrastinate.upserts import upsert_repo
+
+    factory, _ = upsert_test_env
+    suffix = uuid4().hex
+    canonical_ids = (
+        f"pkg:github/Race-Org/Repo-{suffix}",
+        f"pkg:github/race-org/repo-{suffix}",
+    )
+    normalized_id = canonical_ids[0].lower()
+    lookup_count = 0
+    lookup_lock = asyncio.Lock()
+    both_transactions_looked_up = asyncio.Event()
+    original_get_vertex = upserts_module.get_vertex
+
+    async def synchronized_get_vertex(session: AsyncSession, canonical_id: str) -> RepoVertex | None:
+        nonlocal lookup_count
+        vertex = await original_get_vertex(session, canonical_id)
+        if canonical_id.lower() == normalized_id:
+            async with lookup_lock:
+                lookup_count += 1
+                if lookup_count == 2:
+                    both_transactions_looked_up.set()
+
+            await both_transactions_looked_up.wait()
+
+        return vertex
+
+    with patch("pg_atlas.procrastinate.upserts.get_session_factory", return_value=factory):
+        with patch("pg_atlas.procrastinate.upserts.get_vertex", new=synchronized_get_vertex):
+            results = await asyncio.gather(
+                *(
+                    upsert_repo(
+                        canonical_id=canonical_id,
+                        display_name="race",
+                        latest_version="1.0.0",
+                    )
+                    for canonical_id in canonical_ids
+                ),
+                return_exceptions=True,
+            )
+
+        successful_ids = [result for result in results if isinstance(result, int)]
+        unique_violations = [result for result in results if isinstance(result, IntegrityError)]
+        assert len(successful_ids) == 1
+        assert len(unique_violations) == 1
+        retried_id = await upsert_repo(
+            canonical_id=canonical_ids[0].swapcase(),
+            display_name="race",
+            latest_version="1.0.0",
+        )
+
+    assert retried_id == successful_ids[0]
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="No database configured")

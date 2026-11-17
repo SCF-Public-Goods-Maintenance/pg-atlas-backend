@@ -366,10 +366,11 @@ async def _upsert_sbom_vertices(
     matching_repos_by_purl = await find_repos_by_release_purls(sorted(release_purl_lookups), session=session)
     github_vertices: dict[str, RepoVertex] = {}
     if github_canonical_ids:
+        github_identity_keys = sorted({canonical_id.lower() for canonical_id in github_canonical_ids})
         github_vertices = {
-            vertex.canonical_id: vertex
+            vertex.canonical_id.lower(): vertex
             for vertex in (
-                await session.scalars(select(RepoVertex).where(RepoVertex.canonical_id.in_(sorted(github_canonical_ids))))
+                await session.scalars(select(RepoVertex).where(func.lower(RepoVertex.canonical_id).in_(github_identity_keys)))
             ).all()
         }
 
@@ -388,7 +389,7 @@ async def _upsert_sbom_vertices(
         if normalized_package_id.startswith("pkg:github/"):
             # possible in theory through the Dependency Submission API
             # not yet observed in practice; most snapshot generators exclude git URL installs
-            dep_vertex = github_vertices.get(normalized_package_id)
+            dep_vertex = github_vertices.get(normalized_package_id.lower())
             if dep_vertex is None:
                 logger.warning(
                     f"SBOM for {submitting_canonical_id} references {normalized_package_id}"

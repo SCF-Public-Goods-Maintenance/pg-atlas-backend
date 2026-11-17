@@ -43,10 +43,6 @@ class MaintenanceSourceRepoNotFound(Exception):
     """Raised when no tracked repo matches the requested source identity."""
 
 
-class AmbiguousMaintenanceSourceRepo(Exception):
-    """Raised when more than one tracked repo matches the source identity."""
-
-
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
@@ -153,25 +149,21 @@ async def resolve_repo(session: AsyncSession, owner: str, repo: str) -> Resolved
     """
     Resolve the tracked ``Repo`` by case-insensitive canonical identity.
 
-    Zero matches raise ``MaintenanceSourceRepoNotFound``; more than one raise
-    ``AmbiguousMaintenanceSourceRepo`` — the collector never silently picks
-    one.
+    A missing match raises ``MaintenanceSourceRepoNotFound``. The unique
+    identity index ensures there can be at most one match.
     """
 
     wanted = f"pkg:github/{owner}/{repo}".lower()
-    rows = (
+    row = (
         await session.execute(
             select(Repo.id, Repo.canonical_id, Repo.visibility, Repo.releases).where(func.lower(Repo.canonical_id) == wanted)
         )
-    ).all()
+    ).one_or_none()
 
-    if not rows:
+    if row is None:
         raise MaintenanceSourceRepoNotFound(f"No tracked repo for {owner}/{repo}")
-    if len(rows) > 1:
-        logger.warning(f"maintenance-collect ambiguous source identity: repo={owner}/{repo} matches={len(rows)}")
-        raise AmbiguousMaintenanceSourceRepo(f"{len(rows)} tracked repos match {owner}/{repo}")
 
-    repo_id, canonical_id, visibility, releases = rows[0]
+    repo_id, canonical_id, visibility, releases = row
 
     return ResolvedRepo(repo_id=repo_id, canonical_id=canonical_id, visibility=visibility, releases=releases)
 

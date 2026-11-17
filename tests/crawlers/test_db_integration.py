@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import logging
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -1046,35 +1045,30 @@ async def test_github_tracked_dependent_resolves_case_insensitively(
     assert obs[f"someone/untracked-{suffix}"].resolved_repo_id is None
 
 
-async def test_github_ambiguous_source_fails_loudly(
+async def test_github_source_resolves_case_insensitively(
     db_session_factory: async_sessionmaker[AsyncSession],
     github_dependents_empty_html: str,
 ) -> None:
-    """Two tracked repos matching the normalized source identity fail the crawl with no run row."""
+    """A source lookup with different casing resolves the one tracked Repo."""
 
     suffix = _unique_suffix()
     async with db_session_factory() as session:
-        first = await _seed_source_repo(
+        source = await _seed_source_repo(
             session,
             canonical_id=f"pkg:github/Amb-Org/Repo-{suffix}",
             repo_url=f"https://github.com/Amb-Org/Repo-{suffix}",
-            display_name=f"amb-a-{suffix}",
-        )
-        await _seed_source_repo(
-            session,
-            canonical_id=f"pkg:github/amb-org/repo-{suffix}",
-            repo_url=f"https://github.com/amb-org/repo-{suffix}",
-            display_name=f"amb-b-{suffix}",
+            display_name=f"amb-{suffix}",
         )
         await session.commit()
-        first_id = first.id
+        source_id = source.id
 
     result = await _gh_crawler(db_session_factory, github_dependents_empty_html).crawl_and_persist([f"amb-org/repo-{suffix}"])
-    assert result.packages_processed == 0
-    assert len(result.errors) == 1
+    assert result.packages_processed == 1
+    assert result.errors == []
 
-    runs, _ = await _gh_state(db_session_factory, first_id)
-    assert runs == []
+    runs, _ = await _gh_state(db_session_factory, source_id)
+    assert len(runs) == 1
+    assert runs[0].status == GithubDependentsRunStatus.complete
 
 
 async def test_github_concurrent_same_source_crawls_serialize(
@@ -1336,11 +1330,10 @@ async def test_github_apply_phase_failure_reconciles_to_failed(
     }
 
 
-async def test_github_ambiguous_resolution_preserves_existing_link(
+async def test_github_repeated_case_insensitive_resolution_preserves_existing_link(
     db_session_factory: async_sessionmaker[AsyncSession],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A later ambiguous dependent lookup keeps the previously resolved tracked-repo link."""
+    """Repeated case-insensitive lookups keep the tracked-repo link stable."""
 
     suffix = _unique_suffix()
     package_name, repo_id = await _gh_seed_source(db_session_factory, suffix)
@@ -1360,24 +1353,12 @@ async def test_github_ambiguous_resolution_preserves_existing_link(
     _, obs = await _gh_state(db_session_factory, repo_id)
     assert obs[f"dep-org/linked-{suffix}"].resolved_repo_id == tracked_id
 
-    # A case-variant second tracked repo makes the identity ambiguous.
-    async with db_session_factory() as session:
-        await _seed_source_repo(
-            session,
-            canonical_id=f"pkg:github/DEP-ORG/LINKED-{suffix}",
-            repo_url=f"https://github.com/DEP-ORG/LINKED-{suffix}",
-            display_name=f"linked-b-{suffix}",
-        )
-        await session.commit()
-
-    caplog.set_level(logging.WARNING, logger="pg_atlas.crawlers.github_dependents")
     await _gh_crawler(db_session_factory, page).crawl_and_persist([package_name])
 
     runs, obs = await _gh_state(db_session_factory, repo_id)
     assert runs[1].status == GithubDependentsRunStatus.complete
     assert obs[f"dep-org/linked-{suffix}"].resolved_repo_id == tracked_id
     assert obs[f"dep-org/linked-{suffix}"].last_seen_run_id == runs[1].id
-    assert any("ambiguous dependent identity" in record.message for record in caplog.records)
 
 
 async def test_github_precommit_failure_rolls_back_and_reconciles(

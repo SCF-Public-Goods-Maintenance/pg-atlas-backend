@@ -337,7 +337,6 @@ async def process_project(
             pg_award=pg_award,
         )
         logger.info(f"process_project: skipping crawl for Education & Community project {canonical_id}")
-
         return
 
     # ----- Resolve GitHub org + repos -----
@@ -500,7 +499,6 @@ async def demote_fork_repo_to_redirect(github_repo_url: str) -> None:
 
     except Exception:
         await session.rollback()
-
         raise
 
     finally:
@@ -759,7 +757,6 @@ async def crawl_package_registry(
     normalized_system = normalize_registry_system(system)
     if normalized_system is None:
         logger.warning(f"crawl_package_registry: unsupported system={system}")
-
         return
 
     session_factory = get_session_factory()
@@ -778,7 +775,6 @@ async def crawl_package_registry(
 
         if crawler is None:
             logger.warning(f"crawl_package_registry: no crawler available for system={normalized_system}")
-
             return
 
         result = await crawler.crawl_and_persist(package_names=package_names)
@@ -816,7 +812,6 @@ async def crawl_github_dependents(
 
     if not settings.GITHUB_DEPENDENTS_ENABLED or not await _repo_belongs_to_pg_award_project(owner, repo):
         logger.info(f"crawl_github_dependents: gate disallows {owner}/{repo} at execution time, skipping")
-
         return
 
     package_name = f"{owner}/{repo}"
@@ -837,7 +832,6 @@ async def crawl_github_dependents(
 
         if crawler is None:
             logger.warning("crawl_github_dependents: no crawler available for GITHUB")
-
             return
 
         result = await crawler.crawl_and_persist(package_names=[package_name])
@@ -877,7 +871,6 @@ async def collect_maintenance_signals(
         or not await _repo_belongs_to_pg_award_project(owner, repo)
     ):
         logger.info(f"collect_maintenance_signals: gate disallows {owner}/{repo} at execution time, skipping")
-
         return
 
     # The per-repo summary line (requests, signal states) is logged by
@@ -936,13 +929,11 @@ async def crawl_package_deps(
             pkg_info = await get_package(system, package_name, stub=stub)
         except DepsDevError as exc:
             logger.warning(f"Skipping {system}/{package_name} - package not found: {exc}")
-
             return
 
         version = pkg_info.default_version
         if not version:
             logger.warning(f"No default version for {system}/{package_name} - skipping")
-
             return
 
         # ----- Get requirements -----
@@ -950,7 +941,6 @@ async def crawl_package_deps(
             reqs = await get_requirements(system, package_name, version, stub=stub)
         except DepsDevError as exc:
             logger.warning(f"Failed to get requirements for {system}/{package_name}@{version}: {exc}")
-
             return
 
     if not reqs:
@@ -963,12 +953,13 @@ async def crawl_package_deps(
     session = factory()
 
     try:
-        result = await session.execute(select(RepoVertex.id).where(RepoVertex.canonical_id == source_repo_canonical_id))
+        result = await session.execute(
+            select(RepoVertex.id).where(func.lower(RepoVertex.canonical_id) == source_repo_canonical_id.lower())
+        )
         row = result.one_or_none()
 
         if row is None:
             logger.warning(f"Source vertex {source_repo_canonical_id} not found - skipping deps")
-
             return
 
         source_vertex_id: int = row[0]
@@ -980,7 +971,6 @@ async def crawl_package_deps(
 
             if dep_canonical_id == source_repo_canonical_id:
                 logger.debug(f"Skipping self-recursive dependency {dep_canonical_id}")
-
                 continue
 
             # Look up the dependency's package PURL in existing Repos' releases.
@@ -995,7 +985,6 @@ async def crawl_package_deps(
                     out_vertex_id=dep_vertex_id,
                     version_range=req.version_constraint,
                 )
-
                 # Recurse only if the Repo belongs to a tracked Project.
                 if project_id is not None:
                     await defer_with_lock(
@@ -1014,7 +1003,6 @@ async def crawl_package_deps(
                     display_name=req.name,
                     latest_version=req.version_constraint,
                 )
-
                 await upsert_depends_on(
                     session=session,
                     in_vertex_id=source_vertex_id,
@@ -1056,7 +1044,6 @@ def _purl_type_for_system(system: str) -> str | None:
         "DART": "pub",
         "COMPOSER": "composer",
     }
-
     return _map.get(system.upper())
 
 

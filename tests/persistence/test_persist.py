@@ -208,6 +208,21 @@ async def test_handle_sbom_submission_is_idempotent(
     Re-submitting the same SBOM twice keeps one canonical repo and skips re-enqueueing.
     """
     claims = _unique_claims()
+    repo_cid = canonical_id_for_github_repo(claims["repository"])
+
+    # Seed the submitting Repo with the opposite casing to prove lookup reuses its identity.
+    stored_repo_cid = repo_cid.swapcase()
+    existing_repo = Repo(
+        canonical_id=stored_repo_cid,
+        display_name="existing spelling",
+        visibility=Visibility.public,
+        latest_version="",
+    )
+    db_session.add(existing_repo)
+    await db_session.flush()
+    existing_repo_id = existing_repo.id
+
+    # Process once so the duplicate submission can exercise the existing semantic-hash guard.
     valid_sbom = (FIXTURES / "valid.spdx.json").read_bytes()
     defer_mock = mocker.AsyncMock()
     mocker.patch("pg_atlas.ingestion.persist.defer_sbom_processing", new=defer_mock)
@@ -217,12 +232,13 @@ async def test_handle_sbom_submission_is_idempotent(
     await parse_sbom_and_persist_graph(db_session, first_submission.id)
 
     second_result = await handle_sbom_submission(db_session, valid_sbom, claims)
-    assert second_result.message == "duplicate skipped"
+    assert second_result.message == "duplicate skipped", "An identical SBOM must not be queued twice."
 
-    repo_cid = canonical_id_for_github_repo(claims["repository"])
-    repos = (await db_session.execute(select(Repo).where(Repo.canonical_id == repo_cid))).scalars().all()
-    assert len(repos) == 1, "Re-ingestion must not create duplicate Repo vertices"
-    assert defer_mock.await_count == 1
+    # Query by the seeded ID to prove processing reused the existing vertex, not a new spelling variant.
+    repo = await db_session.scalar(select(Repo).where(Repo.id == existing_repo_id))
+    assert repo is not None, "The original Repo row should remain after SBOM processing."
+    assert repo.canonical_id == stored_repo_cid, "SBOM processing must not rewrite stored canonical-ID casing."
+    assert defer_mock.await_count == 1, "The duplicate submission must not enqueue another processing job."
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="PG_ATLAS_DATABASE_URL not set")
@@ -248,7 +264,7 @@ async def test_handle_sbom_submission_github_dep_graph(
         "actor": "test-user",
     }
     internal_repo = Repo(
-        canonical_id="pkg:github/SCF-Public-Goods-Maintenance/internal-tool",
+        canonical_id="pkg:github/scf-public-goods-maintenance/INTERNAL-TOOL",
         display_name="internal-tool",
         visibility=Visibility.public,
         latest_version="main",

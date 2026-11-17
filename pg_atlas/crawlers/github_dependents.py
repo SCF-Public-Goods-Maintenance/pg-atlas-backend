@@ -98,10 +98,6 @@ class DependentsPageLayoutError(Exception):
     """Raised when the dependents page no longer matches the expected layout."""
 
 
-class AmbiguousSourceRepo(Exception):
-    """Raised when more than one tracked repo matches the source identity."""
-
-
 # ---------------------------------------------------------------------------
 # Parsed data and snapshot types
 # ---------------------------------------------------------------------------
@@ -781,8 +777,8 @@ class GitHubDependentsCrawler(RegistryCrawler):
         """
         Resolve the source, record a durable run, crawl, persist observations.
 
-        Sequence: resolve the tracked source ``Repo`` (loud failure on zero or
-        ambiguous matches, before any run row exists) — commit a ``running``
+        Sequence: resolve the tracked source ``Repo`` (loud failure when it is
+        not found, before any run row exists) — commit a ``running``
         run row so the attempt is durable before HTTP — collect the snapshot
         outside any transaction — apply it under a per-source advisory lock
         with a run-order guard — commit. This subclass owns that commit (the
@@ -823,21 +819,19 @@ class GitHubDependentsCrawler(RegistryCrawler):
         Resolve the tracked source ``Repo`` by case-insensitive canonical identity.
 
         GitHub identity is case-insensitive; stored canonical ids preserve
-        their original casing, so the lookup lowercases both sides. Zero
-        matches raise ``SourceRepoNotFound``; more than one raises
-        ``AmbiguousSourceRepo`` — the crawler never silently picks one.
+        their original casing, so the lookup lowercases both sides. A missing
+        match raises ``SourceRepoNotFound``; the unique identity index ensures
+        there can be at most one match.
         """
 
         wanted = f"pkg:github/{owner}/{repo}".lower()
-        rows = (await session.execute(select(Repo.id).where(func.lower(Repo.canonical_id) == wanted))).scalars().all()
+        result = await session.execute(select(Repo.id).where(func.lower(Repo.canonical_id) == wanted))
+        source_repo_id = result.scalar_one_or_none()
 
-        if not rows:
+        if source_repo_id is None:
             raise SourceRepoNotFound(f"No tracked source repo for {owner}/{repo}")
-        if len(rows) > 1:
-            logger.warning(f"github-dependents ambiguous source identity: repo={owner}/{repo} matches={len(rows)}")
-            raise AmbiguousSourceRepo(f"{len(rows)} tracked repos match {owner}/{repo}")
 
-        return rows[0]
+        return source_repo_id
 
     async def _finish_run(
         self,
@@ -988,8 +982,7 @@ class GitHubDependentsCrawler(RegistryCrawler):
                     "observed_owner": insert_stmt.excluded.observed_owner,
                     "observed_repo_name": insert_stmt.excluded.observed_repo_name,
                     "dependent_repo_url": insert_stmt.excluded.dependent_repo_url,
-                    # An unresolved (or ambiguous) match never clears an
-                    # existing tracked-repo link.
+                    # An unresolved match never clears an existing tracked-repo link.
                     "resolved_repo_id": func.coalesce(
                         insert_stmt.excluded.resolved_repo_id,
                         GithubDependentObservation.resolved_repo_id,
@@ -1064,13 +1057,13 @@ class GitHubDependentsCrawler(RegistryCrawler):
 
     async def _resolve_dependent_repo_ids(self, session: AsyncSession, snapshot: DependentsSnapshot) -> dict[str, int]:
         """
-        Map dependent keys to tracked ``Repo`` ids, unambiguous matches only.
+        Map dependent keys to tracked ``Repo`` ids.
 
         Untracked dependents get no vertex of any kind; the stored canonical
         id allows later resolution.
         """
 
-        wanted = {f"pkg:github/{dep.key}": dep.key for dep in snapshot.dependents}
+        wanted = {f"pkg:github/{dep.key}".lower(): dep.key for dep in snapshot.dependents}
         if not wanted:
             return {}
 
@@ -1080,14 +1073,4 @@ class GitHubDependentsCrawler(RegistryCrawler):
             )
         ).all()
 
-        by_key: dict[str, list[int]] = {}
-        for repo_id, lowered in rows:
-            by_key.setdefault(wanted[lowered], []).append(repo_id)
-
-        for key, ids in by_key.items():
-            if len(ids) > 1:
-                logger.warning(
-                    f"github-dependents ambiguous dependent identity, leaving unresolved: dependent={key} matches={len(ids)}"
-                )
-
-        return {key: ids[0] for key, ids in by_key.items() if len(ids) == 1}
+        return {wanted[lowered]: repo_id for repo_id, lowered in rows}
