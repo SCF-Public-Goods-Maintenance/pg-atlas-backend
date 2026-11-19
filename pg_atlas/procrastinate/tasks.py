@@ -173,6 +173,10 @@ async def process_sbom_submission(
         if repository_claim is None:
             return
 
+        #: prevent chaining self-loops, see <https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/115>
+        if status_value is SubmissionStatus.processed:
+            return
+
         next_submission = await session.scalar(
             select(SbomSubmission)
             .where(SbomSubmission.repository_claim == repository_claim)
