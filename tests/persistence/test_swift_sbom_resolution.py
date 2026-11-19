@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
-from pg_atlas.ingestion.persist import _plan_sbom_edges, _swift_github_candidate, _upsert_sbom_vertices
+from pg_atlas.ingestion.persist import _github_hosted_package_candidate, _plan_sbom_edges, _upsert_sbom_vertices
 from pg_atlas.ingestion.spdx import parse_and_validate_spdx
 
 FIXTURE = Path(__file__).parents[1] / "sbom" / "data_fixtures" / "swift_dependencies.spdx.json"
@@ -148,9 +148,9 @@ async def test_swift_unresolved_repository_retains_package_vertices(
         ("pkg:swift/github.com/team/library#subpath", None),
     ],
 )
-def test_swift_github_candidate_scope(package_id: str, expected: str | None) -> None:
+def test_github_hosted_package_candidate_scope(package_id: str, expected: str | None) -> None:
     """
     Limit GitHub inference to unambiguous Swift repository paths.
     """
 
-    assert _swift_github_candidate(package_id) == expected
+    assert _github_hosted_package_candidate(package_id) == expected
