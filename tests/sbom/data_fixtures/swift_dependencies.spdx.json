@@ -1,0 +1,74 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "name": "swift-sbom-resolution",
+  "documentNamespace": "https://example.com/swift-sbom-resolution",
+  "creationInfo": {
+    "created": "2026-11-14T00:00:00Z",
+    "creators": [
+      "Tool: pg-atlas-test"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-root",
+      "name": "com.github.pgm-testing/sbom-demo-swift",
+      "versionInfo": "main",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/pgm-testing/sbom-demo-swift@main"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-sdk",
+      "name": "github.com/soneso/stellar-ios-mac-sdk",
+      "versionInfo": "3.14.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/github.com/soneso/stellar-ios-mac-sdk@3.14.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-collections",
+      "name": "github.com/apple/swift-collections",
+      "versionInfo": "1.1.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/github.com/apple/swift-collections@1.1.4"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-root",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-root",
+      "relatedSpdxElement": "SPDXRef-sdk",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-root",
+      "relatedSpdxElement": "SPDXRef-collections",
+      "relationshipType": "DEPENDS_ON"
+    }
+  ]
+}

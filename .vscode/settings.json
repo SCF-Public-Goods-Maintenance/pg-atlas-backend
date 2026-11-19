@@ -8,6 +8,17 @@
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
     "python.testing.autoTestDiscoverOnSaveEnabled": true,
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "always"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true
+    },
+    "ruff.configurationPreference": "filesystemFirst",
+    "ruff.codeAction.disableRuleComment": {
+        "enable": false
+    },
     "chat.tools.terminal.autoApprove": {
         "uv run python": true
     },

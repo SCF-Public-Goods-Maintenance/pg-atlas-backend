@@ -44,7 +44,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel
 from spdx_tools.spdx.model import Package
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
@@ -198,7 +198,7 @@ async def _upsert_repo(
     ``session.flush()`` is called so that the returned object has its ``id``
     populated before the caller uses it.
     """
-    result = await session.execute(select(Repo).where(Repo.canonical_id == canonical_id))
+    result = await session.execute(select(Repo).where(func.lower(Repo.canonical_id) == func.lower(canonical_id)))
     repo = result.scalar_one_or_none()
     if repo is None:
         repo = Repo(
@@ -293,6 +293,24 @@ async def _upsert_depends_on_edges(
     await session.flush()
 
 
+def _swift_github_candidate(package_id: str) -> str | None:
+    """
+    Derive a tracked GitHub lookup without changing the Swift package identity.
+    """
+
+    if not package_id.startswith("pkg:swift/"):
+        return None
+
+    parts = package_id.removeprefix("pkg:swift/").split("/")
+    if len(parts) != 3 or parts[0].lower() != "github.com":
+        return None
+
+    if any(not part or part in {".", ".."} or any(char in part for char in "?#%") for part in parts[1:]):
+        return None
+
+    return f"pkg:github/{parts[1]}/{parts[2]}".lower()
+
+
 async def _upsert_sbom_vertices(
     session: AsyncSession,
     sbom: ParsedSbom,
@@ -305,7 +323,9 @@ async def _upsert_sbom_vertices(
     GitHub-namespaced references link to an existing vertex by canonical ID;
     missing GitHub vertices are warned about and skipped. Other references with
     PURLs link to a Repo whose releases contain that PURL. Unmatched references
-    are upserted as ExternalRepos; references without a PURL are warned about
+    are upserted as ExternalRepos. GitHub-hosted Swift packages also resolve to
+    a tracked Repo case-insensitively, preserving their original Swift
+    identity when no match exists. References without a PURL are warned about
     before using their normalized package ID for that fallback.
 
     Non-root package vertices are deduplicated by normalized package ID and
@@ -320,6 +340,7 @@ async def _upsert_sbom_vertices(
     normalized_spdx_ids: dict[str, list[str]] = {}
     github_canonical_ids: set[str] = set()
     release_purl_lookups: set[str] = set()
+    swift_candidates: dict[str, str] = {}
 
     for pkg in sbom.document.packages:
         normalized_package_id, pkg_purl = normalize_spdx_package_id(pkg)
@@ -330,6 +351,8 @@ async def _upsert_sbom_vertices(
 
         if normalized_package_id.startswith("pkg:github/"):
             github_canonical_ids.add(normalized_package_id)
+        elif candidate := _swift_github_candidate(normalized_package_id):
+            swift_candidates[normalized_package_id] = candidate
         elif pkg_purl:
             release_purl_lookups.add(normalized_package_id)
         else:
@@ -343,11 +366,20 @@ async def _upsert_sbom_vertices(
     matching_repos_by_purl = await find_repos_by_release_purls(sorted(release_purl_lookups), session=session)
     github_vertices: dict[str, RepoVertex] = {}
     if github_canonical_ids:
+        github_identity_keys = sorted({canonical_id.lower() for canonical_id in github_canonical_ids})
         github_vertices = {
-            vertex.canonical_id: vertex
+            vertex.canonical_id.lower(): vertex
             for vertex in (
-                await session.scalars(select(RepoVertex).where(RepoVertex.canonical_id.in_(sorted(github_canonical_ids))))
+                await session.scalars(select(RepoVertex).where(func.lower(RepoVertex.canonical_id).in_(github_identity_keys)))
             ).all()
+        }
+
+    matched_swift_repos: dict[str, Repo] = {}
+    if swift_candidates:
+        candidates = sorted(set(swift_candidates.values()))
+        matched_swift_repos = {
+            repo.canonical_id.lower(): repo
+            for repo in (await session.scalars(select(Repo).where(func.lower(Repo.canonical_id).in_(candidates)))).all()
         }
 
     for normalized_package_id in sorted(normalized_inputs):
@@ -357,7 +389,7 @@ async def _upsert_sbom_vertices(
         if normalized_package_id.startswith("pkg:github/"):
             # possible in theory through the Dependency Submission API
             # not yet observed in practice; most snapshot generators exclude git URL installs
-            dep_vertex = github_vertices.get(normalized_package_id)
+            dep_vertex = github_vertices.get(normalized_package_id.lower())
             if dep_vertex is None:
                 logger.warning(
                     f"SBOM for {submitting_canonical_id} references {normalized_package_id}"
@@ -368,6 +400,8 @@ async def _upsert_sbom_vertices(
             dep_vertex_id = dep_vertex.id
         elif matching_repo := matching_repos_by_purl.get(normalized_package_id):
             dep_vertex_id = matching_repo[0]
+        elif swift_repo := matched_swift_repos.get(swift_candidates.get(normalized_package_id, "")):
+            dep_vertex_id = swift_repo.id
         else:
             try:
                 dep_vertex = await upsert_external_repo(

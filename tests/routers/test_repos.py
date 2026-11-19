@@ -87,12 +87,13 @@ async def test_get_repo_detail_with_parent_project(
     """GET /repos/{canonical_id} includes parent_project when present."""
 
     client, seed = seeded_client
-    cid = seed["repo_a1"].canonical_id
+    stored_cid = seed["repo_a1"].canonical_id
+    cid = stored_cid.swapcase()
     resp = await client.get(f"/repos/{cid}")
     assert resp.status_code == 200
 
     data = resp.json()
-    assert data["canonical_id"] == cid
+    assert data["canonical_id"] == stored_cid
     assert data["parent_project"] is not None
     assert data["parent_project"]["canonical_id"] == seed["project_a"].canonical_id
     assert data["active_contributors_30d"] == 1

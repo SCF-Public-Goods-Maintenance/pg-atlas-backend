@@ -90,7 +90,6 @@ from pg_atlas.metrics.maintenance import (
     parse_declared_maintainers,
 )
 from pg_atlas.procrastinate.github_maintenance_persistence import (
-    AmbiguousMaintenanceSourceRepo,
     MaintenanceSourceRepoNotFound,
     persist_collected,
     resolve_repo,
@@ -1280,7 +1279,7 @@ async def _cli_main() -> None:
 
         try:
             await run_maintenance_collection(parts[0], parts[1])
-        except (MaintenanceSourceRepoNotFound, AmbiguousMaintenanceSourceRepo, MaintenanceCollectionFailed) as exc:
+        except (MaintenanceSourceRepoNotFound, MaintenanceCollectionFailed) as exc:
             logger.error(f"maintenance-collect failed: repo={spec} error={exc}")
             failures += 1
 

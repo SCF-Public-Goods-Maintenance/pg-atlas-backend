@@ -31,7 +31,6 @@ from pg_atlas.metrics.maintenance import (
     signals_to_payload,
 )
 from pg_atlas.procrastinate.github_maintenance_persistence import (
-    AmbiguousMaintenanceSourceRepo,
     MaintenanceSourceRepoNotFound,
     ResolvedRepo,
     merge_collected_signals,
@@ -196,19 +195,18 @@ class TestPersistCollected:
         with pytest.raises(MaintenanceSourceRepoNotFound):
             await resolve_repo(session, "nobody", f"missing-{suffix}")
 
-        for casing in (f"Amb-{suffix}", f"amb-{suffix}"):
-            session.add(
-                Repo(
-                    canonical_id=f"pkg:github/test/{casing}",
-                    display_name=casing,
-                    visibility=Visibility.public,
-                    latest_version="1.0.0",
-                )
-            )
+        repo = Repo(
+            canonical_id=f"pkg:github/Test/AMB-{suffix}",
+            display_name=f"amb-{suffix}",
+            visibility=Visibility.public,
+            latest_version="1.0.0",
+        )
+        session.add(repo)
         await session.flush()
 
-        with pytest.raises(AmbiguousMaintenanceSourceRepo):
-            await resolve_repo(session, "test", f"amb-{suffix}")
+        resolved = await resolve_repo(session, "test", f"amb-{suffix}")
+        assert resolved.repo_id == repo.id
+        assert resolved.canonical_id == repo.canonical_id
 
 
 class TestConcurrentPersistence:

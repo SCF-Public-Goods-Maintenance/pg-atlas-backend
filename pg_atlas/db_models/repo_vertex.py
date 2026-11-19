@@ -285,3 +285,7 @@ class RedirectVertex(RepoVertex):
         init=False,
         repr=False,
     )
+
+
+# Enforce the same identity rule used by case-insensitive vertex lookups.
+Index("uq_repo_vertices_canonical_id_lower", func.lower(RepoVertex.canonical_id), unique=True)
