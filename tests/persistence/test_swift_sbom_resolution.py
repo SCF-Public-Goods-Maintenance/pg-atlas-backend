@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pg_atlas.db_models.base import Visibility
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
-from pg_atlas.ingestion.persist import _plan_sbom_edges, _github_hosted_package_candidate, _upsert_sbom_vertices
+from pg_atlas.ingestion.persist import _github_hosted_package_candidate, _plan_sbom_edges, _upsert_sbom_vertices
 from pg_atlas.ingestion.spdx import parse_and_validate_spdx
 
 FIXTURE = Path(__file__).parents[1] / "sbom" / "data_fixtures" / "swift_dependencies.spdx.json"
