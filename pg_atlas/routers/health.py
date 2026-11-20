@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pg_atlas.api_metadata import VERSION
 from pg_atlas.config import settings
 from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.routers.common import error_responses
 
 router = APIRouter(tags=["health"])
 
@@ -69,7 +70,12 @@ async def _schema_version_from_session(session: AsyncSession) -> str | None:
     return _select_app_schema_version(result.scalars().all())
 
 
-@router.get("/health", response_model=HealthResponse, summary="Readiness check")
+@router.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Readiness check",
+    responses=error_responses(http503="Database or application schema readiness could not be established."),
+)
 async def health(session: Annotated[AsyncSession | None, Depends(maybe_db_session)]) -> HealthResponse:
     """
     Return the current readiness status and application version.
