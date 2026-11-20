@@ -30,6 +30,7 @@ router = APIRouter()
 @router.get(
     "/contributors",
     response_model=PaginatedResponse[ContributorSummary],
+    responses=error_responses(),
     summary="List contributors",
     tags=[Graph.contributors, Graph.contributor_graph, Source.github],
 )

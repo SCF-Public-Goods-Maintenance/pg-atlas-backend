@@ -168,6 +168,7 @@ async def _active_contributors_for_repo(db: AsyncSession, repo_id: int) -> tuple
 @router.get(
     "/repos",
     response_model=PaginatedResponse[RepoSummary],
+    responses=error_responses(),
     summary="List repos",
     tags=[Graph.repos, Source.github, Source.deps_dev],
 )

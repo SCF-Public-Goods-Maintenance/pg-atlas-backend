@@ -121,6 +121,7 @@ async def _active_contributors_for_project(db: AsyncSession, project_id: int) ->
 @router.get(
     "/projects",
     response_model=PaginatedResponse[ProjectSummary],
+    responses=error_responses(),
     summary="List projects",
     tags=[Graph.projects, Source.opengrants, Source.pg_atlas],
 )

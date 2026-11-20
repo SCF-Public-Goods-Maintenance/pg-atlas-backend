@@ -54,6 +54,7 @@ def error_responses(
     http401: str | None = None,
     http403: str | None = None,
     http404: str | None = None,
+    http429: bool = True,
     http503: str | None = None,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response declarations shared across route modules."""
@@ -61,11 +62,25 @@ def error_responses(
     responses: dict[int | str, dict[str, Any]] = {}
 
     if http307 is not None:
-        responses[status.HTTP_307_TEMPORARY_REDIRECT] = {"description": http307}
+        responses[status.HTTP_307_TEMPORARY_REDIRECT] = {
+            "description": http307,
+            "headers": {
+                "Location": {
+                    "description": "Canonical URL of the target repository.",
+                    "schema": {"type": "string"},
+                }
+            },
+        }
 
     if http401 is not None:
         responses[status.HTTP_401_UNAUTHORIZED] = {
             "description": http401,
+            "headers": {
+                "WWW-Authenticate": {
+                    "description": "Authentication scheme and parameters.",
+                    "schema": {"type": "string", "example": "Bearer"},
+                }
+            },
             "model": HTTPErrorResponse,
         }
 
@@ -78,6 +93,18 @@ def error_responses(
     if http404 is not None:
         responses[status.HTTP_404_NOT_FOUND] = {
             "description": http404,
+            "model": HTTPErrorResponse,
+        }
+
+    if http429:
+        responses[status.HTTP_429_TOO_MANY_REQUESTS] = {
+            "description": "Rate limit exceeded.",
+            "headers": {
+                "Retry-After": {
+                    "description": "Seconds until another request may be accepted.",
+                    "schema": {"type": "integer"},
+                }
+            },
             "model": HTTPErrorResponse,
         }
 

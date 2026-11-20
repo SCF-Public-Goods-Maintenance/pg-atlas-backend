@@ -44,6 +44,7 @@ async def test_openapi_declares_route_specific_error_responses() -> None:
 
     ingest_responses = paths["/ingest/sbom"]["post"]["responses"]
     assert {"401", "403", "422", "503"}.issubset(ingest_responses)
+    assert ingest_responses["401"]["headers"]["WWW-Authenticate"]["schema"]["type"] == "string"
 
     contributor_responses = paths["/contributors/{contributor_id}"]["get"]["responses"]
     assert "404" in contributor_responses
@@ -53,6 +54,7 @@ async def test_openapi_declares_route_specific_error_responses() -> None:
 
     repo_responses = paths["/repos/{canonical_id}"]["get"]["responses"]
     assert {"307", "404"}.issubset(repo_responses)
+    assert repo_responses["307"]["headers"]["Location"]["schema"]["type"] == "string"
 
 
 async def test_openapi_distinguishes_builtin_and_spdx_validation_errors() -> None:
@@ -82,3 +84,19 @@ async def test_openapi_does_not_add_dependency_503_globally() -> None:
 
     assert "503" not in paths["/projects"]["get"]["responses"]
     assert "503" not in paths["/contributors/{contributor_id}"]["get"]["responses"]
+
+
+async def test_openapi_declares_429_for_every_route() -> None:
+    """Every public operation should document its middleware rate-limit response."""
+
+    spec = app.openapi()
+
+    for _path, path_item in spec["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+
+            response = operation["responses"]["429"]
+            assert response["headers"]["Retry-After"]["schema"]["type"] == "integer"
+            schema = response["content"]["application/json"]["schema"]
+            assert schema["$ref"] == "#/components/schemas/HTTPErrorResponse"

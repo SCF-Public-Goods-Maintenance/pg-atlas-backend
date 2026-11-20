@@ -31,6 +31,7 @@ router = APIRouter()
 @router.get(
     "/gitlog",
     response_model=PaginatedResponse[GitLogArtifactSummary],
+    responses=error_responses(),
     summary="List gitlog processing attempts",
     tags=[Graph.contributor_graph, Source.github, Source.pg_atlas],
 )

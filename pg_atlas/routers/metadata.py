@@ -21,7 +21,7 @@ from pg_atlas.db_models.contributed_to import ContributedTo
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import ExternalRepo, Repo
-from pg_atlas.routers.common import DbSession
+from pg_atlas.routers.common import DbSession, error_responses
 from pg_atlas.routers.models import MetadataResponse
 from pg_atlas.routers.tags import Graph, Source
 
@@ -31,6 +31,7 @@ router = APIRouter()
 @router.get(
     "/metadata",
     response_model=MetadataResponse,
+    responses=error_responses(),
     summary="Ecosystem summary statistics",
     tags=[Graph.metadata, Source.opengrants, Source.deps_dev, Source.github, Source.pg_atlas],
 )

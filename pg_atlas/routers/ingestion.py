@@ -171,6 +171,7 @@ async def ingest_sbom(
 @router.get(
     "/sbom",
     response_model=SbomSubmissionListResponse,
+    responses=error_responses(),
     summary="List SBOM submissions",
     description=(
         "Returns a paginated list of SBOM submission records.  Supports optional "
