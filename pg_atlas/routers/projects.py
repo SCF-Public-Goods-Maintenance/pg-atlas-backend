@@ -24,7 +24,7 @@ from pg_atlas.db_models.contributor import Contributor
 from pg_atlas.db_models.depends_on import DependsOn
 from pg_atlas.db_models.project import Project
 from pg_atlas.db_models.repo_vertex import Repo
-from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
+from pg_atlas.routers.common import DbSession, PaginationParams, error_responses, parse_sort_params
 from pg_atlas.routers.models import (
     PaginatedResponse,
     ProjectContributorSummary,
@@ -186,6 +186,7 @@ async def list_projects(
     "/projects/{canonical_id:path}/repos",
     response_model=PaginatedResponse[RepoSummary],
     summary="Repos belonging to a project",
+    responses=error_responses(http404="Project was not found."),
     tags=[Graph.projects, Source.github, Source.deps_dev],
 )
 async def get_project_repos(
@@ -220,6 +221,7 @@ async def get_project_repos(
     "/projects/{canonical_id:path}/contributors",
     response_model=PaginatedResponse[ProjectContributorSummary],
     summary="Contributors across a project's repos",
+    responses=error_responses(http404="Project was not found."),
     tags=[Graph.projects, Graph.contributors, Graph.contributor_graph, Source.github],
 )
 async def get_project_contributors(
@@ -277,6 +279,7 @@ async def get_project_contributors(
     "/projects/{canonical_id:path}/depends-on",
     response_model=list[ProjectDependency],
     summary="Project-level dependencies",
+    responses=error_responses(http404="Project was not found."),
     tags=[Graph.dependency_graph, Source.deps_dev],
 )
 async def get_project_depends_on(
@@ -300,6 +303,7 @@ async def get_project_depends_on(
     "/projects/{canonical_id:path}/has-dependents",
     response_model=list[ProjectDependency],
     summary="Projects that depend on this project",
+    responses=error_responses(http404="Project was not found."),
     tags=[Graph.dependency_graph, Source.deps_dev],
 )
 async def get_project_has_dependents(
@@ -322,6 +326,7 @@ async def get_project_has_dependents(
     "/projects/{canonical_id:path}",
     response_model=ProjectDetailResponse,
     summary="Project detail",
+    responses=error_responses(http404="Project was not found."),
     tags=[Graph.projects, Source.opengrants, Source.pg_atlas],
 )
 async def get_project(

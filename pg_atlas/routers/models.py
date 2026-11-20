@@ -29,6 +29,19 @@ from pg_atlas.db_models.release import Release
 T = TypeVar("T")
 
 
+class HTTPErrorResponse(BaseModel):
+    """Generic FastAPI HTTP error envelope with a string detail value."""
+
+    detail: str
+
+
+class SpdxValidationFailed(BaseModel):
+    """Custom validation failure returned by SPDX submissions."""
+
+    error: str
+    messages: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Serializer overrides
 # ---------------------------------------------------------------------------

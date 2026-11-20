@@ -95,6 +95,7 @@ async def test_invalid_spdx_returns_422(authenticated_client: AsyncClient) -> No
     assert response.status_code == 422
     body = response.json()
     assert "error" in body["detail"]
+    assert "messages" in body["detail"]
 
 
 async def test_valid_sbom_returns_202(

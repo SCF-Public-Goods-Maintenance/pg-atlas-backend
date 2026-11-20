@@ -326,3 +326,6 @@ async def test_list_repos_sort_invalid_field_returns_422(
     client, _ = seeded_client
     resp = await client.get("/repos", params={"sort": "nonexistent_field:asc"})
     assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list)
+    assert detail[0]["loc"] == ["query", "sort"]

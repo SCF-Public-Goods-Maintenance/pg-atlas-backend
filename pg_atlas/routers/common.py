@@ -13,7 +13,15 @@ from __future__ import annotations
 
 # Re-export ``maybe_db_session`` so callers that genuinely need the
 # ``AsyncSession | None`` path (e.g. ingestion's POST) can import from one place.
-__all__ = ["DbSession", "PaginationParams", "maybe_db_session", "parse_sort_params", "require_session"]
+__all__ = [
+    "DbSession",
+    "PaginationParams",
+    "error_responses",
+    "http_validation_error_detail",
+    "maybe_db_session",
+    "parse_sort_params",
+    "require_session",
+]
 
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -25,6 +33,62 @@ from sqlalchemy.orm import ColumnProperty, InstrumentedAttribute
 
 from pg_atlas.db_models.base import ActivityStatus
 from pg_atlas.db_models.session import maybe_db_session
+from pg_atlas.routers.models import HTTPErrorResponse
+
+
+def http_validation_error_detail(message: str, *location: str | int) -> list[dict[str, Any]]:
+    """Build one detail item matching FastAPI's HTTPValidationError payload."""
+
+    return [
+        {
+            "type": "value_error",
+            "loc": list(location),
+            "msg": message,
+        }
+    ]
+
+
+def error_responses(
+    *,
+    http307: str | None = None,
+    http401: str | None = None,
+    http403: str | None = None,
+    http404: str | None = None,
+    http503: str | None = None,
+) -> dict[int | str, dict[str, Any]]:
+    """Build OpenAPI response declarations shared across route modules."""
+
+    responses: dict[int | str, dict[str, Any]] = {}
+
+    if http307 is not None:
+        responses[status.HTTP_307_TEMPORARY_REDIRECT] = {"description": http307}
+
+    if http401 is not None:
+        responses[status.HTTP_401_UNAUTHORIZED] = {
+            "description": http401,
+            "model": HTTPErrorResponse,
+        }
+
+    if http403 is not None:
+        responses[status.HTTP_403_FORBIDDEN] = {
+            "description": http403,
+            "model": HTTPErrorResponse,
+        }
+
+    if http404 is not None:
+        responses[status.HTTP_404_NOT_FOUND] = {
+            "description": http404,
+            "model": HTTPErrorResponse,
+        }
+
+    if http503 is not None:
+        responses[status.HTTP_503_SERVICE_UNAVAILABLE] = {
+            "description": http503,
+            "model": HTTPErrorResponse,
+        }
+
+    return responses
+
 
 # Canonical lifecycle ordering for activity_status sorts.
 # Higher values sort first in descending order.
@@ -116,13 +180,21 @@ def parse_sort_params(
         if field_name not in allowed_fields:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid sort field: '{field_name}'. Allowed: {sorted(allowed_fields.keys())}",
+                detail=http_validation_error_detail(
+                    f"Invalid sort field: '{field_name}'. Allowed: {sorted(allowed_fields.keys())}",
+                    "query",
+                    "sort",
+                ),
             )
 
         if direction not in ("asc", "desc"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid sort direction: '{direction}'. Must be 'asc' or 'desc'.",
+                detail=http_validation_error_detail(
+                    f"Invalid sort direction: '{direction}'. Must be 'asc' or 'desc'.",
+                    "query",
+                    "sort",
+                ),
             )
 
         col = allowed_fields[field_name]
