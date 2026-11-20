@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.8.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.7.0...v0.8.0) (2026-11-19)
+
+
+### Features
+
+* **bootstrap:** demote github forks into redirect vertices ([#99](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/99)) ([eee2804](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/eee2804e683ffcfc1c92d0f6f5786a00905454c9)), closes [#93](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/93)
+* **metrics:** add gated maintenance signal collection and profiles ([#85](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/85)) ([cfbed74](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/cfbed74edb7407a34cc0aa900cefb0933d671f87))
+* **sbom:** reprocess existing submissions by ID ([#116](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/116)) ([890d10d](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/890d10d930d1b3ce9b4f456f56b32c9a96298ae9))
+
+
+### Bug Fixes
+
+* **API:** accept project ids that contain a slash ([#112](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/112)) ([add51df](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/add51df5e12b98aaaa4f5cac8b8e00f9caa9d60e))
+* **bootstrap:** absorb SBOM package vertices under their purl spelling ([#84](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/84)) ([052fc80](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/052fc805f7b17360835f56066a17b739ebbcbc8a))
+* **bootstrap:** clear stale repo-project associations ([#92](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/92)) ([15e6272](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/15e6272f5ed9a44f58df51d290df5061766456db))
+* enforce lowercase RepoVertex identity ([#109](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/109)) ([a996307](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/a99630765f4bcf6125bff0b39c70ff9db56f0a42))
+* **gitlog:** preserve audit history when repos are demoted ([#101](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/101)) ([98e05b2](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/98e05b28b9937397f8d534f2090689984d5edf89))
+* resolve GitHub-hosted Go root module dependencies ([#110](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/110)) ([c91e5cf](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/c91e5cff3f161de5863448f94ba4ae08413d351d))
+* **SBOM:** resolve release-purls during `ExternalRepo` upserts ([#87](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/87)) ([de84b7b](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/de84b7b715991727a5b408392744319d5bfe3292))
+
+
+### Performance Improvements
+
+* **db:** reduce deadlocks during update transactions ([#81](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/81)) ([75eb73d](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/75eb73d1f47d30b2fa630e0ed2855eb1838f8423))
+
+
+### Dependencies
+
+* upgrade to latest; migrate to httpx2 ([#104](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/104)) ([05be8a9](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/05be8a9e8ad4812002df8342eabb2bc085d75183))
+
 ## [0.7.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.6.0...v0.7.0) (2026-09-11)
 
 
