@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.8.0...v0.8.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **API:** declare additional http responses ([#117](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/117)) ([f1fd143](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/f1fd143f10270f3da5c369094eb5b72a978ae7b8))
+* **ci:** avoid parsing the Release Please pull request object in the commit step ([#123](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/123)) ([e351222](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/e35122273478e94c248d07bc881fd0d208dd2857))
+* **CI:** update uv.lock in release pull requests ([#120](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/120)) ([7ab6d6e](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/7ab6d6e694cd0c399cc3795625a800500fb9e413)), closes [#51](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/51)
+
 ## [0.8.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.7.0...v0.8.0) (2026-11-19)
 
 
