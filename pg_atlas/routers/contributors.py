@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from pg_atlas.db_models.contributor import Contributor
-from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.common import DbSession, PaginationParams, error_responses
 from pg_atlas.routers.models import ContributionEntry, ContributorDetailResponse, ContributorSummary, PaginatedResponse
 from pg_atlas.routers.tags import Graph, Source
 
@@ -30,6 +30,7 @@ router = APIRouter()
 @router.get(
     "/contributors",
     response_model=PaginatedResponse[ContributorSummary],
+    responses=error_responses(),
     summary="List contributors",
     tags=[Graph.contributors, Graph.contributor_graph, Source.github],
 )
@@ -62,6 +63,7 @@ async def list_contributors(
 @router.get(
     "/contributors/{contributor_id}",
     response_model=ContributorDetailResponse,
+    responses=error_responses(http404="Contributor was not found."),
     summary="Contributor detail",
     tags=[Graph.contributors, Graph.contributor_graph, Source.github],
 )

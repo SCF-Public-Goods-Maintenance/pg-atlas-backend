@@ -30,7 +30,7 @@ from pg_atlas.db_models.github_dependents_observation import (
 from pg_atlas.db_models.repo_vertex import ExternalRepo, RedirectVertex, Repo, RepoVertex
 from pg_atlas.db_models.vertex_ops import POLY_LOAD
 from pg_atlas.metrics.maintenance import MAINTENANCE_PROFILE_KEY
-from pg_atlas.routers.common import DbSession, PaginationParams, parse_sort_params
+from pg_atlas.routers.common import DbSession, PaginationParams, error_responses, parse_sort_params
 from pg_atlas.routers.models import (
     ContributorSummary,
     DepCounts,
@@ -168,6 +168,7 @@ async def _active_contributors_for_repo(db: AsyncSession, repo_id: int) -> tuple
 @router.get(
     "/repos",
     response_model=PaginatedResponse[RepoSummary],
+    responses=error_responses(),
     summary="List repos",
     tags=[Graph.repos, Source.github, Source.deps_dev],
 )
@@ -225,6 +226,7 @@ async def list_repos(
     "/repos/{canonical_id:path}/depends-on",
     response_model=list[RepoDependency],
     summary="Direct dependencies of a repo",
+    responses=error_responses(http307="A redirect vertex redirects to the target repository.", http404="Repo was not found."),
     tags=[Graph.dependency_graph, Source.deps_dev, Source.pg_atlas],
 )
 async def get_repo_depends_on(
@@ -246,6 +248,7 @@ async def get_repo_depends_on(
     "/repos/{canonical_id:path}/has-dependents",
     response_model=list[RepoDependency],
     summary="Repos that depend on this repo",
+    responses=error_responses(http307="A redirect vertex redirects to the target repository.", http404="Repo was not found."),
     tags=[Graph.dependency_graph, Source.deps_dev, Source.pg_atlas],
 )
 async def get_repo_has_dependents(
@@ -267,6 +270,7 @@ async def get_repo_has_dependents(
     "/repos/{canonical_id:path}/github-dependents",
     response_model=GithubDependentsResponse,
     summary="Public GitHub dependents observed for a repo",
+    responses=error_responses(http307="A redirect vertex redirects to the target repository.", http404="Repo was not found."),
     tags=[Source.pg_atlas],
 )
 async def get_repo_github_dependents(
@@ -372,6 +376,10 @@ async def get_repo_github_dependents(
     "/repos/{canonical_id:path}/maintenance-profile",
     response_model=MaintenanceProfileResponse,
     summary="Maintenance profile for a repo",
+    responses=error_responses(
+        http307="A redirect vertex redirects to the target repository.",
+        http404="Repo or maintenance profile was not found.",
+    ),
     tags=[Source.pg_atlas],
 )
 async def get_repo_maintenance_profile(
@@ -403,6 +411,7 @@ async def get_repo_maintenance_profile(
     "/repos/{canonical_id:path}/contributors",
     response_model=PaginatedResponse[RepoContributorSummary],
     summary="Contributors for a repo",
+    responses=error_responses(http307="A redirect vertex redirects to the target repository.", http404="Repo was not found."),
     tags=[Graph.repos, Graph.contributors, Graph.contributor_graph, Source.github],
 )
 async def get_repo_contributors(
@@ -459,6 +468,7 @@ async def get_repo_contributors(
     "/repos/{canonical_id:path}",
     response_model=RepoDetailResponse,
     summary="Repo detail",
+    responses=error_responses(http307="A redirect vertex redirects to the target repository.", http404="Repo was not found."),
     tags=[Graph.repos, Source.github, Source.deps_dev, Source.pg_atlas],
 )
 async def get_repo(

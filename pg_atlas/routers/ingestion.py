@@ -35,7 +35,8 @@ from pg_atlas.db_models.sbom_submission import SbomSubmission
 from pg_atlas.db_models.session import maybe_db_session
 from pg_atlas.ingestion.persist import SbomAcceptedResponse, SbomQueueingError, handle_sbom_submission
 from pg_atlas.ingestion.spdx import SpdxValidationError
-from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.common import DbSession, PaginationParams, error_responses
+from pg_atlas.routers.models import SpdxValidationFailed
 from pg_atlas.storage.artifacts import read_artifact
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,17 @@ class SbomSubmissionListResponse(BaseModel):
     "/sbom",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=SbomAcceptedResponse,
+    responses={
+        **error_responses(
+            http401="Authorization header is missing or malformed.",
+            http403="OIDC token validation failed.",
+            http503="The SBOM could not be persisted or queued.",
+        ),
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The request body is not a valid SPDX 2.3 document.",
+            "model": SpdxValidationFailed,
+        },
+    },
     summary="Submit an SPDX 2.3 SBOM",
     description=(
         "Accepts an SPDX 2.3 JSON SBOM document from the pg-atlas-sbom-action. "
@@ -145,10 +157,7 @@ async def ingest_sbom(
     except SpdxValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": exc.detail,
-                "messages": exc.messages,
-            },
+            detail={"error": exc.detail, "messages": exc.messages},
         ) from exc
     except SbomQueueingError as exc:
         raise HTTPException(
@@ -162,6 +171,7 @@ async def ingest_sbom(
 @router.get(
     "/sbom",
     response_model=SbomSubmissionListResponse,
+    responses=error_responses(),
     summary="List SBOM submissions",
     description=(
         "Returns a paginated list of SBOM submission records.  Supports optional "
@@ -211,6 +221,7 @@ async def list_sbom_submissions(
 @router.get(
     "/sbom/{submission_id}",
     response_model=SbomSubmissionDetailResponse,
+    responses=error_responses(http404="SBOM submission was not found."),
     summary="Get SBOM submission detail",
     description=(
         "Returns a single SBOM submission record along with the raw artifact "

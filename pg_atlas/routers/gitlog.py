@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 
 from pg_atlas.db_models.gitlog_artifact import GitLogArtifact
 from pg_atlas.db_models.repo_vertex import Repo
-from pg_atlas.routers.common import DbSession, PaginationParams
+from pg_atlas.routers.common import DbSession, PaginationParams, error_responses
 from pg_atlas.routers.models import GitLogArtifactDetailResponse, GitLogArtifactSummary, PaginatedResponse
 from pg_atlas.routers.tags import Graph, Source
 from pg_atlas.storage.artifacts import read_artifact
@@ -31,6 +31,7 @@ router = APIRouter()
 @router.get(
     "/gitlog",
     response_model=PaginatedResponse[GitLogArtifactSummary],
+    responses=error_responses(),
     summary="List gitlog processing attempts",
     tags=[Graph.contributor_graph, Source.github, Source.pg_atlas],
 )
@@ -78,6 +79,7 @@ async def list_gitlog_artifacts(
 @router.get(
     "/gitlog/{artifact_id}",
     response_model=GitLogArtifactDetailResponse,
+    responses=error_responses(http404="Gitlog artifact was not found."),
     summary="Get gitlog processing attempt detail",
     tags=[Graph.contributor_graph, Source.github, Source.pg_atlas],
 )
