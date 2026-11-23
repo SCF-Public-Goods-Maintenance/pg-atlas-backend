@@ -27,7 +27,7 @@ jobs:
       UV_NO_GROUP: dev
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
 
       - name: GitHub auth status
         run: gh auth status 2>&1 | tee gh-auth-status.log
@@ -35,7 +35,7 @@ jobs:
       - name: Configure git authentication via gh credential helper
         run: gh auth setup-git
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Install dependencies
         run: uv sync --frozen

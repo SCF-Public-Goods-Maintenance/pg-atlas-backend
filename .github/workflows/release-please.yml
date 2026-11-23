@@ -14,19 +14,19 @@ jobs:
     steps:
       - name: Create or update the release pull request
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           release-type: python
 
       - name: Checkout the release pull request branch
         if: steps.release.outputs.prs_created == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
 
       - name: Set up uv
         if: steps.release.outputs.prs_created == 'true'
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.4.0
         with:
           python-version: "3.14"
 

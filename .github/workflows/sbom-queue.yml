@@ -25,9 +25,9 @@ jobs:
       UV_NO_GROUP: dev
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Install dependencies
         run: uv sync --frozen
