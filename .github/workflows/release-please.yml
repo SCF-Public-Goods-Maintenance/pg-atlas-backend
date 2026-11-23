@@ -12,6 +12,133 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - name: Create or update the release pull request
+        id: release
+        uses: googleapis/release-please-action@v4
         with:
           release-type: python
+
+      - name: Checkout the release pull request branch
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+
+      - name: Set up uv
+        if: steps.release.outputs.prs_created == 'true'
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.14"
+
+      - name: Update uv.lock project version
+        if: steps.release.outputs.prs_created == 'true'
+        shell: bash
+        run: |
+          cp uv.lock /tmp/uv.lock.before
+          uv lock --upgrade-package pg-atlas-backend
+
+      - name: Check that uv.lock changed only the project version
+        id: lockfile-check
+        if: always() && steps.release.outputs.prs_created == 'true'
+        shell: python
+        run: |
+          import copy
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+
+          def project_package(document: dict[str, object]) -> dict[str, object] | None:
+              for package in document["package"]:
+                  if package["name"] == "pg-atlas-backend":
+                      return package
+
+              return None
+
+
+          with Path("pyproject.toml").open("rb") as file:
+              pyproject = tomllib.load(file)
+
+          with Path("/tmp/uv.lock.before").open("rb") as file:
+              before = tomllib.load(file)
+
+          with Path("uv.lock").open("rb") as file:
+              after = tomllib.load(file)
+
+          expected_version = pyproject["project"]["version"]
+          before_project = project_package(before)
+          after_project = project_package(after)
+
+          if before_project is None or after_project is None:
+              print("Could not find pg-atlas-backend in both lockfile snapshots.")
+              raise SystemExit(1)
+
+          before_version = before_project["version"]
+          after_version = after_project["version"]
+
+          normalized_after = copy.deepcopy(after)
+          normalized_project = project_package(normalized_after)
+          if normalized_project is None:
+              raise SystemExit(1)
+
+          normalized_project["version"] = before_version
+
+          diff = subprocess.run(
+              ["git", "diff", "--unified=0", "--", "uv.lock"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          changed_lines = [
+              line
+              for line in diff.splitlines()
+              if line.startswith(("-", "+"))
+              and not line.startswith("--- ")
+              and not line.startswith("+++ ")
+          ]
+          expected_lines = [
+              f'-version = "{before_version}"',
+              f'+version = "{expected_version}"',
+          ]
+
+          version_matches = after_version == expected_version
+          semantic_matches = before == normalized_after
+          raw_diff_matches = changed_lines == expected_lines
+
+          summary = (
+              "| Check | Result |\n"
+              "| --- | --- |\n"
+              f"| Project version | `{before_version}` -> `{after_version}` |\n"
+              f"| Version matches release | {'PASS' if version_matches else 'FAIL'} |\n"
+              f"| Only the project stanza changed | {'PASS' if semantic_matches else 'FAIL'} |\n"
+              f"| Raw diff contains only the version line | {'PASS' if raw_diff_matches else 'FAIL'} |\n"
+          )
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as file:
+              file.write(summary)
+
+          if not (version_matches and semantic_matches and raw_diff_matches):
+              print("uv.lock contains unexpected changes or the version did not match pyproject.toml.")
+              print(diff)
+              raise SystemExit(1)
+
+          print("uv.lock changed only the pg-atlas-backend project version.")
+
+      - name: Commit uv.lock to the release pull request
+        if: always() && steps.release.outputs.prs_created == 'true'
+        shell: bash
+        env:
+          PR_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+        run: |
+          if git diff --quiet -- uv.lock; then
+            echo "uv.lock already matches pyproject.toml; no commit needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "chore: synchronize uv.lock project version"
+          git push origin "HEAD:${PR_BRANCH}"
