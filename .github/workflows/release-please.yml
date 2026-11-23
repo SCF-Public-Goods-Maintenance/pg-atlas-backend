@@ -127,8 +127,6 @@ jobs:
       - name: Commit uv.lock to the release pull request
         if: always() && steps.release.outputs.prs_created == 'true'
         shell: bash
-        env:
-          PR_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
         run: |
           if git diff --quiet -- uv.lock; then
             echo "uv.lock already matches pyproject.toml; no commit needed."
@@ -141,4 +139,11 @@ jobs:
           git diff --cached --check
           git diff --cached --stat
           git commit -m "chore: synchronize uv.lock project version"
+
+          PR_BRANCH="$(git branch --show-current)"
+          if [[ -z "${PR_BRANCH}" ]]; then
+            echo "Unable to determine the checked-out release pull request branch."
+            exit 1
+          fi
+
           git push origin "HEAD:${PR_BRANCH}"
