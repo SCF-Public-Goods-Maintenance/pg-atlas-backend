@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.8.1...v0.9.0) (2026-11-24)
+
+
+### Features
+
+* **script:** allow draft script to read merged proposals ([#125](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/issues/125)) ([aa4d4c8](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/commit/aa4d4c8c777b5dbe04754dd0a359e42cfa5f62bd))
+
 ## [0.8.1](https://github.com/SCF-Public-Goods-Maintenance/pg-atlas-backend/compare/v0.8.0...v0.8.1) (2026-11-23)
 
 
