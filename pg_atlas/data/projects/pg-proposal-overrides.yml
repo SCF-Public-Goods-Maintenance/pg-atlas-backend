@@ -182,6 +182,7 @@ daoip-5:scf:project:scaffold_stellar:
   git_owner_url: "https://github.com/stellar-scaffold"
   git_repo_urls:
     - "https://github.com/stellar-scaffold/cli"
+    - "https://github.com/stellar-scaffold/ui"
   category: "Developer Experience"
   metadata:
     description: "Go from idea to app faster with a custom, pluggable CLI; a multi-framework template system; and a customizable,
@@ -192,10 +193,12 @@ daoip-5:scf:project:scaffold_stellar:
 daoip-5:scf:project:scout:
   display_name: "Scout"
   activity_status: "live"
-  pg_award: False
+  pg_award: false
   git_owner_url: "https://github.com/CoinFabrik"
   git_repo_urls:
     - "https://github.com/CoinFabrik/scout-audit"
+    - "https://github.com/CoinFabrik/soroban-audit-harness"
+    - "https://github.com/CoinFabrik/scout-agent"
   category: "Security & Auditing Tools"
   metadata:
     description: "Scout is an extensible open source vulnerability analyzer built for Soroban."
@@ -208,6 +211,10 @@ daoip-5:scf:project:solidity_contracts_on_soroban:
   git_owner_url: "https://github.com/hyperledger-solang"
   git_repo_urls:
     - "https://github.com/hyperledger-solang/solang"
+    - "https://github.com/hyperledger-solang/solang-playground"
+    - "https://github.com/Islam-Imad/sorobench"
+    - "https://github.com/aryanbaranwal001/antlion"
+    - "https://github.com/salaheldinsoliman/fuzzer"
   category: "Developer Experience"
   metadata:
     description: "A Solidity compiler for Stellar"
@@ -242,7 +249,7 @@ daoip-5:scf:project:soroban_security_portal:
 daoip-5:scf:project:soropg:
   display_name: "SoroPG"
   activity_status: "live"
-  pg_award: False
+  pg_award: false
   git_owner_url: "https://github.com/jamesbachini"
   git_repo_urls:
     - "https://github.com/jamesbachini/Soroban-Playground"
