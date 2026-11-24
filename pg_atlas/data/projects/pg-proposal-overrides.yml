@@ -192,7 +192,7 @@ daoip-5:scf:project:scaffold_stellar:
 daoip-5:scf:project:scout:
   display_name: "Scout"
   activity_status: "live"
-  pg_award: False
+  pg_award: false
   git_owner_url: "https://github.com/CoinFabrik"
   git_repo_urls:
     - "https://github.com/CoinFabrik/scout-audit"
@@ -242,7 +242,7 @@ daoip-5:scf:project:soroban_security_portal:
 daoip-5:scf:project:soropg:
   display_name: "SoroPG"
   activity_status: "live"
-  pg_award: False
+  pg_award: false
   git_owner_url: "https://github.com/jamesbachini"
   git_repo_urls:
     - "https://github.com/jamesbachini/Soroban-Playground"

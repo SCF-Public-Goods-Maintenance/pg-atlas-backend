@@ -1,10 +1,10 @@
 """
-Draft PG proposal overrides from open proposal PRs.
+Draft PG proposal overrides from open or merged proposals.
 
 This script is intended for human-in-the-loop operation. It reads open pull
-requests with label ``pg-award-proposal`` from the public-goods docs
-repository, extracts patchable project fields from proposal markdown files, and
-writes a review draft to:
+requests with label ``pg-award-proposal`` or merged markdown files from the
+public-goods docs repository, extracts patchable project fields, and writes a
+review draft to:
 
     pg_atlas/data/projects/new.pg-proposal-overrides.yml
 
@@ -14,6 +14,7 @@ The canonical baseline and matching source is:
 
 Usage:
     uv run python scripts/draft_pg_proposal_overrides.py
+    uv run python scripts/draft_pg_proposal_overrides.py --source=merged
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -25,12 +26,14 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-from github import GithubException
+from github import Github, GithubException
+from github.Repository import Repository
 from mistletoe import Document
 from mistletoe.block_token import Heading, Paragraph, Table
 from mistletoe.span_token import LineBreak
@@ -54,6 +57,7 @@ _CACHE_DIR = Path("scripts/.github_cache")
 _ENTRY_KEY_ORDER = (
     "display_name",
     "activity_status",
+    "pg_award",
     "git_owner_url",
     "git_repo_urls",
     "category",
@@ -66,8 +70,17 @@ yaml.indent(mapping=2, sequence=4, offset=2)
 yaml.width = 120
 
 
+@dataclass(frozen=True, slots=True)
+class _ProposalRecord:
+    """Raw proposal markdown and source metadata shared by both collectors."""
+
+    project_path: str
+    markdown_text: str
+    source_label: str
+
+
 def main() -> int:
-    """Generate draft proposal override patches from open labeled proposal PRs."""
+    """Generate draft proposal override patches from the selected proposal source."""
 
     args = _build_parser().parse_args()
 
@@ -75,86 +88,46 @@ def main() -> int:
         canonical_template, canonical_overrides = _load_canonical_overrides()
     except Exception as exc:
         _print_error(f"Failed to load canonical overrides: {exc}")
-
         return 1
 
     merged_overrides: dict[str, dict[str, Any]] = {key: dict(value) for key, value in canonical_overrides.items()}
 
     name_map = _collect_existing_name_map(canonical_overrides)
 
-    gh = get_github_client()
-
     try:
+        gh = get_github_client()
         docs_repo = gh.get_repo(f"{_DOCS_OWNER}/{_DOCS_REPO}")
-        search_results = gh.search_issues(query=_QUERY)
     except GithubException as exc:
-        _print_error(f"GitHub query failed: {exc}")
-
+        _print_error(f"GitHub repository initialization failed: {exc}")
         return 1
     except Exception as exc:
         _print_error(f"Unexpected GitHub initialization failure: {exc}")
+        return 1
 
+    try:
+        if args.source == "open":
+            proposal_records, skipped = _collect_open_proposals(gh, docs_repo, read_cache=args.read_cache)
+        else:
+            proposal_records, skipped = _collect_merged_proposals(docs_repo)
+
+    except GithubException as exc:
+        _print_error(f"GitHub {args.source} proposal collection failed: {exc}")
+        return 1
+    except Exception as exc:
+        _print_error(f"Unexpected {args.source} proposal collection failure: {exc}")
         return 1
 
     processed: list[str] = []
-    skipped = 0
 
-    for issue in search_results:
-        pr_number = issue.number
-
-        pull_head_sha: str | None = None
-        cached_pr = _load_cached_pr(pr_number) if args.read_cache else None
-        if cached_pr is not None:
-            pull_raw, changed_files = cached_pr
-            pull_head_sha = _pull_head_sha_from_raw(pull_raw)
-        else:
-            try:
-                pull = docs_repo.get_pull(pr_number)
-                changed_files = [file.filename for file in pull.get_files()]
-                pull_head_sha = pull.head.sha
-                _save_cached_pr(pr_number, pull.raw_data, changed_files)
-            except GithubException as exc:
-                print(f"WARNING PR #{pr_number}: failed to inspect changed files: {exc}")
-                skipped += 1
-                continue
-
-        valid_single, project_path = _is_valid_single_project_file(changed_files)
-        if not valid_single or project_path is None:
-            print(f"INFO PR #{pr_number}: skipped (changed files={len(changed_files)})")
-            skipped += 1
-            continue
-
-        markdown_text = _load_cached_markdown(pr_number, project_path) if args.read_cache else None
-        if markdown_text is None:
-            if not pull_head_sha:
-                print(f"WARNING PR #{pr_number}: missing head sha for {project_path}")
-                skipped += 1
-                continue
-
-            try:
-                source = docs_repo.get_contents(project_path, ref=pull_head_sha)
-                if isinstance(source, list):
-                    raise ValueError(f"Expected file content, got directory listing for {project_path}")
-
-                content_bytes = source.decoded_content
-                markdown_text = content_bytes.decode("utf-8")
-                _save_cached_markdown(pr_number, project_path, content_bytes)
-            except GithubException as exc:
-                print(f"WARNING PR #{pr_number}: failed to fetch {project_path}: {exc}")
-                skipped += 1
-                continue
-            except Exception as exc:
-                print(f"WARNING PR #{pr_number}: failed to decode {project_path}: {exc}")
-                skipped += 1
-                continue
-
+    for record in proposal_records:
         try:
-            candidate = _extract_markdown_fields(markdown_text, pr_number, project_path)
+            candidate = _extract_markdown_fields(record.markdown_text, record.source_label, record.project_path)
         except Exception as exc:
-            print(f"WARNING PR #{pr_number}: failed to parse {project_path}: {exc}")
+            print(f"WARNING {record.source_label} ({record.project_path}): failed to parse: {exc}")
             skipped += 1
             continue
 
+        project_path = record.project_path
         slug = _extract_slug_from_path(project_path)
         normalized_slug = _normalize_alpha(slug)
 
@@ -165,7 +138,7 @@ def main() -> int:
             if matching_keys:
                 matched_key = matching_keys[0]
                 if len(matching_keys) > 1:
-                    print(f"WARNING PR #{pr_number}: multiple name matches for slug={slug!r}; using {matched_key!r}")
+                    print(f"WARNING {record.source_label}: multiple name matches for slug={slug!r}; using {matched_key!r}")
 
         if matched_key is None:
             extracted_repo_urls = candidate.get("git_repo_urls")
@@ -180,20 +153,20 @@ def main() -> int:
                 if len(scored_matches) > 1:
                     joined = ", ".join(f"{key}:{score}" for key, score in scored_matches)
                     print(
-                        f"WARNING PR #{pr_number}: more than one repo-overlap match for {project_path}; "
+                        f"WARNING {record.source_label}: more than one repo-overlap match for {project_path}; "
                         f"selected {repo_match!r}. candidates={joined}"
                     )
 
         if matched_key is None:
             suffix = _slug_to_canonical_suffix(slug)
             if not suffix:
-                print(f"WARNING PR #{pr_number}: unable to derive canonical key from slug {slug!r}; skipped")
+                print(f"WARNING {record.source_label}: unable to derive canonical key from slug {slug!r}; skipped")
                 skipped += 1
                 continue
 
             matched_key = f"{_DAOIP_PREFIX}{suffix}"
 
-        source_tag = f"PR #{pr_number} ({project_path})"
+        source_tag = record.source_label
         existing_entry = merged_overrides.get(matched_key, {})
         has_front_matter = candidate.get("_has_front_matter") is True
         if has_front_matter and "display_name" not in candidate:
@@ -222,11 +195,10 @@ def main() -> int:
         _OUTPUT_PATH.write_text(output_text, encoding="utf-8")
     except OSError as exc:
         _print_error(f"Failed to write draft file {_OUTPUT_PATH}: {exc}")
-
         return 1
 
-    print(f"Processed proposal PRs: {len(processed)}")
-    print(f"Skipped proposal PRs: {skipped}")
+    print(f"Processed proposals: {len(processed)}")
+    print(f"Skipped proposals: {skipped}")
     print(f"Draft overrides written to {_OUTPUT_PATH}")
 
     print("\nTo apply these overrides selectively, run the Reference Graph Bootstrap with:")
@@ -326,7 +298,13 @@ def _load_canonical_overrides() -> tuple[CommentedMap, dict[str, dict[str, Any]]
 def _build_parser() -> argparse.ArgumentParser:
     """Create CLI parser for script runtime flags."""
 
-    parser = argparse.ArgumentParser(description="Draft PG proposal overrides from open proposal PRs.")
+    parser = argparse.ArgumentParser(description="Draft PG proposal overrides from open or merged proposals.")
+    parser.add_argument(
+        "--source",
+        choices=("open", "merged"),
+        default="open",
+        help="Read open proposal PRs or proposals merged into docs/projects (default: open).",
+    )
     parser.add_argument(
         "--read-cache",
         action="store_true",
@@ -334,6 +312,116 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bool) -> tuple[list[_ProposalRecord], int]:
+    """Collect raw markdown records from open proposal pull requests."""
+
+    search_results = gh.search_issues(query=_QUERY)
+    records: list[_ProposalRecord] = []
+    skipped = 0
+
+    for issue in search_results:
+        pr_number = issue.number
+
+        pull_head_sha: str | None = None
+        cached_pr = _load_cached_pr(pr_number) if read_cache else None
+        if cached_pr is not None:
+            pull_raw, changed_files = cached_pr
+            pull_head_sha = _pull_head_sha_from_raw(pull_raw)
+        else:
+            try:
+                pull = docs_repo.get_pull(pr_number)
+                changed_files = [file.filename for file in pull.get_files()]
+                pull_head_sha = pull.head.sha
+                _save_cached_pr(pr_number, pull.raw_data, changed_files)
+            except GithubException as exc:
+                print(f"WARNING PR #{pr_number}: failed to inspect changed files: {exc}")
+                skipped += 1
+                continue
+
+        valid_single, project_path = _is_valid_single_project_file(changed_files)
+        if not valid_single or project_path is None:
+            print(f"INFO PR #{pr_number}: skipped (changed files={len(changed_files)})")
+            skipped += 1
+            continue
+
+        markdown_text = _load_cached_markdown(pr_number, project_path) if read_cache else None
+        if markdown_text is None:
+            if not pull_head_sha:
+                print(f"WARNING PR #{pr_number}: missing head sha for {project_path}")
+                skipped += 1
+                continue
+
+            try:
+                source = docs_repo.get_contents(project_path, ref=pull_head_sha)
+                if isinstance(source, list):
+                    raise ValueError(f"Expected file content, got directory listing for {project_path}")
+
+                content_bytes = source.decoded_content
+                markdown_text = content_bytes.decode("utf-8")
+                _save_cached_markdown(pr_number, project_path, content_bytes)
+            except GithubException as exc:
+                print(f"WARNING PR #{pr_number}: failed to fetch {project_path}: {exc}")
+                skipped += 1
+                continue
+            except Exception as exc:
+                print(f"WARNING PR #{pr_number}: failed to decode {project_path}: {exc}")
+                skipped += 1
+                continue
+
+        records.append(
+            _ProposalRecord(
+                project_path=project_path,
+                markdown_text=markdown_text,
+                source_label=f"PR #{pr_number} ({project_path})",
+            )
+        )
+
+    return records, skipped
+
+
+def _collect_merged_proposals(docs_repo: Repository) -> tuple[list[_ProposalRecord], int]:
+    """Collect raw markdown records from direct .md files under docs/projects."""
+
+    entries = docs_repo.get_contents("docs/projects", ref="main")
+    if not isinstance(entries, list):
+        raise ValueError("Expected directory listing for docs/projects")
+
+    records: list[_ProposalRecord] = []
+    skipped = 0
+
+    for entry in entries:
+        project_path = entry.path
+        if not project_path.startswith("docs/projects/"):
+            continue
+        if not project_path.endswith(".md"):
+            continue
+
+        try:
+            source = docs_repo.get_contents(project_path, ref="main")
+            if isinstance(source, list):
+                raise ValueError(f"Expected file content, got directory listing for {project_path}")
+
+            markdown_text = source.decoded_content.decode("utf-8")
+        except GithubException as exc:
+            print(f"WARNING merged {project_path}: failed to fetch: {exc}")
+            skipped += 1
+            continue
+        except Exception as exc:
+            print(f"WARNING merged {project_path}: failed to decode: {exc}")
+            skipped += 1
+            continue
+
+        records.append(
+            _ProposalRecord(
+                project_path=project_path,
+                markdown_text=markdown_text,
+                source_label=f"merged {project_path}",
+            )
+        )
+
+    return records, skipped
 
 
 def _cache_pr_json_path(pr_number: int) -> Path:
@@ -420,17 +508,17 @@ def _pull_head_sha_from_raw(pull_raw: dict[str, Any]) -> str | None:
     return sha
 
 
-def _parse_front_matter(markdown_text: str, *, pr_number: int, source_path: str) -> tuple[dict[str, Any], str, bool]:
+def _parse_front_matter(markdown_text: str, *, source_label: str, source_path: str) -> tuple[dict[str, Any], str, bool]:
     """Parse YAML front matter and return ``(front_matter, markdown_body, has_front_matter)``."""
 
     if not markdown_text.startswith("---\n"):
-        print(f"WARNING PR #{pr_number}: missing YAML front matter in {source_path}")
+        print(f"WARNING {source_label}: missing YAML front matter in {source_path}")
 
         return {}, markdown_text, False
 
     end_index = markdown_text.find("\n---\n", 4)
     if end_index == -1:
-        print(f"WARNING PR #{pr_number}: malformed YAML front matter in {source_path}")
+        print(f"WARNING {source_label}: malformed YAML front matter in {source_path}")
 
         return {}, markdown_text, False
 
@@ -595,12 +683,12 @@ def _extract_github_owner_url(repo_urls: list[str]) -> str | None:
     return f"https://github.com/{owner}"
 
 
-def _extract_markdown_fields(markdown_text: str, pr_number: int, source_path: str) -> dict[str, Any]:
+def _extract_markdown_fields(markdown_text: str, source_label: str, source_path: str) -> dict[str, Any]:
     """Extract candidate patch fields from proposal markdown content."""
 
     front_matter, body, has_front_matter = _parse_front_matter(
         markdown_text,
-        pr_number=pr_number,
+        source_label=source_label,
         source_path=source_path,
     )
     doc = Document(body)
@@ -664,7 +752,7 @@ def _extract_markdown_fields(markdown_text: str, pr_number: int, source_path: st
         and table_category.strip().lower() != front_category.strip().lower()
     ):
         print(
-            f"WARNING PR #{pr_number}: category mismatch for {source_path}: "
+            f"WARNING {source_label}: category mismatch for {source_path}: "
             f"front matter={front_category!r}, table={table_category!r}"
         )
 
@@ -674,7 +762,7 @@ def _extract_markdown_fields(markdown_text: str, pr_number: int, source_path: st
             candidate.setdefault("metadata", {})
             candidate["metadata"]["website"] = website_value
         else:
-            print(f"WARNING PR #{pr_number}: invalid website value for {source_path}: {website_value!r}")
+            print(f"WARNING {source_label}: invalid website value for {source_path}: {website_value!r}")
 
     first_released_value = row_map.get("first released")
     if first_released_value:
