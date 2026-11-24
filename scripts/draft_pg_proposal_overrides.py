@@ -736,6 +736,8 @@ def _extract_markdown_fields(markdown_text: str, source_label: str, source_path:
         if normalized_repo := _normalize_github_repo_url(value):
             github_urls.append(normalized_repo)
 
+    github_urls = list(dict.fromkeys(github_urls))
+
     if not github_urls:
         if repository_value := row_map.get("repository"):
             if fallback_repo := _normalize_github_repo_url(repository_value):
