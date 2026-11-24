@@ -208,13 +208,13 @@ def main() -> int:
 
 
 def _yaml_load(text: str) -> Any:
-    """Typed wrapper around ruamel YAML load."""
+    """Load YAML text through ruamel's incompletely typed stream API."""
 
     return cast(Any, yaml).load(text)
 
 
 def _yaml_dump(data: Any, stream: StringIO) -> None:
-    """Typed wrapper around ruamel YAML dump."""
+    """Dump YAML through ruamel's incompletely typed serializer API."""
 
     cast(Any, yaml).dump(data, stream)
 
