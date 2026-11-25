@@ -15,6 +15,16 @@ The canonical baseline and matching source is:
 Usage:
     uv run python scripts/draft_pg_proposal_overrides.py
     uv run python scripts/draft_pg_proposal_overrides.py --source=merged
+    uv run python scripts/draft_pg_proposal_overrides.py --source=merged --refresh-stroopies
+    uv run python scripts/draft_pg_proposal_overrides.py --source=merged --draft-maintainers
+    uv run python scripts/draft_pg_proposal_overrides.py --source=merged --stroopies-snapshot snapshot.json
+
+Maintainer previews are written to pg_atlas/data/new.pg-proposal-overrides.yml.
+The JSON input has ledger, first_token_id, next_token_id and members fields.
+Each member has token_id, github_login (or null), project_ids and revoked.
+Live cache entries expire after 24 hours. Refresh explicitly to replace them.
+Add a comment like "# d4-reject: github-handle" by the project's maintainers list
+and save it in the reviewed override file to suppress that candidate in later drafts.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -38,9 +48,11 @@ from mistletoe import Document
 from mistletoe.block_token import Heading, Paragraph, Table
 from mistletoe.span_token import LineBreak
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
+from pg_atlas.ingestion.declared_maintainers import plan_review, project_page_logins, read_snapshot, reconcile
+from pg_atlas.ingestion.stroopies import MAINNET_RPC, cached_snapshot
 from pg_atlas.procrastinate.github import get_github_client
 
 _DOCS_OWNER = "SCF-Public-Goods-Maintenance"
@@ -53,6 +65,8 @@ _DAOIP_PREFIX = "daoip-5:scf:project:"
 _PROJECTS_DIR = Path("pg_atlas/data/projects")
 _CANONICAL_PATH = _PROJECTS_DIR / "pg-proposal-overrides.yml"
 _OUTPUT_PATH = _PROJECTS_DIR / "new.pg-proposal-overrides.yml"
+# Keep proof-of-concept output outside the directory scanned by bootstrap.
+_MAINTAINER_OUTPUT_PATH = _PROJECTS_DIR.parent / "new.pg-proposal-overrides.yml"
 _CACHE_DIR = Path("scripts/.github_cache")
 _ENTRY_KEY_ORDER = (
     "display_name",
@@ -77,6 +91,7 @@ class _ProposalRecord:
     project_path: str
     markdown_text: str
     source_label: str
+    commit_sha: str
 
 
 def main() -> int:
@@ -86,8 +101,13 @@ def main() -> int:
 
     try:
         canonical_template, canonical_overrides = _load_canonical_overrides()
+        snapshot = None
+        if args.stroopies_snapshot is not None:
+            snapshot = read_snapshot(args.stroopies_snapshot)
+        elif args.draft_maintainers or args.refresh_stroopies:
+            snapshot = cached_snapshot(_CACHE_DIR / "stroopies.json", args.stroopies_rpc, refresh=args.refresh_stroopies)
     except Exception as exc:
-        _print_error(f"Failed to load canonical overrides: {exc}")
+        _print_error(f"Failed to load draft inputs: {exc}")
         return 1
 
     merged_overrides: dict[str, dict[str, Any]] = {key: dict(value) for key, value in canonical_overrides.items()}
@@ -118,6 +138,9 @@ def main() -> int:
         return 1
 
     processed: list[str] = []
+    page_evidence: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    page_reads: dict[str, set[tuple[str, str | int]]] = {}
+    source_kind = "proposal" if args.source == "open" else "project_page"
 
     for record in proposal_records:
         try:
@@ -132,12 +155,14 @@ def main() -> int:
         normalized_slug = _normalize_alpha(slug)
 
         matched_key: str | None = None
+        ambiguous = False
 
         if normalized_slug:
             matching_keys = name_map.get(normalized_slug, [])
             if matching_keys:
                 matched_key = matching_keys[0]
                 if len(matching_keys) > 1:
+                    ambiguous = True
                     print(f"WARNING {record.source_label}: multiple name matches for slug={slug!r}; using {matched_key!r}")
 
         if matched_key is None:
@@ -151,6 +176,7 @@ def main() -> int:
             if repo_match is not None:
                 matched_key = repo_match
                 if len(scored_matches) > 1:
+                    ambiguous = scored_matches[0][1] == scored_matches[1][1]
                     joined = ", ".join(f"{key}:{score}" for key, score in scored_matches)
                     print(
                         f"WARNING {record.source_label}: more than one repo-overlap match for {project_path}; "
@@ -181,6 +207,58 @@ def main() -> int:
 
         processed.append(matched_key)
 
+        if snapshot is not None and matched_key in canonical_overrides and not ambiguous:
+            _, body, _ = _parse_front_matter(
+                record.markdown_text, source_label=record.source_label, source_path=record.project_path
+            )
+            project_evidence = page_evidence.setdefault(matched_key, {})
+            evidence = {
+                "source": source_kind,
+                "path": record.project_path,
+                "commit_sha": record.commit_sha,
+            }
+            page_reads.setdefault(matched_key, set()).add((source_kind, record.project_path))
+            for login in project_page_logins(body):
+                references = project_evidence.setdefault(login, [])
+                if evidence not in references:
+                    references.append(evidence)
+
+    output_path = _OUTPUT_PATH
+    review_comments: dict[str, list[dict[str, Any]]] = {}
+    rejections = _reviewer_rejections(canonical_template)
+    review_notes = {key: [f"d4-reject: {login}" for login in sorted(logins)] for key, logins in rejections.items()}
+    conflict_count = 0
+    if snapshot is not None:
+        output_path = _MAINTAINER_OUTPUT_PATH
+        token_reads: set[tuple[str, str | int]] = {("stroopies", member.token_id) for member in snapshot.members}
+        for project_id in sorted(canonical_overrides):
+            active, commented = reconcile(project_id, page_evidence.get(project_id, {}), snapshot)
+            project = merged_overrides[project_id]
+            metadata = project.get("metadata", {})
+            previous = metadata.get("maintainers", [])
+            if not previous and not active and not commented:
+                continue
+            reviewed, candidates, removals = plan_review(
+                previous, active, commented, token_reads | page_reads.get(project_id, set()), rejections.get(project_id, set())
+            )
+            if previous or reviewed:
+                project["metadata"] = {**metadata, "maintainers": reviewed}
+            review_comments[project_id] = candidates
+            review_notes.setdefault(project_id, []).extend(
+                f"Proposed removal @{login}: {reason}." for login, reason in removals.items()
+            )
+            previous_by_login = {item["github_login"].lower(): item for item in previous}
+            additions = sum(
+                "conflict" not in item and previous_by_login.get(item["github_login"].lower()) != item for item in reviewed
+            )
+            conflicts = sum("conflict" in item for item in reviewed)
+            conflict_count += conflicts
+            if additions or removals or conflicts or candidates:
+                print(
+                    f"{project_id}: {additions} added or updated, {len(removals)} proposed removals, "
+                    f"{conflicts} conflicts, {len(candidates)} commented candidates"
+                )
+
     for key, value in list(merged_overrides.items()):
         suffix = key[len(_DAOIP_PREFIX) :] if key.startswith(_DAOIP_PREFIX) else key
         merged_overrides[key] = _ensure_required_properties(
@@ -188,22 +266,28 @@ def main() -> int:
             fallback_display_name=_slug_to_display_name(suffix),
         )
 
-    output_text = _render_sorted_yaml(merged_overrides, canonical_template)
+    output_text = _render_sorted_yaml(merged_overrides, canonical_template, review_comments, review_notes)
+    if snapshot is not None:
+        output_text = output_text.replace("../schema-override-project.yml", "./schema-override-project.yml", 1)
 
     try:
-        _OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _OUTPUT_PATH.write_text(output_text, encoding="utf-8")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(output_text, encoding="utf-8")
     except OSError as exc:
-        _print_error(f"Failed to write draft file {_OUTPUT_PATH}: {exc}")
+        _print_error(f"Failed to write draft file {output_path}: {exc}")
         return 1
 
     print(f"Processed proposals: {len(processed)}")
     print(f"Skipped proposals: {skipped}")
-    print(f"Draft overrides written to {_OUTPUT_PATH}")
+    print(f"Draft overrides written to {output_path}")
 
-    print("\nTo apply these overrides selectively, run the Reference Graph Bootstrap with:")
-    print(" ".join(processed))
+    if snapshot is None:
+        print("\nTo apply these overrides selectively, run the Reference Graph Bootstrap with:")
+        print(" ".join(processed))
 
+    if conflict_count:
+        _print_error(f"Resolve {conflict_count} maintainer conflict(s) in the draft before continuing.")
+        return 1
     return 0
 
 
@@ -311,6 +395,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read PR/file data from scripts/.github_cache when available before calling GitHub APIs.",
     )
 
+    evidence_input = parser.add_mutually_exclusive_group()
+    evidence_input.add_argument("--draft-maintainers", action="store_true", help="Draft from the local Stroopies cache.")
+    evidence_input.add_argument("--refresh-stroopies", action="store_true", help="Refresh the Stroopies cache and draft.")
+    parser.add_argument("--stroopies-rpc", default=MAINNET_RPC, help="Mainnet Stellar RPC URL for an explicit refresh.")
+    evidence_input.add_argument(
+        "--stroopies-snapshot",
+        type=Path,
+        help="Generate a maintainer review draft from a local JSON evidence snapshot.",
+    )
+
     return parser
 
 
@@ -346,13 +440,13 @@ def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bo
             skipped += 1
             continue
 
-        markdown_text = _load_cached_markdown(pr_number, project_path) if read_cache else None
-        if markdown_text is None:
-            if not pull_head_sha:
-                print(f"WARNING PR #{pr_number}: missing head sha for {project_path}")
-                skipped += 1
-                continue
+        if not pull_head_sha:
+            print(f"WARNING PR #{pr_number}: missing head sha for {project_path}")
+            skipped += 1
+            continue
 
+        markdown_text = _load_cached_markdown(pr_number, project_path, pull_head_sha) if read_cache else None
+        if markdown_text is None:
             try:
                 source = docs_repo.get_contents(project_path, ref=pull_head_sha)
                 if isinstance(source, list):
@@ -360,7 +454,7 @@ def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bo
 
                 content_bytes = source.decoded_content
                 markdown_text = content_bytes.decode("utf-8")
-                _save_cached_markdown(pr_number, project_path, content_bytes)
+                _save_cached_markdown(pr_number, project_path, pull_head_sha, content_bytes)
             except GithubException as exc:
                 print(f"WARNING PR #{pr_number}: failed to fetch {project_path}: {exc}")
                 skipped += 1
@@ -375,6 +469,7 @@ def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bo
                 project_path=project_path,
                 markdown_text=markdown_text,
                 source_label=f"PR #{pr_number} ({project_path})",
+                commit_sha=pull_head_sha,
             )
         )
 
@@ -384,7 +479,8 @@ def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bo
 def _collect_merged_proposals(docs_repo: Repository) -> tuple[list[_ProposalRecord], int]:
     """Collect raw markdown records from direct .md files under docs/projects."""
 
-    entries = docs_repo.get_contents("docs/projects", ref="main")
+    commit_sha = docs_repo.get_branch("main").commit.sha
+    entries = docs_repo.get_contents("docs/projects", ref=commit_sha)
     if not isinstance(entries, list):
         raise ValueError("Expected directory listing for docs/projects")
 
@@ -399,7 +495,7 @@ def _collect_merged_proposals(docs_repo: Repository) -> tuple[list[_ProposalReco
             continue
 
         try:
-            source = docs_repo.get_contents(project_path, ref="main")
+            source = docs_repo.get_contents(project_path, ref=commit_sha)
             if isinstance(source, list):
                 raise ValueError(f"Expected file content, got directory listing for {project_path}")
 
@@ -418,6 +514,7 @@ def _collect_merged_proposals(docs_repo: Repository) -> tuple[list[_ProposalReco
                 project_path=project_path,
                 markdown_text=markdown_text,
                 source_label=f"merged {project_path}",
+                commit_sha=commit_sha,
             )
         )
 
@@ -430,10 +527,10 @@ def _cache_pr_json_path(pr_number: int) -> Path:
     return _CACHE_DIR / f"pr_{pr_number}.json"
 
 
-def _cache_project_file_path(pr_number: int, project_path: str) -> Path:
+def _cache_project_file_path(pr_number: int, project_path: str, commit_sha: str) -> Path:
     """Return cache path for a proposal markdown file preserving original filename."""
 
-    return _CACHE_DIR / f"pr_{pr_number}" / project_path
+    return _CACHE_DIR / f"pr_{pr_number}" / commit_sha / project_path
 
 
 def _load_cached_pr(pr_number: int) -> tuple[dict[str, Any], list[str]] | None:
@@ -472,10 +569,10 @@ def _save_cached_pr(pr_number: int, pull_raw: dict[str, Any], changed_files: lis
     cache_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _load_cached_markdown(pr_number: int, project_path: str) -> str | None:
+def _load_cached_markdown(pr_number: int, project_path: str, commit_sha: str) -> str | None:
     """Load cached markdown content if available."""
 
-    cache_path = _cache_project_file_path(pr_number, project_path)
+    cache_path = _cache_project_file_path(pr_number, project_path, commit_sha)
     if not cache_path.exists():
         return None
 
@@ -485,10 +582,10 @@ def _load_cached_markdown(pr_number: int, project_path: str) -> str | None:
         return None
 
 
-def _save_cached_markdown(pr_number: int, project_path: str, content_bytes: bytes) -> None:
+def _save_cached_markdown(pr_number: int, project_path: str, commit_sha: str, content_bytes: bytes) -> None:
     """Persist fetched markdown bytes preserving original filename."""
 
-    cache_path = _cache_project_file_path(pr_number, project_path)
+    cache_path = _cache_project_file_path(pr_number, project_path, commit_sha)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(content_bytes)
 
@@ -950,7 +1047,28 @@ def _order_entry_keys(entry: dict[str, Any]) -> dict[str, Any]:
     return ordered
 
 
-def _render_sorted_yaml(overrides: dict[str, dict[str, Any]], template_map: CommentedMap) -> str:
+def _reviewer_rejections(template_map: CommentedMap) -> dict[str, set[str]]:
+    """Read explicit rejection notes from each project's round-trip YAML."""
+    buffer = StringIO()
+    _yaml_dump(template_map, buffer)
+    project: str | None = None
+    rejections: dict[str, set[str]] = {}
+    for line in buffer.getvalue().splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            project = line.rstrip(":").strip("\"'") if line.endswith(":") else None
+        if project is not None and project.startswith(_DAOIP_PREFIX):
+            marker = re.fullmatch(r" +# d4-reject: ([A-Za-z0-9-]+) *", line)
+            if marker:
+                rejections.setdefault(project, set()).add(marker[1].lower())
+    return rejections
+
+
+def _render_sorted_yaml(
+    overrides: dict[str, dict[str, Any]],
+    template_map: CommentedMap,
+    review_comments: dict[str, list[dict[str, Any]]],
+    review_notes: dict[str, list[str]] | None = None,
+) -> str:
     """Render deterministic YAML sorted by DAOIP key using round-trip formatting."""
 
     sorted_keys = sorted(overrides)
@@ -960,7 +1078,23 @@ def _render_sorted_yaml(overrides: dict[str, dict[str, Any]], template_map: Comm
 
     for key in sorted_keys:
         ordered_entry = _order_entry_keys(overrides[key])
-        ordered_map[key] = _to_quoted_yaml_value(ordered_entry)
+        rendered_entry = _to_quoted_yaml_value(ordered_entry)
+        candidates = review_comments.get(key, [])
+        notes = list((review_notes or {}).get(key, []))
+        if candidates:
+            snippets = StringIO()
+            _yaml_dump(_to_quoted_yaml_value(candidates), snippets)
+            lines = [line.removeprefix("  ") for line in snippets.getvalue().splitlines()]
+            notes.extend(["Confirm these project-page candidates before uncommenting:", *lines])
+        if notes:
+            metadata = rendered_entry["metadata"]
+            maintainers = CommentedSeq(metadata.get("maintainers", []))
+            if maintainers:
+                cast(Any, maintainers).yaml_set_comment_before_after_key(0, before="\n".join(notes), indent=6)
+            else:
+                metadata.yaml_set_comment_before_after_key("maintainers", before="\n".join(notes), indent=4)
+            metadata["maintainers"] = maintainers
+        ordered_map[key] = rendered_entry
         cast(Any, ordered_map).yaml_set_comment_before_after_key(key, before="\n")
 
     buffer = StringIO()

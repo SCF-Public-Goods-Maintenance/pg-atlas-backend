@@ -1026,6 +1026,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mnemonic"
+version = "0.21"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/77/e6232ed59fbd7b90208bb8d4f89ed5aabcf30a524bc2fb8f0dafbe8e7df9/mnemonic-0.21.tar.gz", hash = "sha256:1fe496356820984f45559b1540c80ff10de448368929b9c60a2b55744cc88acf", size = 152462, upload-time = "2024-01-05T10:46:14.895Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/48/5abb16ce7f9d97b728e6b97c704ceaa614362e0847651f379ed0511942a0/mnemonic-0.21-py3-none-any.whl", hash = "sha256:72dc9de16ec5ef47287237b9b6943da11647a03fe7cf1f139fc3d7c4a7439288", size = 92701, upload-time = "2024-01-05T10:46:12.703Z" },
+]
+
+[[package]]
 name = "msgspec"
 version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1269,6 +1278,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruamel-yaml" },
     { name = "ruff" },
+    { name = "stellar-sdk" },
     { name = "types-aiobotocore-custom" },
     { name = "types-cachetools" },
     { name = "types-networkx" },
@@ -1317,6 +1327,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
     { name = "ruff", specifier = ">=0.17.2" },
+    { name = "stellar-sdk", specifier = ">=14,<15" },
     { name = "types-aiobotocore-custom", path = "vendored/types_aiobotocore_custom-3.10.0-py3-none-any.whl" },
     { name = "types-cachetools" },
     { name = "types-networkx", specifier = ">=3.6.1.20261021" },
@@ -1822,6 +1833,18 @@ wheels = [
 ]
 
 [[package]]
+name = "requests-sse"
+version = "0.5.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/94/f0f29584c3ca24c29a72e19a28136f73ed08adddc93fb8a0c998577c9085/requests_sse-0.5.3.tar.gz", hash = "sha256:107c63afb2a2292b422ab2504849f3adb54b4c884700646ebe9f6e4178ba375c", size = 9057, upload-time = "2026-03-11T15:35:49.303Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/87/3704da8cc1cb91cc0ccee8fb03d8ed11217afcd028352f3b1242fee2f4f1/requests_sse-0.5.3-py3-none-any.whl", hash = "sha256:dc3e053e22fdcf002ca1fbd1794967d42b82b24539f5b7fe0e807301dd4ef4ec", size = 10198, upload-time = "2026-03-11T15:35:47.872Z" },
+]
+
+[[package]]
 name = "ruamel-yaml"
 version = "0.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1949,6 +1972,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ad/eb/4e197bf26b023abafc5e9043ec8710d7de0fcb032d0969045236d72aa0b1/starlette-1.9.0.tar.gz", hash = "sha256:3d931de246ed870e35ce605974440816ef895e592f255d1396cfdf191d4c4318", size = 2732466, upload-time = "2026-10-18T15:50:33.189Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/93/181df62699d9b5aca1d87e5cfda131dac87e3cdaebf668662f7206ca3470/starlette-1.9.0-py3-none-any.whl", hash = "sha256:fd3f159936e882d06c1108f84688f7cda2cf85fc6a592a50edbd175e882c2ddc", size = 80335, upload-time = "2026-10-18T15:50:31.526Z" },
+]
+
+[[package]]
+name = "stellar-sdk"
+version = "14.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mnemonic" },
+    { name = "pydantic" },
+    { name = "pynacl" },
+    { name = "requests" },
+    { name = "requests-sse" },
+    { name = "typing-extensions" },
+    { name = "xdrlib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/9b/65d4ffdf09fc212e403e6e34037e83be717bb91bf5810e34a3deb427ab13/stellar_sdk-14.1.1.tar.gz", hash = "sha256:3c227bf3d8acc619ddc4872885bab10be605780f3fe2902594b4d6048b3cc325", size = 414617, upload-time = "2026-06-28T03:19:11.777Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/a4/518cfc99c58fbc22c4040df56f310e4b5a2004def70339e953c17d0c7579/stellar_sdk-14.1.1-py3-none-any.whl", hash = "sha256:6e898ba0c6d82e292fb05fcb2008e7b87374c0e6acfd91111743340d60a8135e", size = 970602, upload-time = "2026-06-28T03:19:09.802Z" },
 ]
 
 [[package]]
@@ -2258,6 +2299,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/27/1c/495b3aebbbe5aebf52ae5f9e8ddd0e072a412b9f5a9bc68e5eba43fa26ba/wrapt-2.5.1-cp314-cp314t-win_amd64.whl", hash = "sha256:bc5c0203d383403043fb86c964bd0bab4fcbfb26004ff4bb9c6d02ebc1d608ae", size = 109940, upload-time = "2026-10-14T00:38:29.145Z" },
     { url = "https://files.pythonhosted.org/packages/28/4d/030ecd98da4d052c264290c4fb9f984706c9a19026154c833580e8624a05/wrapt-2.5.1-cp314-cp314t-win_arm64.whl", hash = "sha256:a424e8a9776c06aef6313af1d0e3fe6e0838af4241d0c09eb0a3b46f2c9a5ff3", size = 106214, upload-time = "2026-10-14T00:38:30.795Z" },
     { url = "https://files.pythonhosted.org/packages/bc/0c/7da7513ddcc8f1d831ec4bfbedc9f7f174ecb91042bc16916fc1e0d06b22/wrapt-2.5.1-py3-none-any.whl", hash = "sha256:c6e6c226b1ca5402d7ae5fb34a0d21f1b49124fe4200e5884d1e19e53c47ac1d", size = 81849, upload-time = "2026-10-14T00:39:37.441Z" },
+]
+
+[[package]]
+name = "xdrlib3"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/8e/aab54b230c9f021678c75365d8247ac40bf5beaf5b08a7d88d6706b80e3a/xdrlib3-0.1.1.tar.gz", hash = "sha256:26697013af45afab6c6ff9a598fd04979cde83fa7215da059551b088aea88f34", size = 3218, upload-time = "2023-05-06T11:45:48.531Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/9c/14f0e5cafc672566c52ae54a1bb221f2ba2155be4830af7b17d0d3b5ec59/xdrlib3-0.1.1-py3-none-any.whl", hash = "sha256:175c0645f347c64e76bb374c2109480007eb2ff04ad08acfe885a130d2b0877d", size = 3747, upload-time = "2023-05-06T11:45:46.634Z" },
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ logs/
 
 # data for human review
 pg_atlas/data/projects/new.*.yml
+pg_atlas/data/new.pg-proposal-overrides.yml
 
 #Ignore windsurf AI rules
 .windsurfrules
