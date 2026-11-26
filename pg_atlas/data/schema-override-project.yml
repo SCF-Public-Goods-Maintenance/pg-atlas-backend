@@ -53,6 +53,52 @@ additionalProperties:
         first_released:
           type: string
 
+        maintainers:
+          description: Reviewed GitHub maintainer declarations for this project's repositories.
+          type: array
+          items:
+            type: object
+            required: [github_login]
+            properties:
+              github_login:
+                type: string
+                pattern: '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$'
+                maxLength: 39
+              evidence:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items:
+                  oneOf:
+                    - type: object
+                      required: [source, token_id, ledger]
+                      properties:
+                        source:
+                          const: stroopies
+                        token_id:
+                          type: integer
+                          minimum: 0
+                        ledger:
+                          description: Stellar ledger at which the membership record was read.
+                          type: integer
+                          minimum: 1
+                      additionalProperties: false
+                    - type: object
+                      required: [source, path, commit_sha]
+                      properties:
+                        source:
+                          enum: [project_page, proposal]
+                        path:
+                          description: Repository-relative path to the Markdown source file.
+                          type: string
+                          pattern: '^([A-Za-z0-9_-][^/\\:]*/)*[A-Za-z0-9_-][^/\\:]*\.md$'
+                        commit_sha:
+                          description: Full Git commit SHA of the revision used to read the file.
+                          type: string
+                          pattern: '^[0-9a-f]{40}$'
+                      additionalProperties: false
+            additionalProperties: false
+
       additionalProperties: false
 
   additionalProperties: false

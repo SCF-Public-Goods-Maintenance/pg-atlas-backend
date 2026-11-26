@@ -1113,7 +1113,7 @@ def _build_registry_warning_purls(package_refs: list[PackageReference]) -> dict[
 
 def load_project_overrides() -> dict[str, dict[str, Any]]:
     """
-    Load all YAML files containing project overrides.
+    Load project overrides, skipping the generated proposal review draft.
 
     Returns a dict mapping ``canonical_id`` → override field dict (e.g. display_name,
     activity_status, git_owner_url, git_repo_url, metadata, pg_award).
@@ -1133,6 +1133,9 @@ def load_project_overrides() -> dict[str, dict[str, Any]]:
     overrides: dict[str, dict[str, Any]] = {}
     override_sources: dict[str, str] = {}
     for yml_file in _PROJECT_OVERRIDE_DIR.glob("*.yml"):
+        if yml_file.name == f"new.{_PG_PROPOSAL_OVERRIDE_FILE}":
+            continue
+
         with yml_file.open() as f:
             data: dict[str, dict[str, Any]] = yaml.safe_load(f) or {}
             if data:
