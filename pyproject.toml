@@ -47,7 +47,9 @@ dev = [
     "basedpyright>=1.40.2",
     "mistletoe>=1.6.0",
     "ruamel-yaml>=0.19.1",
-    "stellar-sdk>=14,<15",
+    "stellar-sdk>=17.0.1",
+    "tqdm",
+    "types-tqdm",
 ]
 proto-build = [
     "betterproto2-compiler>=0.10.1",

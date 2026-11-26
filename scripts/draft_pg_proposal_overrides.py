@@ -1,4 +1,5 @@
 """
+
 Draft PG proposal overrides from open or merged proposals.
 
 This script is intended for human-in-the-loop operation. It reads open pull
@@ -16,15 +17,10 @@ Usage:
     uv run python scripts/draft_pg_proposal_overrides.py
     uv run python scripts/draft_pg_proposal_overrides.py --source=merged
     uv run python scripts/draft_pg_proposal_overrides.py --source=merged --refresh-stroopies
-    uv run python scripts/draft_pg_proposal_overrides.py --source=merged --draft-maintainers
-    uv run python scripts/draft_pg_proposal_overrides.py --source=merged --stroopies-snapshot snapshot.json
 
-Maintainer previews are written to pg_atlas/data/new.pg-proposal-overrides.yml.
-The JSON input has ledger, first_token_id, next_token_id and members fields.
-Each member has token_id, github_login (or null), project_ids and revoked.
-Live cache entries expire after 24 hours. Refresh explicitly to replace them.
-Add a comment like "# d4-reject: github-handle" by the project's maintainers list
-and save it in the reviewed override file to suppress that candidate in later drafts.
+Each run drafts maintainer declarations. Previously fetched Stroopies members
+are reused until an explicit refresh. Add a comment like "# reject: github-handle"
+by the project's maintainers list in the reviewed override file to suppress it.
 
 SPDX-FileCopyrightText: 2026 PG Atlas contributors
 SPDX-License-Identifier: MPL-2.0
@@ -36,6 +32,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -50,8 +47,10 @@ from mistletoe.span_token import LineBreak
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+from ruamel.yaml.tokens import CommentToken
+from tqdm import tqdm
 
-from pg_atlas.ingestion.declared_maintainers import plan_review, project_page_logins, read_snapshot, reconcile
+from pg_atlas.ingestion.declared_maintainers import plan_review, project_page_logins, reconcile
 from pg_atlas.ingestion.stroopies import MAINNET_RPC, cached_snapshot
 from pg_atlas.procrastinate.github import get_github_client
 
@@ -65,9 +64,8 @@ _DAOIP_PREFIX = "daoip-5:scf:project:"
 _PROJECTS_DIR = Path("pg_atlas/data/projects")
 _CANONICAL_PATH = _PROJECTS_DIR / "pg-proposal-overrides.yml"
 _OUTPUT_PATH = _PROJECTS_DIR / "new.pg-proposal-overrides.yml"
-# Keep proof-of-concept output outside the directory scanned by bootstrap.
-_MAINTAINER_OUTPUT_PATH = _PROJECTS_DIR.parent / "new.pg-proposal-overrides.yml"
 _CACHE_DIR = Path("scripts/.github_cache")
+_STROOPIES_CACHE_DIR = Path("scripts/.stroopies_cache")
 _ENTRY_KEY_ORDER = (
     "display_name",
     "activity_status",
@@ -101,13 +99,10 @@ def main() -> int:
 
     try:
         canonical_template, canonical_overrides = _load_canonical_overrides()
-        snapshot = None
-        if args.stroopies_snapshot is not None:
-            snapshot = read_snapshot(args.stroopies_snapshot)
-        elif args.draft_maintainers or args.refresh_stroopies:
-            snapshot = cached_snapshot(_CACHE_DIR / "stroopies.json", args.stroopies_rpc, refresh=args.refresh_stroopies)
+        snapshot = cached_snapshot(_STROOPIES_CACHE_DIR, MAINNET_RPC, refresh=args.refresh_stroopies)
     except Exception as exc:
         _print_error(f"Failed to load draft inputs: {exc}")
+
         return 1
 
     merged_overrides: dict[str, dict[str, Any]] = {key: dict(value) for key, value in canonical_overrides.items()}
@@ -119,9 +114,12 @@ def main() -> int:
         docs_repo = gh.get_repo(f"{_DOCS_OWNER}/{_DOCS_REPO}")
     except GithubException as exc:
         _print_error(f"GitHub repository initialization failed: {exc}")
+
         return 1
+
     except Exception as exc:
         _print_error(f"Unexpected GitHub initialization failure: {exc}")
+
         return 1
 
     try:
@@ -132,9 +130,12 @@ def main() -> int:
 
     except GithubException as exc:
         _print_error(f"GitHub {args.source} proposal collection failed: {exc}")
+
         return 1
+
     except Exception as exc:
         _print_error(f"Unexpected {args.source} proposal collection failure: {exc}")
+
         return 1
 
     processed: list[str] = []
@@ -207,7 +208,7 @@ def main() -> int:
 
         processed.append(matched_key)
 
-        if snapshot is not None and matched_key in canonical_overrides and not ambiguous:
+        if matched_key in canonical_overrides and not ambiguous:
             _, body, _ = _parse_front_matter(
                 record.markdown_text, source_label=record.source_label, source_path=record.project_path
             )
@@ -226,38 +227,45 @@ def main() -> int:
     output_path = _OUTPUT_PATH
     review_comments: dict[str, list[dict[str, Any]]] = {}
     rejections = _reviewer_rejections(canonical_template)
-    review_notes = {key: [f"d4-reject: {login}" for login in sorted(logins)] for key, logins in rejections.items()}
+    review_notes = {key: [f"reject: {login}" for login in sorted(logins)] for key, logins in rejections.items()}
     conflict_count = 0
-    if snapshot is not None:
-        output_path = _MAINTAINER_OUTPUT_PATH
-        token_reads: set[tuple[str, str | int]] = {("stroopies", member.token_id) for member in snapshot.members}
-        for project_id in sorted(canonical_overrides):
-            active, commented = reconcile(project_id, page_evidence.get(project_id, {}), snapshot)
-            project = merged_overrides[project_id]
-            metadata = project.get("metadata", {})
-            previous = metadata.get("maintainers", [])
-            if not previous and not active and not commented:
-                continue
-            reviewed, candidates, removals = plan_review(
-                previous, active, commented, token_reads | page_reads.get(project_id, set()), rejections.get(project_id, set())
+    token_ledgers = {
+        member.token_id: member.ledger if member.ledger is not None else snapshot.ledger for member in snapshot.members
+    }
+    for project_id in sorted(canonical_overrides):
+        project = merged_overrides[project_id]
+        metadata = project.get("metadata", {})
+        previous = metadata.get("maintainers", [])
+        active, commented = reconcile(project_id, page_evidence.get(project_id, {}), snapshot, previous_items=previous)
+        if not previous and not active and not commented:
+            continue
+
+        reviewed, candidates, removals = plan_review(
+            previous,
+            active,
+            commented,
+            page_reads.get(project_id, set()),
+            rejections.get(project_id, set()),
+            token_ledgers=token_ledgers,
+        )
+        if previous or reviewed:
+            project["metadata"] = {**metadata, "maintainers": reviewed}
+
+        review_comments[project_id] = candidates
+        review_notes.setdefault(project_id, []).extend(
+            f"Proposed removal @{login}: {reason}." for login, reason in removals.items()
+        )
+        previous_by_login = {item["github_login"].lower(): item for item in previous}
+        additions = sum(
+            "conflict" not in item and previous_by_login.get(item["github_login"].lower()) != item for item in reviewed
+        )
+        conflicts = sum("conflict" in item for item in reviewed)
+        conflict_count += conflicts
+        if additions or removals or conflicts or candidates:
+            print(
+                f"{project_id}: {additions} added or updated, {len(removals)} proposed removals, "
+                f"{conflicts} conflicts, {len(candidates)} commented candidates"
             )
-            if previous or reviewed:
-                project["metadata"] = {**metadata, "maintainers": reviewed}
-            review_comments[project_id] = candidates
-            review_notes.setdefault(project_id, []).extend(
-                f"Proposed removal @{login}: {reason}." for login, reason in removals.items()
-            )
-            previous_by_login = {item["github_login"].lower(): item for item in previous}
-            additions = sum(
-                "conflict" not in item and previous_by_login.get(item["github_login"].lower()) != item for item in reviewed
-            )
-            conflicts = sum("conflict" in item for item in reviewed)
-            conflict_count += conflicts
-            if additions or removals or conflicts or candidates:
-                print(
-                    f"{project_id}: {additions} added or updated, {len(removals)} proposed removals, "
-                    f"{conflicts} conflicts, {len(candidates)} commented candidates"
-                )
 
     for key, value in list(merged_overrides.items()):
         suffix = key[len(_DAOIP_PREFIX) :] if key.startswith(_DAOIP_PREFIX) else key
@@ -267,27 +275,26 @@ def main() -> int:
         )
 
     output_text = _render_sorted_yaml(merged_overrides, canonical_template, review_comments, review_notes)
-    if snapshot is not None:
-        output_text = output_text.replace("../schema-override-project.yml", "./schema-override-project.yml", 1)
 
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output_text, encoding="utf-8")
     except OSError as exc:
         _print_error(f"Failed to write draft file {output_path}: {exc}")
+
         return 1
 
     print(f"Processed proposals: {len(processed)}")
     print(f"Skipped proposals: {skipped}")
     print(f"Draft overrides written to {output_path}")
 
-    if snapshot is None:
-        print("\nTo apply these overrides selectively, run the Reference Graph Bootstrap with:")
-        print(" ".join(processed))
-
     if conflict_count:
         _print_error(f"Resolve {conflict_count} maintainer conflict(s) in the draft before continuing.")
+
         return 1
+
+    print("\nReview the generated overrides before applying them through Reference Graph Bootstrap.")
+
     return 0
 
 
@@ -395,15 +402,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read PR/file data from scripts/.github_cache when available before calling GitHub APIs.",
     )
 
-    evidence_input = parser.add_mutually_exclusive_group()
-    evidence_input.add_argument("--draft-maintainers", action="store_true", help="Draft from the local Stroopies cache.")
-    evidence_input.add_argument("--refresh-stroopies", action="store_true", help="Refresh the Stroopies cache and draft.")
-    parser.add_argument("--stroopies-rpc", default=MAINNET_RPC, help="Mainnet Stellar RPC URL for an explicit refresh.")
-    evidence_input.add_argument(
-        "--stroopies-snapshot",
-        type=Path,
-        help="Generate a maintainer review draft from a local JSON evidence snapshot.",
-    )
+    parser.add_argument("--refresh-stroopies", action="store_true", help="Replace the cache with a full contract read.")
 
     return parser
 
@@ -415,7 +414,7 @@ def _collect_open_proposals(gh: Github, docs_repo: Repository, *, read_cache: bo
     records: list[_ProposalRecord] = []
     skipped = 0
 
-    for issue in search_results:
+    for issue in tqdm(search_results, desc="Open proposals", unit="PR"):
         pr_number = issue.number
 
         pull_head_sha: str | None = None
@@ -487,10 +486,11 @@ def _collect_merged_proposals(docs_repo: Repository) -> tuple[list[_ProposalReco
     records: list[_ProposalRecord] = []
     skipped = 0
 
-    for entry in entries:
+    for entry in tqdm(entries, desc="Merged project pages", unit="file"):
         project_path = entry.path
         if not project_path.startswith("docs/projects/"):
             continue
+
         if not project_path.endswith(".md"):
             continue
 
@@ -1047,19 +1047,51 @@ def _order_entry_keys(entry: dict[str, Any]) -> dict[str, Any]:
     return ordered
 
 
+def _comment_lines(value: Any) -> Iterator[str]:
+    """Unpack Ruamel comment slots, which can contain tokens or nested lists."""
+    if isinstance(value, CommentToken):
+        yield from value.value.splitlines()
+    elif type(value) in (list, tuple):
+        for item in value:
+            yield from _comment_lines(item)
+
+
+def _yaml_node_comments(node: Any, *, nested: bool = False) -> Iterator[str]:
+    """Read comments attached to a YAML node and, if requested, its children."""
+    if not isinstance(node, (CommentedMap, CommentedSeq)):
+        return
+
+    comments = getattr(node, "ca")
+    yield from _comment_lines([comments.comment, comments.end, *comments.items.values()])
+    if nested:
+        if isinstance(node, CommentedMap):
+            children = (_as_string_key_dict(node) or {}).values()
+        else:
+            children = getattr(node, "__iter__")()
+
+        for child in children:
+            yield from _yaml_node_comments(child, nested=True)
+
+
 def _reviewer_rejections(template_map: CommentedMap) -> dict[str, set[str]]:
-    """Read explicit rejection notes from each project's round-trip YAML."""
-    buffer = StringIO()
-    _yaml_dump(template_map, buffer)
-    project: str | None = None
+    """Read tombstones from metadata/list nodes without rendering YAML again."""
+    pattern = re.compile(r"""\s*# reject:\s*(?P<quote>["']?)(?P<login>[A-Za-z0-9-]+)(?P=quote)\s*""")
     rejections: dict[str, set[str]] = {}
-    for line in buffer.getvalue().splitlines():
-        if line and not line[0].isspace() and not line.startswith("#"):
-            project = line.rstrip(":").strip("\"'") if line.endswith(":") else None
-        if project is not None and project.startswith(_DAOIP_PREFIX):
-            marker = re.fullmatch(r" +# d4-reject: ([A-Za-z0-9-]+) *", line)
+    for project_id, project in (_as_string_key_dict(template_map) or {}).items():
+        if not isinstance(project, CommentedMap):
+            continue
+
+        metadata = (_as_string_key_dict(project) or {}).get("metadata")
+        if not isinstance(metadata, CommentedMap):
+            continue
+
+        maintainers = (_as_string_key_dict(metadata) or {}).get("maintainers")
+        comments = (*_yaml_node_comments(metadata), *_yaml_node_comments(maintainers, nested=True))
+        for line in comments:
+            marker = pattern.fullmatch(line)
             if marker:
-                rejections.setdefault(project, set()).add(marker[1].lower())
+                rejections.setdefault(project_id, set()).add(marker["login"].lower())
+
     return rejections
 
 
@@ -1086,6 +1118,7 @@ def _render_sorted_yaml(
             _yaml_dump(_to_quoted_yaml_value(candidates), snippets)
             lines = [line.removeprefix("  ") for line in snippets.getvalue().splitlines()]
             notes.extend(["Confirm these project-page candidates before uncommenting:", *lines])
+
         if notes:
             metadata = rendered_entry["metadata"]
             maintainers = CommentedSeq(metadata.get("maintainers", []))
@@ -1093,7 +1126,9 @@ def _render_sorted_yaml(
                 cast(Any, maintainers).yaml_set_comment_before_after_key(0, before="\n".join(notes), indent=6)
             else:
                 metadata.yaml_set_comment_before_after_key("maintainers", before="\n".join(notes), indent=4)
+
             metadata["maintainers"] = maintainers
+
         ordered_map[key] = rendered_entry
         cast(Any, ordered_map).yaml_set_comment_before_after_key(key, before="\n")
 

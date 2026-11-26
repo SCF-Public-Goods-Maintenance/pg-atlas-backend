@@ -101,6 +101,16 @@ def _write_override_file(directory: Path, name: str, entries: dict[str, dict[str
     (directory / name).write_text(yaml.safe_dump({"$schema": "../schema-override-project.yml", **entries}))
 
 
+def test_load_project_overrides_ignores_the_generated_review_draft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the reviewed proposal override is loaded when a draft also exists."""
+    project = "daoip-5:scf:project:example"
+    _write_override_file(tmp_path, "pg-proposal-overrides.yml", {project: {"display_name": "Approved"}})
+    _write_override_file(tmp_path, "new.pg-proposal-overrides.yml", {project: {"display_name": "Draft"}})
+    monkeypatch.setattr("pg_atlas.procrastinate.tasks._PROJECT_OVERRIDE_DIR", tmp_path)
+
+    assert load_project_overrides()[project]["display_name"] == "Approved"
+
+
 def test_load_project_overrides_resolves_pg_award(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Proposal entries default to true and may opt out; entries of other files are false."""
 

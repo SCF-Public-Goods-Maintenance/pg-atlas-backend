@@ -6,14 +6,9 @@
 
 type: object
 
-# Allow the editor schema directive alongside project identifiers.
-properties:
-  $schema:
-    type: string
+# Enforces that root-level keys match the DAOIP-URI structure
 propertyNames:
-  anyOf:
-    - const: $schema
-    - pattern: "^daoip-5:scf:project:[a-z0-9_.()-]+$"
+  pattern: "^daoip-5:scf:project:[a-z0-9_.()-]+$"
 
 # Defines project item override fields
 additionalProperties:
@@ -63,7 +58,7 @@ additionalProperties:
           type: array
           items:
             type: object
-            required: [github_login, evidence]
+            required: [github_login]
             properties:
               github_login:
                 type: string
@@ -96,7 +91,7 @@ additionalProperties:
                         path:
                           description: Repository-relative path to the Markdown source file.
                           type: string
-                          pattern: '^(?:(?!\.{1,2}/)[^/\\:]+/)*[^/\\:]+\.md$'
+                          pattern: '^([A-Za-z0-9_-][^/\\:]*/)*[A-Za-z0-9_-][^/\\:]*\.md$'
                         commit_sha:
                           description: Full Git commit SHA of the revision used to read the file.
                           type: string
